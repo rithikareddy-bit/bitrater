@@ -1,0 +1,48 @@
+{
+    "StartAt": "GenerateLadder",
+    "States": {
+      "GenerateLadder": {
+        "Type": "Pass",
+        "Result": [
+          {"codec": "libx265", "bitrate": "1000"}, {"codec": "libx265", "bitrate": "1500"},
+          {"codec": "libx265", "bitrate": "2200"}, {"codec": "libx265", "bitrate": "3000"},
+          {"codec": "libx264", "bitrate": "2000"}, {"codec": "libx264", "bitrate": "3500"},
+          {"codec": "libx264", "bitrate": "5000"}
+        ],
+        "Next": "ParallelResearch"
+      },
+      "ParallelResearch": {
+        "Type": "Map",
+        "ItemProcessor": {
+          "ProcessorConfig": { "Mode": "DISTRIBUTED", "ExecutionType": "STANDARD" },
+          "StartAt": "RunBatchJob",
+          "States": {
+            "RunBatchJob": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "ChaiQLabJob",
+                "JobQueue": "arn:aws:batch:REGION:ACCOUNT:job-queue/chai-q-queue",
+                "JobDefinition": "arn:aws:batch:REGION:ACCOUNT:job-definition/chai-q-worker",
+                "ContainerOverrides": {
+                  "Environment": [
+                    { "Name": "BITRATE", "Value.$": "$.bitrate" },
+                    { "Name": "CODEC", "Value.$": "$.codec" },
+                    { "Name": "S3_URL", "Value.$": "$$.Execution.Input.s3_url" },
+                    { "Name": "EPISODE_ID", "Value.$": "$$.Execution.Input.episode_id" }
+                  ]
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        "Next": "CalculateGoldenRecipe"
+      },
+      "CalculateGoldenRecipe": {
+        "Type": "Task",
+        "Resource": "arn:aws:lambda:REGION:ACCOUNT:function:aggregator",
+        "End": true
+      }
+    }
+  }
