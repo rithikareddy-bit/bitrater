@@ -28,3 +28,5 @@ const ConvexHullChart = ({ researchData }) => {
 
   return <Line data={data} options={options} />;
 };
+
+export default ConvexHullChart;

@@ -62,12 +62,21 @@ def run_research():
         data = json.load(f)
         vmaf_score = data["pooled_metrics"]["vmaf"]["mean"]
 
+    # Build 1-second VMAF timeline (bucket every 30 frames at 30fps)
+    frames = data.get("frames", [])
+    FPS = 30
+    vmaf_timeline = []
+    for i in range(0, len(frames), FPS):
+        chunk = frames[i:i + FPS]
+        vmaf_timeline.append(round(sum(f["metrics"]["vmaf"] for f in chunk) / len(chunk), 2))
+
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
     db["video_vmaf_research"].insert_one({
         "episode_id":   episode_id,
         "codec":        codec,
         "bitrate_kbps": int(bitrate),
         "vmaf_score":   vmaf_score,
+        "vmaf_timeline": vmaf_timeline,
         "preset":       preset,
         "params":       params,
         "timestamp":    datetime.now(timezone.utc).isoformat(),
