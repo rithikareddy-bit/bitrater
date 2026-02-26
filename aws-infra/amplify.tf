@@ -32,28 +32,23 @@ resource "aws_iam_role_policy" "amplify_runtime_policy" {
         Resource = aws_sfn_state_machine.research_orchestrator.arn
       },
       {
-        Sid    = "ListBatchJobs"
-        Effect = "Allow"
-        Action = "batch:ListJobs"
+        Sid      = "ListBatchJobs"
+        Effect   = "Allow"
+        Action   = "batch:ListJobs"
         Resource = "*"
       }
     ]
   })
 }
 
-# --- Amplify App ---
+# --- Amplify App (no Git connection — deployed manually via deploy.sh) ---
 
 resource "aws_amplify_app" "dashboard" {
   name                 = "chai-q-lab-dashboard"
-  repository           = var.github_repository
-  oauth_token          = var.github_token
   iam_service_role_arn = aws_iam_role.amplify_service_role.arn
 
-  # Platform must be WEB_COMPUTE to enable Next.js SSR (API routes run as Lambda)
+  # WEB_COMPUTE enables Next.js SSR; API routes run as Lambda functions
   platform = "WEB_COMPUTE"
-
-  # Build spec is read from the repo's amplify.yml (appRoot: dashboard handles monorepo)
-  build_spec = file("../dashboard/amplify.yml")
 
   environment_variables = {
     MONGO_URI               = var.mongo_uri
@@ -64,7 +59,7 @@ resource "aws_amplify_app" "dashboard" {
   }
 }
 
-# --- Branch: main ---
+# --- Branch: main (auto-build disabled; deploy.sh triggers deployments) ---
 
 resource "aws_amplify_branch" "main" {
   app_id      = aws_amplify_app.dashboard.id
@@ -72,7 +67,7 @@ resource "aws_amplify_branch" "main" {
   framework   = "Next.js - SSR"
   stage       = "PRODUCTION"
 
-  enable_auto_build = true
+  enable_auto_build = false
 
   environment_variables = {
     NODE_ENV = "production"
