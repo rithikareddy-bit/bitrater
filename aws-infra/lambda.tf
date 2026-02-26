@@ -1,0 +1,127 @@
+# --- Lambda IAM Execution Role ---
+resource "aws_iam_role" "lambda_exec_role" {
+  name = "chai-q-lambda-exec-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
+  role       = aws_iam_role.lambda_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# s3_trigger needs permission to start the Step Function
+resource "aws_iam_role_policy" "lambda_sfn_start" {
+  name = "chai-q-lambda-sfn-start"
+  role = aws_iam_role.lambda_exec_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action   = "states:StartExecution"
+      Effect   = "Allow"
+      Resource = aws_sfn_state_machine.research_orchestrator.arn
+    }]
+  })
+}
+
+# --- pymongo Lambda Layer (aggregator depends on it, not in Lambda runtime) ---
+resource "null_resource" "pymongo_layer_build" {
+  triggers = {
+    version = "pymongo-srv-4.6.1"
+  }
+  provisioner "local-exec" {
+    command = <<-EOT
+      pip3 install "pymongo[srv]==4.6.1" \
+        -t "${path.module}/.pymongo-layer/python" --quiet
+    EOT
+  }
+}
+
+data "archive_file" "pymongo_layer_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/.pymongo-layer"
+  output_path = "${path.module}/.pymongo-layer.zip"
+  depends_on  = [null_resource.pymongo_layer_build]
+}
+
+resource "aws_lambda_layer_version" "pymongo" {
+  layer_name          = "chai-q-pymongo"
+  filename            = data.archive_file.pymongo_layer_zip.output_path
+  source_code_hash    = data.archive_file.pymongo_layer_zip.output_base64sha256
+  compatible_runtimes = ["python3.11"]
+}
+
+# --- Package Lambda source files ---
+data "archive_file" "trigger_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/lambda_trigger.py"
+  output_path = "/tmp/chai-q-trigger.zip"
+}
+
+data "archive_file" "aggregator_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/aggregator.py"
+  output_path = "/tmp/chai-q-aggregator.zip"
+}
+
+# --- S3 Trigger Lambda ---
+resource "aws_lambda_function" "s3_trigger" {
+  filename         = data.archive_file.trigger_zip.output_path
+  source_code_hash = data.archive_file.trigger_zip.output_base64sha256
+  function_name    = "chai-q-s3-trigger"
+  role             = aws_iam_role.lambda_exec_role.arn
+  handler          = "lambda_trigger.handler"
+  runtime          = "python3.11"
+  timeout          = 30
+
+  environment {
+    variables = {
+      STATE_MACHINE_ARN = aws_sfn_state_machine.research_orchestrator.arn
+    }
+  }
+}
+
+# Allow S3 to invoke the trigger Lambda
+resource "aws_lambda_permission" "allow_s3_invoke" {
+  statement_id  = "AllowS3Invoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.s3_trigger.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.raw_input.arn
+}
+
+# Wire S3 upload event -> Lambda trigger
+resource "aws_s3_bucket_notification" "upload_trigger" {
+  bucket = aws_s3_bucket.raw_input.id
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.s3_trigger.arn
+    events              = ["s3:ObjectCreated:*"]
+  }
+
+  depends_on = [aws_lambda_permission.allow_s3_invoke]
+}
+
+# --- Aggregator Lambda ---
+resource "aws_lambda_function" "aggregator" {
+  filename         = data.archive_file.aggregator_zip.output_path
+  source_code_hash = data.archive_file.aggregator_zip.output_base64sha256
+  function_name    = "chai-q-aggregator"
+  role             = aws_iam_role.lambda_exec_role.arn
+  handler          = "aggregator.handler"
+  runtime          = "python3.11"
+  timeout          = 60
+  layers           = [aws_lambda_layer_version.pymongo.arn]
+
+  environment {
+    variables = {
+      MONGO_URI = var.mongo_uri
+    }
+  }
+}

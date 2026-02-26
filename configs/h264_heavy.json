@@ -1,0 +1,7 @@
+{
+    "codec": "libx264",
+    "preset": "slower",
+    "pix_fmt": "yuv420p",
+    "params": "aq-mode=2:aq-strength=1.3:psy-rd=1.5,0.15:direct=auto:me=umh:subme=10",
+    "vmaf_target": 93.2
+  }

@@ -8,9 +8,10 @@ RUN wget https://github.com/Netflix/vmaf/releases/download/v2.3.1/vmaf -O /usr/l
     chmod +x /usr/local/bin/vmaf
 
 WORKDIR /var/task
-COPY requirements.txt .
+COPY research-worker/requirements.txt .
 RUN pip install -r requirements.txt
-COPY worker.py .
+COPY research-worker/worker.py .
+COPY configs/ ./configs/
 
 # Use Entrypoint for AWS Batch compatibility
 ENTRYPOINT ["python", "worker.py"]
