@@ -6,11 +6,11 @@ output "step_function_arn" {
   value = aws_sfn_state_machine.research_orchestrator.arn
 }
 
-output "amplify_app_id" {
-  value = aws_amplify_app.dashboard.id
+output "dashboard_ecr_url" {
+  value = aws_ecr_repository.dashboard.repository_url
 }
 
-output "amplify_app_url" {
-  value       = "https://main.${aws_amplify_app.dashboard.default_domain}"
-  description = "Dashboard URL after first successful deploy"
+output "dashboard_url" {
+  value       = "https://${aws_apprunner_service.dashboard.service_url}"
+  description = "Live dashboard URL"
 }
