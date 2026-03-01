@@ -17,7 +17,7 @@
     "ParallelResearch": {
       "Type": "Map",
       "ItemProcessor": {
-        "ProcessorConfig": { "Mode": "DISTRIBUTED", "ExecutionType": "STANDARD" },
+        "ProcessorConfig": { "Mode": "INLINE" },
         "StartAt": "RunBatchJob",
         "States": {
           "RunBatchJob": {

@@ -60,6 +60,12 @@ resource "aws_iam_role_policy" "step_function_batch_policy" {
         Action   = "lambda:InvokeFunction",
         Effect   = "Allow",
         Resource = "*"
+      },
+      {
+        # Required for Map state in DISTRIBUTED mode — creates child executions
+        Action   = ["states:StartExecution", "states:DescribeExecution", "states:StopExecution"],
+        Effect   = "Allow",
+        Resource = "*"
       }
     ]
   })
