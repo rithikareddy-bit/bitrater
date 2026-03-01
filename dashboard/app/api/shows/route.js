@@ -4,7 +4,7 @@ import clientPromise from '@/lib/mongodb';
 export async function GET() {
   try {
     const client = await clientPromise();
-    const db = client.db('production');
+    const db = client.db('master');
     const shows = await db
       .collection('showcache')
       .find({}, { projection: { _id: 1, title: 1, thumbnail: 1, episodes: 1 } })

@@ -1,4 +1,4 @@
-# v3 — fix HOSTNAME bind: App Runner overrides HOSTNAME env var with container hostname,
+# v4 — fix db name (production→master), use s3_url from showcache episodes,
 #       so we force it via sh -c to ensure Next.js binds on 0.0.0.0
 FROM node:20-alpine AS deps
 WORKDIR /app

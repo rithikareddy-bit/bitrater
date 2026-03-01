@@ -44,7 +44,7 @@ export default function EpisodePage() {
   if (loading) return <p style={{ color: '#888' }}>Loading episode data...</p>;
   if (error) return <p style={{ color: '#f87171' }}>{error}</p>;
 
-  const { research = [], golden } = data || {};
+  const { research = [], golden, videoUrl } = data || {};
 
   // Map research data for the R-D curve
   const rdData = research.map((r) => ({
@@ -100,7 +100,7 @@ export default function EpisodePage() {
         {/* Lab Status */}
         <div style={PANEL_STYLE}>
           <div style={PANEL_TITLE}>Lab Status</div>
-          <LabStatus episodeId={id} golden={golden} onRunComplete={fetchData} />
+          <LabStatus episodeId={id} golden={golden} videoUrl={videoUrl} onRunComplete={fetchData} />
         </div>
       </div>
     </div>

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 
 const TOTAL_JOBS = 7; // H.265×4 + H.264×3
 
-export default function LabStatus({ episodeId, golden, onRunComplete }) {
+export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }) {
   const [status, setStatus] = useState(null);
   const [pushing, setPushing] = useState(false);
   const [pushError, setPushError] = useState(null);
@@ -42,13 +42,13 @@ export default function LabStatus({ episodeId, golden, onRunComplete }) {
     setPushing(true);
     setPushError(null);
     try {
-      if (!golden?.s3_url) {
+      if (!videoUrl) {
         throw new Error('No s3_url found for this episode — check showcache data.');
       }
       const res = await fetch('/api/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ episodeId, s3Url: golden.s3_url }),
+        body: JSON.stringify({ episodeId, s3Url: videoUrl }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Push failed');
