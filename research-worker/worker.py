@@ -1,6 +1,27 @@
 import os, subprocess, json, sys, pymongo, boto3
 from urllib.parse import urlparse
 from datetime import datetime, timezone
+from fractions import Fraction
+
+def _get_video_info(path):
+    """Get width, height, fps from video via ffprobe. Raises if missing."""
+    out = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,r_frame_rate", "-of", "json",
+            path,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    data = json.loads(out.stdout)
+    stream = data.get("streams", [{}])[0]
+    w = int(stream["width"])
+    h = int(stream["height"])
+    r = stream.get("r_frame_rate", "30/1")
+    fps = float(Fraction(r)) if "/" in r else float(r)
+    return {"width": w, "height": h, "fps": fps}
 
 def get_s3_client():
     return boto3.client('s3')
@@ -47,13 +68,39 @@ def run_research():
     ]
     subprocess.run(ffmpeg_cmd, check=True)
 
-    # 4. VMAF ANALYSIS (Phone Model — predicts human perception on mobile OLEDs)
+    # 4. VMAF (Netflix-style: ref at native res, distorted scaled up to ref res, compare at ref res)
+    info = _get_video_info("source.mp4")
+    w, h, fps = info["width"], info["height"], info["fps"]
+
+    # Reference → Y4M at (w, h) — no scaling
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", "source.mp4",
+            "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe",
+            "ref.y4m",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    # Distorted (1080p variant) → Y4M at (w, h) — scale up with lanczos
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", "variant.mp4",
+            "-vf", f"scale={w}:{h}:flags=lanczos",
+            "-pix_fmt", "yuv420p", "-r", str(fps), "-f", "yuv4mpegpipe",
+            "dist.y4m",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
     vmaf_cmd = [
         "vmaf",
-        "-r", "source.mp4",
-        "-d", "variant.mp4",
+        "-r", "ref.y4m",
+        "-d", "dist.y4m",
         "--model", "version=vmaf_v0.6.1neg",
-        "--json", "-o", "vmaf_results.json"
+        "--json", "-o", "vmaf_results.json",
     ]
     subprocess.run(vmaf_cmd, check=True)
 
