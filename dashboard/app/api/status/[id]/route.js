@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { BatchClient, ListJobsCommand } from '@aws-sdk/client-batch';
+import { TOTAL_JOBS } from '@/lib/constants';
 
 const batch = new BatchClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
@@ -24,7 +25,7 @@ export async function GET(request, { params }) {
       })
     );
 
-    const total = 7; // H.265×4 + H.264×3
+    const total = TOTAL_JOBS;
     const succeeded = counts.SUCCEEDED;
     const failed = counts.FAILED;
     const running = counts.RUNNING + counts.STARTING;

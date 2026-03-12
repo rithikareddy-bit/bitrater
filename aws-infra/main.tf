@@ -76,6 +76,7 @@ resource "aws_sfn_state_machine" "research_orchestrator" {
     aggregator_lambda_arn    = aws_lambda_function.aggregator.arn
     ctx_bitrate              = "$.bitrate"
     ctx_codec                = "$.codec"
+    ctx_resolution           = "$.resolution"
     ctx_s3_url               = "$$.Execution.Input.s3_url"
     ctx_episode_id           = "$$.Execution.Input.episode_id"
   })

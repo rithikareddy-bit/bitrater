@@ -4,13 +4,29 @@
     "GenerateLadder": {
       "Type": "Pass",
       "Result": [
-        {"codec": "libx265", "bitrate": "1000"},
-        {"codec": "libx265", "bitrate": "1500"},
-        {"codec": "libx265", "bitrate": "2200"},
-        {"codec": "libx265", "bitrate": "3000"},
-        {"codec": "libx264", "bitrate": "2000"},
-        {"codec": "libx264", "bitrate": "3500"},
-        {"codec": "libx264", "bitrate": "5000"}
+        {"codec": "libx265", "bitrate": "1000", "resolution": "1080"},
+        {"codec": "libx265", "bitrate": "1500", "resolution": "1080"},
+        {"codec": "libx265", "bitrate": "2200", "resolution": "1080"},
+        {"codec": "libx265", "bitrate": "3000", "resolution": "1080"},
+        {"codec": "libx264", "bitrate": "2000", "resolution": "1080"},
+        {"codec": "libx264", "bitrate": "3500", "resolution": "1080"},
+        {"codec": "libx264", "bitrate": "5000", "resolution": "1080"},
+
+        {"codec": "libx265", "bitrate": "500",  "resolution": "720"},
+        {"codec": "libx265", "bitrate": "700",  "resolution": "720"},
+        {"codec": "libx265", "bitrate": "900",  "resolution": "720"},
+        {"codec": "libx265", "bitrate": "1200", "resolution": "720"},
+        {"codec": "libx264", "bitrate": "700",  "resolution": "720"},
+        {"codec": "libx264", "bitrate": "1000", "resolution": "720"},
+        {"codec": "libx264", "bitrate": "1500", "resolution": "720"},
+
+        {"codec": "libx265", "bitrate": "100",  "resolution": "480"},
+        {"codec": "libx265", "bitrate": "200",  "resolution": "480"},
+        {"codec": "libx265", "bitrate": "300",  "resolution": "480"},
+        {"codec": "libx265", "bitrate": "400",  "resolution": "480"},
+        {"codec": "libx264", "bitrate": "200",  "resolution": "480"},
+        {"codec": "libx264", "bitrate": "300",  "resolution": "480"},
+        {"codec": "libx264", "bitrate": "400",  "resolution": "480"}
       ],
       "Next": "ParallelResearch"
     },
@@ -31,6 +47,7 @@
                 "Environment": [
                   {"Name": "BITRATE",    "Value.$": "${ctx_bitrate}"},
                   {"Name": "CODEC",      "Value.$": "${ctx_codec}"},
+                  {"Name": "RESOLUTION", "Value.$": "${ctx_resolution}"},
                   {"Name": "S3_URL",     "Value.$": "${ctx_s3_url}"},
                   {"Name": "EPISODE_ID", "Value.$": "${ctx_episode_id}"}
                 ]

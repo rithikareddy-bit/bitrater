@@ -7,6 +7,7 @@ import RDCurve from '@/components/RDCurve';
 import VMAFHeatmap from '@/components/VMAFHeatmap';
 import FrameComparison from '@/components/FrameComparison';
 import LabStatus from '@/components/LabStatus';
+import GCPStatus from '@/components/GCPStatus';
 
 const PANEL_STYLE = {
   background: '#161616',
@@ -46,17 +47,20 @@ export default function EpisodePage() {
 
   const { research = [], golden, videoUrl } = data || {};
 
-  // Map research data for the R-D curve
   const rdData = research.map((r) => ({
     codec: r.codec,
     bitrate: r.bitrate_kbps,
     vmaf: r.vmaf_score,
+    resolution: r.resolution,
   }));
 
-  // Extract vmaf_timeline from the golden-recipe bitrate row
-  const goldenRow = golden
+  const primaryRecipe = golden?.golden_recipes?.resolutions?.['1080p']?.h265
+    || golden?.golden_recipes?.resolutions?.['1080p']?.h264
+    || null;
+
+  const goldenRow = primaryRecipe
     ? research.find(
-        (r) => r.codec === golden.codec && r.bitrate_kbps === golden.bitrate_kbps
+        (r) => r.bitrate_kbps === primaryRecipe.bitrate_kbps && r.resolution === '1080p'
       )
     : null;
   const vmafTimeline = goldenRow?.vmaf_timeline || [];
@@ -101,6 +105,12 @@ export default function EpisodePage() {
         <div style={PANEL_STYLE}>
           <div style={PANEL_TITLE}>Lab Status</div>
           <LabStatus episodeId={id} golden={golden} videoUrl={videoUrl} onRunComplete={fetchData} />
+        </div>
+
+        {/* GCP Transcoder Status */}
+        <div style={PANEL_STYLE}>
+          <div style={PANEL_TITLE}>GCP Transcoder</div>
+          <GCPStatus episodeId={id} goldenRecipes={golden?.golden_recipes} />
         </div>
       </div>
     </div>

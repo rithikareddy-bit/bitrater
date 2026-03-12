@@ -1,8 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-
-const TOTAL_JOBS = 7; // H.265×4 + H.264×3
+import { TOTAL_JOBS } from '@/lib/constants';
 
 export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }) {
   const [status, setStatus] = useState(null);

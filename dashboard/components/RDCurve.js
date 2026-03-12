@@ -48,13 +48,15 @@ export default function RDCurve({ researchData, golden }) {
     );
   }
 
-  // Inject golden star annotation as an extra dataset point if golden recipe exists
-  const goldenAnnotation = golden
+  const primary = golden?.golden_recipes?.resolutions?.['1080p']?.h265
+    || golden?.golden_recipes?.resolutions?.['1080p']?.h264;
+
+  const goldenAnnotation = primary
     ? [
         {
           codec: '__golden__',
-          bitrate: golden.bitrate_kbps,
-          vmaf: golden.vmaf_attained,
+          bitrate: primary.bitrate_kbps,
+          vmaf: primary.vmaf_attained,
         },
       ]
     : [];

@@ -14,3 +14,7 @@ output "dashboard_url" {
   value       = "https://${aws_apprunner_service.dashboard.service_url}"
   description = "Live dashboard URL"
 }
+
+output "gcp_step_function_arn" {
+  value = aws_sfn_state_machine.gcp_orchestrator.arn
+}

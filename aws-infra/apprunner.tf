@@ -73,7 +73,10 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
         Sid      = "StartStepFunction"
         Effect   = "Allow"
         Action   = "states:StartExecution"
-        Resource = aws_sfn_state_machine.research_orchestrator.arn
+        Resource = [
+          aws_sfn_state_machine.research_orchestrator.arn,
+          aws_sfn_state_machine.gcp_orchestrator.arn,
+        ]
       },
       {
         Sid      = "ListBatchJobs"
@@ -104,6 +107,7 @@ resource "aws_apprunner_service" "dashboard" {
         runtime_environment_variables = {
           MONGO_URI               = var.mongo_uri
           SFN_ARN                 = aws_sfn_state_machine.research_orchestrator.arn
+          GCP_SFN_ARN             = aws_sfn_state_machine.gcp_orchestrator.arn
           BATCH_JOB_QUEUE         = aws_batch_job_queue.chai_q_queue.name
           NEXT_TELEMETRY_DISABLED = "1"
           # AWS_REGION is set automatically by App Runner

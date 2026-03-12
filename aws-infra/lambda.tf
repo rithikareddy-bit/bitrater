@@ -125,3 +125,153 @@ resource "aws_lambda_function" "aggregator" {
     }
   }
 }
+
+# =============================================================================
+# GCP Pipeline Lambdas + GCP-Orchestrator Step Function
+# =============================================================================
+
+# --- GCP Lambda Layer (google-cloud deps + pymongo + requests) ---
+resource "null_resource" "gcp_layer_build" {
+  triggers = {
+    version = "gcp-transcoder-0.1"
+  }
+  provisioner "local-exec" {
+    command = <<-EOT
+      pip3 install \
+        "google-cloud-video-transcoder>=1.0.0" \
+        "google-cloud-storage>=2.0.0" \
+        "pymongo[srv]==4.6.1" \
+        "requests>=2.31.0" \
+        -t "${path.module}/.gcp-layer/python" --quiet
+    EOT
+  }
+}
+
+data "archive_file" "gcp_layer_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/.gcp-layer"
+  output_path = "${path.module}/.gcp-layer.zip"
+  depends_on  = [null_resource.gcp_layer_build]
+}
+
+resource "aws_lambda_layer_version" "gcp_deps" {
+  layer_name          = "chai-q-gcp-deps"
+  filename            = data.archive_file.gcp_layer_zip.output_path
+  source_code_hash    = data.archive_file.gcp_layer_zip.output_base64sha256
+  compatible_runtimes = ["python3.11"]
+}
+
+# --- Package GCP Lambda source files ---
+data "archive_file" "gcp_copy_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/gcp_copy_s3_to_gcs.py"
+  output_path = "/tmp/chai-q-gcp-copy.zip"
+}
+
+data "archive_file" "gcp_transcoder_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/gcp_transcoder.py"
+  output_path = "/tmp/chai-q-gcp-transcoder.zip"
+}
+
+data "archive_file" "gcp_check_status_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/gcp_check_status.py"
+  output_path = "/tmp/chai-q-gcp-check-status.zip"
+}
+
+data "archive_file" "gcp_finalize_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/gcp_finalize_hls.py"
+  output_path = "/tmp/chai-q-gcp-finalize.zip"
+}
+
+locals {
+  gcp_lambda_env = {
+    MONGO_URI                  = var.mongo_uri
+    GCP_PROJECT                = var.gcp_project
+    GCP_LOCATION               = var.gcp_location
+    GCS_INPUT_BUCKET           = var.gcs_input_bucket
+    GCS_OUTPUT_BUCKET          = var.gcs_output_bucket
+    GCP_CREDENTIALS_SECRET_ARN = var.gcp_credentials_secret_arn
+  }
+}
+
+# --- CopySourceToGCS Lambda ---
+resource "aws_lambda_function" "gcp_copy" {
+  filename         = data.archive_file.gcp_copy_zip.output_path
+  source_code_hash = data.archive_file.gcp_copy_zip.output_base64sha256
+  function_name    = "chai-q-gcp-copy-s3-to-gcs"
+  role             = aws_iam_role.gcp_lambda_role.arn
+  handler          = "gcp_copy_s3_to_gcs.handler"
+  runtime          = "python3.11"
+  timeout          = 900
+  memory_size      = 512
+  layers           = [aws_lambda_layer_version.gcp_deps.arn]
+
+  environment {
+    variables = local.gcp_lambda_env
+  }
+}
+
+# --- SubmitGCPJob Lambda ---
+resource "aws_lambda_function" "gcp_transcoder" {
+  filename         = data.archive_file.gcp_transcoder_zip.output_path
+  source_code_hash = data.archive_file.gcp_transcoder_zip.output_base64sha256
+  function_name    = "chai-q-gcp-transcoder"
+  role             = aws_iam_role.gcp_lambda_role.arn
+  handler          = "gcp_transcoder.handler"
+  runtime          = "python3.11"
+  timeout          = 120
+  layers           = [aws_lambda_layer_version.gcp_deps.arn]
+
+  environment {
+    variables = local.gcp_lambda_env
+  }
+}
+
+# --- CheckJobStatus Lambda ---
+resource "aws_lambda_function" "gcp_check_status" {
+  filename         = data.archive_file.gcp_check_status_zip.output_path
+  source_code_hash = data.archive_file.gcp_check_status_zip.output_base64sha256
+  function_name    = "chai-q-gcp-check-status"
+  role             = aws_iam_role.gcp_lambda_role.arn
+  handler          = "gcp_check_status.handler"
+  runtime          = "python3.11"
+  timeout          = 60
+  layers           = [aws_lambda_layer_version.gcp_deps.arn]
+
+  environment {
+    variables = local.gcp_lambda_env
+  }
+}
+
+# --- FinalizeHLS Lambda ---
+resource "aws_lambda_function" "gcp_finalize" {
+  filename         = data.archive_file.gcp_finalize_zip.output_path
+  source_code_hash = data.archive_file.gcp_finalize_zip.output_base64sha256
+  function_name    = "chai-q-gcp-finalize-hls"
+  role             = aws_iam_role.gcp_lambda_role.arn
+  handler          = "gcp_finalize_hls.handler"
+  runtime          = "python3.11"
+  timeout          = 300
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.gcp_deps.arn]
+
+  environment {
+    variables = local.gcp_lambda_env
+  }
+}
+
+# --- GCP-Orchestrator Step Function ---
+resource "aws_sfn_state_machine" "gcp_orchestrator" {
+  name     = "GCP-Orchestrator"
+  role_arn = aws_iam_role.step_function_role.arn
+
+  definition = templatefile("../orchestrator/gcp_step_function_def.json", {
+    gcp_copy_lambda_arn         = aws_lambda_function.gcp_copy.arn
+    gcp_transcoder_lambda_arn   = aws_lambda_function.gcp_transcoder.arn
+    gcp_check_status_lambda_arn = aws_lambda_function.gcp_check_status.arn
+    gcp_finalize_lambda_arn     = aws_lambda_function.gcp_finalize.arn
+  })
+}

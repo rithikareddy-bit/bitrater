@@ -1,0 +1,102 @@
+{
+  "StartAt": "CopySourceToGCS",
+  "States": {
+    "CopySourceToGCS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${gcp_copy_lambda_arn}",
+        "Payload": {
+          "episode_id.$": "$$.Execution.Input.episode_id",
+          "s3_url.$": "$$.Execution.Input.s3_url",
+          "golden_recipes.$": "$$.Execution.Input.golden_recipes"
+        }
+      },
+      "ResultSelector": {
+        "episode_id.$": "$.Payload.episode_id",
+        "gcs_input_uri.$": "$.Payload.gcs_input_uri",
+        "golden_recipes.$": "$.Payload.golden_recipes"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "SubmitGCPJob"
+    },
+    "SubmitGCPJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${gcp_transcoder_lambda_arn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "episode_id.$": "$.Payload.episode_id",
+        "gcp_job_name.$": "$.Payload.gcp_job_name",
+        "golden_recipes.$": "$.Payload.golden_recipes",
+        "output_uri.$": "$.Payload.output_uri"
+      },
+      "Next": "WaitForJob"
+    },
+    "WaitForJob": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "CheckJobStatus"
+    },
+    "CheckJobStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${gcp_check_status_lambda_arn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "episode_id.$": "$.Payload.episode_id",
+        "gcp_job_name.$": "$.Payload.gcp_job_name",
+        "gcp_job_state.$": "$.Payload.gcp_job_state",
+        "golden_recipes.$": "$.Payload.golden_recipes",
+        "output_uri.$": "$.Payload.output_uri"
+      },
+      "Next": "IsComplete"
+    },
+    "IsComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.gcp_job_state",
+          "StringEquals": "SUCCEEDED",
+          "Next": "FinalizeHLS"
+        },
+        {
+          "Variable": "$.gcp_job_state",
+          "StringEquals": "FAILED",
+          "Next": "JobFailed"
+        }
+      ],
+      "Default": "WaitForJob"
+    },
+    "FinalizeHLS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${gcp_finalize_lambda_arn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "episode_id.$": "$.Payload.episode_id",
+        "h264_master_m3u8_url.$": "$.Payload.h264_master_m3u8_url",
+        "h265_master_m3u8_url.$": "$.Payload.h265_master_m3u8_url"
+      },
+      "End": true
+    },
+    "JobFailed": {
+      "Type": "Fail",
+      "Cause": "GCP Transcoder job failed",
+      "Error": "GCPTranscoderJobFailed"
+    }
+  }
+}

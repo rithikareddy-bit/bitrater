@@ -16,45 +16,40 @@ export default function BIHeader({ golden }) {
     );
   }
 
-  const {
-    h264_bitrate_kbps,
-    h265_bitrate_kbps,
-    vmaf_attained,
-    duration_s,
-  } = golden;
+  const resolutions = golden?.golden_recipes?.resolutions;
+  const primary = resolutions?.['1080p'];
+
+  const h264_bitrate = primary?.h264?.bitrate_kbps;
+  const h265_bitrate = primary?.h265?.bitrate_kbps;
+  const vmaf_attained = primary?.h265?.vmaf_attained ?? primary?.h264?.vmaf_attained;
+  const efficiencyGain = golden?.efficiency_gain?.['1080p'];
 
   const storageSaved =
-    h264_bitrate_kbps && h265_bitrate_kbps
-      ? ((1 - h265_bitrate_kbps / h264_bitrate_kbps) * 100).toFixed(1)
-      : null;
-
-  const computeCost =
-    duration_s != null
-      ? (0.0174 * Math.ceil(duration_s / 3600)).toFixed(4)
+    h264_bitrate && h265_bitrate
+      ? ((1 - h265_bitrate / h264_bitrate) * 100).toFixed(1)
       : null;
 
   const metrics = [
     {
-      label: 'Storage Saved',
-      value: storageSaved != null ? `${storageSaved}%` : '—',
+      label: 'Storage Saved (1080p)',
+      value: storageSaved != null ? `${storageSaved}%` : efficiencyGain || '—',
       color: '#22c55e',
     },
     {
-      label: 'Quality Floor',
+      label: 'Quality Floor (1080p)',
       value: vmaf_attained != null ? vmaf_attained.toFixed(1) : '—',
       color: '#4da6ff',
       suffix: ' VMAF',
     },
     {
-      label: 'Codec Winner',
-      value: 'H.265',
+      label: 'H.265 Bitrate',
+      value: h265_bitrate ? `${h265_bitrate}k` : '—',
       color: '#a78bfa',
     },
     {
-      label: 'Compute Cost',
-      value: computeCost != null ? `$${computeCost}` : '—',
+      label: 'H.264 Bitrate',
+      value: h264_bitrate ? `${h264_bitrate}k` : '—',
       color: '#f59e0b',
-      suffix: ' /run',
     },
   ];
 

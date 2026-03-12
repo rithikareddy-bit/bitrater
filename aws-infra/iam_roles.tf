@@ -89,3 +89,43 @@ resource "aws_iam_role_policy_attachment" "amazon_ec2_spot_fleet_role_policy" {
   role       = aws_iam_role.amazon_ec2_spot_fleet_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole"
 }
+
+# 4. GCP Pipeline Lambda Role (S3 read, Secrets Manager, CloudWatch Logs)
+resource "aws_iam_role" "gcp_lambda_role" {
+  name = "chai-q-gcp-lambda-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "gcp_lambda_basic" {
+  role       = aws_iam_role.gcp_lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "gcp_lambda_policy" {
+  name = "chai-q-gcp-lambda-policy"
+  role = aws_iam_role.gcp_lambda_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "S3ReadSource"
+        Action   = ["s3:GetObject"]
+        Effect   = "Allow"
+        Resource = "*"
+      },
+      {
+        Sid      = "SecretsManagerGCP"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Effect   = "Allow"
+        Resource = var.gcp_credentials_secret_arn
+      }
+    ]
+  })
+}

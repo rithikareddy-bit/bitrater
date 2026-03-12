@@ -2,6 +2,6 @@
     "codec": "libx265",
     "preset": "slower",
     "pix_fmt": "yuv420p10le",
-    "params": "aq-mode=3:aq-strength=1.2:psy-rd=2.0:psy-rdoq=1.0:rd=4:bframes=4:rc-lookahead=60",
+    "params": "aq-mode=2:aq-strength=1:psy-rd=2.0:psy-rdoq=1.0:rd=4:bframes=4:rc-lookahead=60",
     "vmaf_target": 93.5
   }
