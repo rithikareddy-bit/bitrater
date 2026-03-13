@@ -10,7 +10,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+RUN npm install --os=linux --cpu=x64 @next/swc-linux-x64-musl 2>/dev/null; npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app

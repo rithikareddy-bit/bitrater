@@ -25,7 +25,7 @@ resource "aws_security_group" "batch_sg" {
 
 # --- S3 ---
 resource "aws_s3_bucket" "raw_input" {
-  bucket = "chai-q-raw-input-lab"
+  bucket = "chai-q-raw-input-lab-107647021172"
 }
 
 # --- AWS Batch Compute Environment ---
@@ -47,6 +47,10 @@ resource "aws_batch_compute_environment" "spot_env" {
   }
   service_role = aws_iam_role.batch_service_role.arn
   type         = "MANAGED"
+
+  lifecycle {
+    ignore_changes = [compute_resources]
+  }
 }
 
 # --- AWS Batch Job Queue ---
