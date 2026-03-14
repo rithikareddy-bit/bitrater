@@ -1,0 +1,12 @@
+# Both images build from the video-q-lab root:
+#   docker build -f dashboard/Dockerfile .
+#   docker build -f research-worker/Dockerfile .
+aws-infra
+orchestrator
+.git
+**/__pycache__
+*.pyc
+.env
+.env.*
+dashboard/node_modules
+dashboard/.next

@@ -1,0 +1,114 @@
+{
+  "StartAt": "GenerateLadder",
+  "States": {
+    "GenerateLadder": {
+      "Type": "Pass",
+      "Result": [
+        {"codec": "libx265", "bitrate": "1000", "resolution": "1080"},
+        {"codec": "libx265", "bitrate": "1500", "resolution": "1080"},
+        {"codec": "libx265", "bitrate": "2200", "resolution": "1080"},
+        {"codec": "libx265", "bitrate": "3000", "resolution": "1080"},
+        {"codec": "libx264", "bitrate": "2000", "resolution": "1080"},
+        {"codec": "libx264", "bitrate": "3500", "resolution": "1080"},
+        {"codec": "libx264", "bitrate": "5000", "resolution": "1080"},
+
+        {"codec": "libx265", "bitrate": "500",  "resolution": "720"},
+        {"codec": "libx265", "bitrate": "700",  "resolution": "720"},
+        {"codec": "libx265", "bitrate": "900",  "resolution": "720"},
+        {"codec": "libx265", "bitrate": "1200", "resolution": "720"},
+        {"codec": "libx264", "bitrate": "700",  "resolution": "720"},
+        {"codec": "libx264", "bitrate": "1000", "resolution": "720"},
+        {"codec": "libx264", "bitrate": "1500", "resolution": "720"},
+
+        {"codec": "libx265", "bitrate": "100",  "resolution": "480"},
+        {"codec": "libx265", "bitrate": "200",  "resolution": "480"},
+        {"codec": "libx265", "bitrate": "300",  "resolution": "480"},
+        {"codec": "libx265", "bitrate": "400",  "resolution": "480"},
+        {"codec": "libx264", "bitrate": "200",  "resolution": "480"},
+        {"codec": "libx264", "bitrate": "300",  "resolution": "480"},
+        {"codec": "libx264", "bitrate": "400",  "resolution": "480"}
+      ],
+      "Next": "ParallelResearch"
+    },
+    "ParallelResearch": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "RunBatchJob",
+        "States": {
+          "RunBatchJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::batch:submitJob.sync",
+            "Parameters": {
+              "JobName.$": "States.Format('ChaiQLab-{}', ${ctx_episode_id})",
+              "JobQueue": "${batch_job_queue_arn}",
+              "JobDefinition": "${batch_job_definition_arn}",
+              "ContainerOverrides": {
+                "Environment": [
+                  {"Name": "BITRATE",    "Value.$": "${ctx_bitrate}"},
+                  {"Name": "CODEC",      "Value.$": "${ctx_codec}"},
+                  {"Name": "RESOLUTION", "Value.$": "${ctx_resolution}"},
+                  {"Name": "S3_URL",     "Value.$": "${ctx_s3_url}"},
+                  {"Name": "EPISODE_ID", "Value.$": "${ctx_episode_id}"}
+                ]
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 30,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.labError",
+          "Next": "MarkLabFailed"
+        }
+      ],
+      "Next": "CalculateGoldenRecipe"
+    },
+    "CalculateGoldenRecipe": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${aggregator_lambda_arn}",
+        "Payload": {
+          "episode_id.$": "${ctx_episode_id}"
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.labError",
+          "Next": "MarkLabFailed"
+        }
+      ],
+      "End": true
+    },
+    "MarkLabFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${mark_lab_failed_lambda_arn}",
+        "Payload": {
+          "episode_id.$": "$$.Execution.Input.episode_id",
+          "cause.$": "$.labError.Cause"
+        }
+      },
+      "ResultPath": "$.markLabFailedResult",
+      "Next": "LabExecutionFailed"
+    },
+    "LabExecutionFailed": {
+      "Type": "Fail",
+      "Error": "ChaiQLabFailed",
+      "Cause": "Batch Map or aggregator failed; see video_episodes.lab_error"
+    }
+  }
+}

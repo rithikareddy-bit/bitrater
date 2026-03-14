@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Terraform — state files contain secrets (MONGO_URI etc.) in plaintext
+aws-infra/terraform.tfstate
+aws-infra/terraform.tfstate.backup
+aws-infra/.terraform/
+
+# Lambda layer build artifacts (rebuilt by `terraform apply`)
+aws-infra/.pymongo-layer/
+aws-infra/.pymongo-layer.zip
+aws-infra/.gcp-layer/
+aws-infra/.gcp-layer.zip
+
+# Secrets — never commit
+aws-infra/terraform.tfvars
+.env.deploy
+.env.local
+*.pem
