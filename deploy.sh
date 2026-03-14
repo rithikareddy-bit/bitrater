@@ -75,6 +75,9 @@ echo "========================================"
 
 cd aws-infra
 
+echo "[2a] Cleaning old Lambda layers (will be rebuilt via Docker for Linux x86_64)..."
+rm -rf .pymongo-layer .pymongo-layer.zip .gcp-layer .gcp-layer.zip
+
 terraform init -upgrade
 
 terraform apply -auto-approve \

@@ -24,7 +24,7 @@ resource "aws_batch_job_definition" "chai_q_worker_def" {
         type  = "VCPU"
       },
       {
-        value = "8192"
+        value = "7168"
         type  = "MEMORY"
       }
     ]

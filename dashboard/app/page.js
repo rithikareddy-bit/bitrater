@@ -6,6 +6,7 @@ import Link from 'next/link';
 const STATUS_COLORS = {
   DONE: '#22c55e',
   PENDING: '#f59e0b',
+  FAILED: '#ef4444',
   'NOT RUN': '#555',
 };
 
@@ -92,8 +93,10 @@ function EpisodeRow({ episode }) {
     fetch(`/api/status/${epId}`)
       .then((r) => r.json())
       .then((d) => {
-        if (d.succeeded >= d.total) setStatus('DONE');
-        else if (d.succeeded > 0 || d.running > 0) setStatus('PENDING');
+        if (d.labStatus === 'FAILED') setStatus('FAILED');
+        else if (d.succeeded >= d.total) setStatus('DONE');
+        else if (d.failed > 0 && d.succeeded + d.failed >= d.total) setStatus('FAILED');
+        else if (d.succeeded > 0 || d.running > 0 || d.labStatus === 'RUNNING') setStatus('PENDING');
         else setStatus('NOT RUN');
       })
       .catch(() => setStatus('NOT RUN'));

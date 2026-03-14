@@ -31,14 +31,19 @@ resource "aws_iam_role_policy" "lambda_sfn_start" {
 }
 
 # --- pymongo Lambda Layer (aggregator depends on it, not in Lambda runtime) ---
+# Built inside Docker to produce Linux x86_64 binaries compatible with Lambda.
 resource "null_resource" "pymongo_layer_build" {
   triggers = {
-    version = "pymongo-srv-4.6.1"
+    version = "pymongo-srv-4.6.1-linux"
   }
   provisioner "local-exec" {
     command = <<-EOT
-      pip3 install "pymongo[srv]==4.6.1" \
-        -t "${path.module}/.pymongo-layer/python" --quiet
+      rm -rf "${path.module}/.pymongo-layer"
+      mkdir -p "${path.module}/.pymongo-layer/python"
+      docker run --rm --platform linux/amd64 \
+        -v "${path.module}/.pymongo-layer/python:/out" \
+        public.ecr.aws/lambda/python:3.11 \
+        pip install "pymongo[srv]==4.6.1" -t /out --quiet
     EOT
   }
 }
@@ -68,6 +73,12 @@ data "archive_file" "aggregator_zip" {
   type        = "zip"
   source_file = "../orchestrator/aggregator.py"
   output_path = "/tmp/chai-q-aggregator.zip"
+}
+
+data "archive_file" "mark_lab_failed_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/mark_lab_failed.py"
+  output_path = "/tmp/chai-q-mark-lab-failed.zip"
 }
 
 # --- S3 Trigger Lambda ---
@@ -126,23 +137,47 @@ resource "aws_lambda_function" "aggregator" {
   }
 }
 
+# --- Mark lab failed (Step Function Catch) ---
+resource "aws_lambda_function" "mark_lab_failed" {
+  filename         = data.archive_file.mark_lab_failed_zip.output_path
+  source_code_hash = data.archive_file.mark_lab_failed_zip.output_base64sha256
+  function_name    = "chai-q-mark-lab-failed"
+  role             = aws_iam_role.lambda_exec_role.arn
+  handler          = "mark_lab_failed.handler"
+  runtime          = "python3.11"
+  timeout          = 30
+  layers           = [aws_lambda_layer_version.pymongo.arn]
+
+  environment {
+    variables = {
+      MONGO_URI = var.mongo_uri
+    }
+  }
+}
+
 # =============================================================================
 # GCP Pipeline Lambdas + GCP-Orchestrator Step Function
 # =============================================================================
 
 # --- GCP Lambda Layer (google-cloud deps + pymongo + requests) ---
+# Built inside Docker to produce Linux x86_64 binaries compatible with Lambda.
 resource "null_resource" "gcp_layer_build" {
   triggers = {
-    version = "gcp-transcoder-0.1"
+    version = "gcp-transcoder-0.3-linux"
   }
   provisioner "local-exec" {
     command = <<-EOT
-      pip3 install \
-        "google-cloud-video-transcoder>=1.0.0" \
-        "google-cloud-storage>=2.0.0" \
-        "pymongo[srv]==4.6.1" \
-        "requests>=2.31.0" \
-        -t "${path.module}/.gcp-layer/python" --quiet
+      rm -rf "${path.module}/.gcp-layer"
+      mkdir -p "${path.module}/.gcp-layer/python"
+      docker run --rm --platform linux/amd64 \
+        -v "${path.module}/.gcp-layer/python:/out" \
+        public.ecr.aws/lambda/python:3.11 \
+        pip install \
+          "google-cloud-video-transcoder>=1.0.0" \
+          "google-cloud-storage>=2.0.0" \
+          "pymongo[srv]==4.6.1" \
+          "requests>=2.31.0" \
+          -t /out --quiet
     EOT
   }
 }

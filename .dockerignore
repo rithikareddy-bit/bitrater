@@ -1,0 +1,11 @@
+# Build dashboard image from repo root: docker build -f dashboard/Dockerfile .
+aws-infra
+research-worker
+orchestrator
+.git
+**/__pycache__
+*.pyc
+.env
+.env.*
+dashboard/node_modules
+dashboard/.next

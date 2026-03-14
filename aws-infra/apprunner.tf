@@ -79,6 +79,12 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
         ]
       },
       {
+        Sid      = "DescribeLabExecution"
+        Effect   = "Allow"
+        Action   = "states:DescribeExecution"
+        Resource = "*"
+      },
+      {
         Sid      = "ListBatchJobs"
         Effect   = "Allow"
         Action   = "batch:ListJobs"

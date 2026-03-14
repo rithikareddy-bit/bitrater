@@ -119,8 +119,12 @@ def handler(event, context):
 
     episode_slug, episode_output_key = _get_episode_meta(db, episode_id)
 
-    hls_folder_h264 = f"hls/{episode_output_key}/h264"
-    hls_folder_h265 = f"hls/{episode_output_key}/h265"
+    # GCP Transcoder writes to gs://{bucket}/{episode_id}/ — derive the
+    # GCS prefix so CDN URLs match the actual transcoder output location.
+    gcs_prefix = output_uri.replace(f"gs://{gcs_output_bucket}/", "").rstrip("/")
+
+    hls_folder_h264 = f"{gcs_prefix}/h264"
+    hls_folder_h265 = f"{gcs_prefix}/h265"
 
     subtitle_folder = _upload_subtitles(episode_slug)
 
@@ -139,8 +143,8 @@ def handler(event, context):
             )
             raise
 
-    h264_url = f"{CDN_BASE}/hls/{episode_output_key}/{episode_slug}_h264.m3u8"
-    h265_url = f"{CDN_BASE}/hls/{episode_output_key}/{episode_slug}_h265.m3u8"
+    h264_url = f"{CDN_BASE}/{gcs_prefix}/h264_master.m3u8"
+    h265_url = f"{CDN_BASE}/{gcs_prefix}/h265_master.m3u8"
 
     db.video_episodes.update_one(
         {"episode_id": episode_id},

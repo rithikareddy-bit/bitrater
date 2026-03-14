@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
-import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
+import {
+  SFNClient,
+  StartExecutionCommand,
+  DescribeExecutionCommand,
+} from '@aws-sdk/client-sfn';
 import clientPromise from '@/lib/mongodb';
 
 const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
+
+const TERMINAL = new Set(['FAILED', 'TIMED_OUT', 'ABORTED', 'SUCCEEDED']);
 
 export async function POST(request) {
   try {
@@ -20,25 +26,70 @@ export async function POST(request) {
     const client = await clientPromise();
     const db = client.db('chai_q_lab');
 
+    const existing = await db.collection('video_episodes').findOne({ episode_id: episodeId });
+
+    if (existing?.lab_status === 'RUNNING') {
+      if (existing.lab_execution_arn) {
+        try {
+          const desc = await sfn.send(
+            new DescribeExecutionCommand({ executionArn: existing.lab_execution_arn }),
+          );
+          if (desc.status === 'RUNNING') {
+            return NextResponse.json(
+              { error: 'A lab run is already active for this episode' },
+              { status: 409 },
+            );
+          }
+          if (!TERMINAL.has(desc.status)) {
+            return NextResponse.json(
+              { error: 'A lab run is already active for this episode' },
+              { status: 409 },
+            );
+          }
+        } catch {
+          return NextResponse.json(
+            { error: 'A lab run is already active for this episode' },
+            { status: 409 },
+          );
+        }
+      }
+    }
+
     await db.collection('video_vmaf_research').deleteMany({ episode_id: episodeId });
+
+    const runStartedAt = new Date().toISOString();
 
     await db.collection('video_episodes').updateOne(
       { episode_id: episodeId },
-      { $unset: {
-        golden_recipes: '',
-        h264_master_m3u8_url: '',
-        h265_master_m3u8_url: '',
-        gcp_job_status: '',
-        gcp_job_name: '',
-        gcp_started_at: '',
-        gcp_finished_at: '',
-        gcp_error: '',
-      }},
+      {
+        $set: {
+          lab_status: 'RUNNING',
+          lab_run_started_at: runStartedAt,
+        },
+        $unset: {
+          golden_recipes: '',
+          h264_master_m3u8_url: '',
+          h265_master_m3u8_url: '',
+          gcp_job_status: '',
+          gcp_job_name: '',
+          gcp_execution_arn: '',
+          gcp_started_at: '',
+          gcp_finished_at: '',
+          gcp_error: '',
+          lab_error: '',
+        },
+      },
+      { upsert: true },
     );
 
     const input = JSON.stringify({ s3_url: s3Url, episode_id: episodeId });
     const cmd = new StartExecutionCommand({ stateMachineArn: sfnArn, input });
     const result = await sfn.send(cmd);
+
+    await db.collection('video_episodes').updateOne(
+      { episode_id: episodeId },
+      { $set: { lab_execution_arn: result.executionArn } },
+    );
 
     return NextResponse.json({ executionArn: result.executionArn });
   } catch (err) {

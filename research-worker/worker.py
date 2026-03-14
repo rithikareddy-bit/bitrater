@@ -32,8 +32,10 @@ def _get_video_info(path):
 def get_s3_client():
     return boto3.client('s3')
 
+CODEC_TO_CONFIG = {"libx264": "h264", "libx265": "h265"}
+
 def load_heavy_params(codec):
-    config_path = f"configs/{codec.replace('lib', '')}_heavy.json"
+    config_path = f"configs/{CODEC_TO_CONFIG.get(codec, codec)}_heavy.json"
     if os.path.exists(config_path):
         with open(config_path) as f:
             return json.load(f)
@@ -51,9 +53,11 @@ def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h):
             "ffmpeg", "-y", "-i", "source.mp4",
             "-c:v", codec, "-preset", preset, "-b:v", f"{bitrate}k",
             "-maxrate", maxrate, "-bufsize", bufsize,
-            "-pix_fmt", pix_fmt, "-x264-params", params,
-            "-vf", vf, "-passlogfile", passlogfile,
+            "-pix_fmt", pix_fmt,
         ]
+        if params:
+            base += ["-x264-params", params]
+        base += ["-vf", vf, "-passlogfile", passlogfile]
         subprocess.run(base + ["-pass", "1", "-an", "-f", "null", "/dev/null"], check=True)
         subprocess.run(base + ["-pass", "2", "variant.mp4"], check=True)
     else:
@@ -64,14 +68,15 @@ def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h):
             "-maxrate", maxrate, "-bufsize", bufsize,
             "-pix_fmt", pix_fmt, "-vf", vf,
         ]
-        pass1_params = f"pass=1:stats={stats_file}:{params}"
+        pass_base = f"stats={stats_file}"
+        if params:
+            pass_base += f":{params}"
         subprocess.run(
-            base + ["-x265-params", pass1_params, "-an", "-f", "null", "/dev/null"],
+            base + ["-x265-params", f"pass=1:{pass_base}", "-an", "-f", "null", "/dev/null"],
             check=True,
         )
-        pass2_params = f"pass=2:stats={stats_file}:{params}"
         subprocess.run(
-            base + ["-x265-params", pass2_params, "variant.mp4"],
+            base + ["-x265-params", f"pass=2:{pass_base}", "variant.mp4"],
             check=True,
         )
 
@@ -95,8 +100,20 @@ def run_research():
     resolution_tag = f"{resolution}p"
 
     parsed = urlparse(s3_url)
-    bucket, key = parsed.netloc, parsed.path.lstrip('/')
-    get_s3_client().download_file(bucket, key, 'source.mp4')
+    host = parsed.netloc
+    path = parsed.path.lstrip('/')
+    if host.startswith("s3") and host.endswith(".amazonaws.com"):
+        # Path-style: https://s3.region.amazonaws.com/bucket/key
+        parts = path.split("/", 1)
+        bucket, key = parts[0], parts[1] if len(parts) > 1 else ""
+        region = host.split(".")[1] if host.count(".") >= 3 else None
+    else:
+        # Virtual-hosted: https://bucket.s3.region.amazonaws.com/key
+        bucket = host.split(".s3")[0]
+        key = path
+        region = host.split(".s3.")[1].split(".")[0] if ".s3." in host else None
+    s3 = boto3.client('s3', region_name=region) if region else get_s3_client()
+    s3.download_file(bucket, key, 'source.mp4')
 
     config   = load_heavy_params(codec)
     preset   = config.get("preset", "slower")
@@ -106,47 +123,31 @@ def run_research():
     _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h)
 
     info = _get_video_info("source.mp4")
-    w, h, fps = info["width"], info["height"], info["fps"]
+    w, h = info["width"], info["height"]
+    source_fps = max(1, round(info["fps"]))
 
+    vmaf_filter = (
+        f"[0:v]setpts=PTS-STARTPTS[ref];"
+        f"[1:v]scale={w}:{h}:flags=lanczos,setpts=PTS-STARTPTS[dist];"
+        f"[ref][dist]libvmaf=model=version=vmaf_v0.6.1neg"
+        f":log_path=vmaf_results.json:log_fmt=json:n_threads=4"
+    )
     subprocess.run(
         [
-            "ffmpeg", "-y", "-i", "source.mp4",
-            "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe",
-            "ref.y4m",
+            "ffmpeg", "-i", "source.mp4", "-i", "variant.mp4",
+            "-lavfi", vmaf_filter, "-f", "null", "-",
         ],
         check=True,
-        capture_output=True,
     )
-
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", "variant.mp4",
-            "-vf", f"scale={w}:{h}:flags=lanczos",
-            "-pix_fmt", "yuv420p", "-r", str(fps), "-f", "yuv4mpegpipe",
-            "dist.y4m",
-        ],
-        check=True,
-        capture_output=True,
-    )
-
-    vmaf_cmd = [
-        "vmaf",
-        "-r", "ref.y4m",
-        "-d", "dist.y4m",
-        "--model", "version=vmaf_v0.6.1neg",
-        "--json", "-o", "vmaf_results.json",
-    ]
-    subprocess.run(vmaf_cmd, check=True)
 
     with open("vmaf_results.json") as f:
         data = json.load(f)
         vmaf_score = data["pooled_metrics"]["vmaf"]["mean"]
 
     frames = data.get("frames", [])
-    FPS = 30
     vmaf_timeline = []
-    for i in range(0, len(frames), FPS):
-        chunk = frames[i:i + FPS]
+    for i in range(0, len(frames), source_fps):
+        chunk = frames[i:i + source_fps]
         vmaf_timeline.append(round(sum(f["metrics"]["vmaf"] for f in chunk) / len(chunk), 2))
 
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]

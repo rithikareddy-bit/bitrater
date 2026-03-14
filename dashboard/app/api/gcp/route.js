@@ -80,6 +80,11 @@ export async function POST(request) {
     const cmd = new StartExecutionCommand({ stateMachineArn: gcpSfnArn, input });
     const result = await sfn.send(cmd);
 
+    await labDb.collection('video_episodes').updateOne(
+      { episode_id: episodeId },
+      { $set: { gcp_execution_arn: result.executionArn } },
+    );
+
     return NextResponse.json({ executionArn: result.executionArn });
   } catch (err) {
     console.error('[POST /api/gcp]', err);

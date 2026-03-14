@@ -12,18 +12,34 @@ resource "aws_iam_role_policy_attachment" "batch_service_attachment" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole"
 }
 
-# 2. Batch Instance Role (The role for the EC2 Spot instances)
+# 2. Batch Instance Role (The role for the EC2 Spot instances AND ECS task role)
 resource "aws_iam_role" "batch_instance_role" {
   name = "chai-q-batch-instance-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" } }]
+    Statement = [
+      { Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" } },
+      { Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ecs-tasks.amazonaws.com" } }
+    ]
   })
 }
 
 resource "aws_iam_role_policy_attachment" "batch_instance_ecs" {
   role       = aws_iam_role.batch_instance_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
+}
+
+resource "aws_iam_role_policy" "batch_instance_s3_read" {
+  name = "s3-read-source"
+  role = aws_iam_role.batch_instance_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["s3:GetObject", "s3:HeadObject"]
+      Resource = "*"
+    }]
+  })
 }
 
 resource "aws_iam_instance_profile" "batch_instance_profile" {

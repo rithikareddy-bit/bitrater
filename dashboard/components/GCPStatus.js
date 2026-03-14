@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [status, setStatus] = useState(null);
@@ -8,7 +8,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [pushError, setPushError] = useState(null);
   const pollingRef = useRef(null);
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch(`/api/gcp-status/${episodeId}`);
       const data = await res.json();
@@ -21,17 +21,17 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
     } catch {
       // transient
     }
-  };
+  }, [episodeId]);
+
+  const startPolling = useCallback(() => {
+    if (pollingRef.current) return;
+    pollingRef.current = setInterval(fetchStatus, 10000);
+  }, [fetchStatus]);
 
   useEffect(() => {
     fetchStatus();
     return () => clearInterval(pollingRef.current);
-  }, [episodeId]);
-
-  const startPolling = () => {
-    if (pollingRef.current) return;
-    pollingRef.current = setInterval(fetchStatus, 10000);
-  };
+  }, [fetchStatus]);
 
   const handleRunGCP = async () => {
     setPushing(true);
@@ -44,6 +44,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'GCP push failed');
+      setPushing(false);
       startPolling();
     } catch (err) {
       setPushError(err.message);
@@ -68,7 +69,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
 
   useEffect(() => {
     if (isActive && !pollingRef.current) startPolling();
-  }, [gcpStatus]);
+  }, [gcpStatus, isActive, startPolling]);
 
   return (
     <div>

@@ -1,16 +1,16 @@
-# v4 — fix db name (production→master), use s3_url from showcache episodes,
-#       so we force it via sh -c to ensure Next.js binds on 0.0.0.0
+# Build from video-q-lab root (lockfile lives in dashboard/):
+#   docker build -f dashboard/Dockerfile -t <ecr>/chai-q-dashboard:latest .
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package*.json ./
+COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci
 
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY dashboard/ .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm install --os=linux --cpu=x64 @next/swc-linux-x64-musl 2>/dev/null; npm run build
+RUN npm install --os=linux --cpu=x64 @next/swc-linux-x64-musl@14 2>/dev/null; npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
@@ -22,6 +22,4 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
 EXPOSE 3000
-# Force HOSTNAME=0.0.0.0 at process level so Next.js binds all interfaces,
-# even though the container runtime overrides the HOSTNAME env var.
 CMD ["sh", "-c", "HOSTNAME=0.0.0.0 node server.js"]

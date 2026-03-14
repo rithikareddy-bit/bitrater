@@ -40,6 +40,14 @@
         "golden_recipes.$": "$.Payload.golden_recipes",
         "output_uri.$": "$.Payload.output_uri"
       },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
       "Next": "WaitForJob"
     },
     "WaitForJob": {

@@ -1,6 +1,7 @@
 import pymongo
 import os
 import json
+from datetime import datetime, timezone
 
 VMAF_THRESHOLDS = {
     "1080p": 88,
@@ -69,6 +70,8 @@ def handler(event, context):
         {"episode_id": episode_id},
         {"$set": {
             "status": "ANALYSIS_COMPLETE",
+            "lab_status": "COMPLETE",
+            "lab_finished_at": datetime.now(timezone.utc).isoformat(),
             "golden_recipes": {"resolutions": resolutions_data},
             "efficiency_gain": efficiency_gain,
         }},

@@ -28,10 +28,22 @@ def handler(event, context):
 
     from urllib.parse import urlparse
     parsed = urlparse(s3_url)
-    s3_bucket = parsed.netloc
-    s3_key = parsed.path.lstrip("/")
+    host = parsed.netloc
+    path = parsed.path.lstrip("/")
+    if host.startswith("s3") and host.endswith(".amazonaws.com"):
+        parts = path.split("/", 1)
+        s3_bucket = parts[0]
+        s3_key = parts[1] if len(parts) > 1 else ""
+        region = host.split(".")[1] if host.count(".") >= 3 else None
+    else:
+        s3_bucket = host.split(".s3")[0]
+        s3_key = path
+        region = host.split(".s3.")[1].split(".")[0] if ".s3." in host else None
 
-    s3 = boto3.client("s3")
+    if region:
+        s3 = boto3.client("s3", region_name=region)
+    else:
+        s3 = boto3.client("s3")
     obj = s3.get_object(Bucket=s3_bucket, Key=s3_key)
 
     creds = _get_gcp_credentials()

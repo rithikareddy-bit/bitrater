@@ -2,6 +2,7 @@
 
 import {
   Chart as ChartJS,
+  LineController,
   LinearScale,
   PointElement,
   LineElement,
@@ -10,15 +11,16 @@ import {
 } from 'chart.js';
 import ConvexHullChart from '../ConvexHullChart';
 
-ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend);
+ChartJS.register(LineController, LinearScale, PointElement, LineElement, Tooltip, Legend);
 
-// Annotation plugin: draws a horizontal dashed line at VMAF 93.5
-const goldenThresholdPlugin = {
-  id: 'goldenThreshold',
+const thresholdPlugin = {
+  id: 'vmafThreshold',
   afterDraw(chart) {
+    const threshold = chart.options.plugins?.vmafThreshold?.value;
+    if (threshold == null) return;
     const { ctx, chartArea, scales } = chart;
     if (!scales.y) return;
-    const y = scales.y.getPixelForValue(93.5);
+    const y = scales.y.getPixelForValue(threshold);
     if (y < chartArea.top || y > chartArea.bottom) return;
 
     ctx.save();
@@ -32,14 +34,14 @@ const goldenThresholdPlugin = {
 
     ctx.fillStyle = '#facc15';
     ctx.font = '11px sans-serif';
-    ctx.fillText('Target 93.5', chartArea.right - 72, y - 4);
+    ctx.fillText(`Target ${threshold}`, chartArea.right - 80, y - 4);
     ctx.restore();
   },
 };
 
-ChartJS.register(goldenThresholdPlugin);
+ChartJS.register(thresholdPlugin);
 
-export default function RDCurve({ researchData, golden }) {
+export default function RDCurve({ researchData, golden, selectedRes = '1080p', vmafThreshold = 88 }) {
   if (!researchData || researchData.length === 0) {
     return (
       <div style={{ color: '#555', fontSize: 13, padding: '40px 0', textAlign: 'center' }}>
@@ -48,8 +50,8 @@ export default function RDCurve({ researchData, golden }) {
     );
   }
 
-  const primary = golden?.golden_recipes?.resolutions?.['1080p']?.h265
-    || golden?.golden_recipes?.resolutions?.['1080p']?.h264;
+  const primary = golden?.golden_recipes?.resolutions?.[selectedRes]?.h265
+    || golden?.golden_recipes?.resolutions?.[selectedRes]?.h264;
 
   const goldenAnnotation = primary
     ? [
@@ -63,5 +65,5 @@ export default function RDCurve({ researchData, golden }) {
 
   const enriched = [...researchData, ...goldenAnnotation];
 
-  return <ConvexHullChart researchData={enriched} />;
+  return <ConvexHullChart researchData={enriched} vmafThreshold={vmafThreshold} />;
 }

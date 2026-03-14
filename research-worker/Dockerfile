@@ -1,11 +1,14 @@
 FROM public.ecr.aws/lambda/python:3.11
 
-# Add AWS CLI to pull S3 files
-RUN yum install -y ffmpeg wget tar xz aws-cli
+RUN yum install -y wget tar xz aws-cli
 
-# Install static VMAF binary
-RUN wget https://github.com/Netflix/vmaf/releases/download/v2.3.1/vmaf -O /usr/local/bin/vmaf && \
-    chmod +x /usr/local/bin/vmaf
+# Install static ffmpeg + ffprobe (amd64)
+RUN wget -q https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -O /tmp/ffmpeg.tar.xz && \
+    tar xf /tmp/ffmpeg.tar.xz -C /tmp && \
+    cp /tmp/ffmpeg-*-amd64-static/ffmpeg /usr/local/bin/ffmpeg && \
+    cp /tmp/ffmpeg-*-amd64-static/ffprobe /usr/local/bin/ffprobe && \
+    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+    rm -rf /tmp/ffmpeg*
 
 WORKDIR /var/task
 COPY research-worker/requirements.txt .
