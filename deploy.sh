@@ -6,7 +6,24 @@ set -euo pipefail
 # ============================================================
 # Run from: video-q-lab/
 # Prerequisites: gcloud, aws cli, docker, terraform all installed
+#
+# Secrets are NOT in this repo. Either:
+#   • Create .env.deploy (gitignored): cp deploy.env.example .env.deploy
+#   • Or: export MONGO_URI='...' before running
 # ============================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR}/.env.deploy" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/.env.deploy"
+  set +a
+fi
+if [[ -z "${MONGO_URI:-}" ]]; then
+  echo "ERROR: MONGO_URI is not set."
+  echo "  Copy deploy.env.example → .env.deploy and set MONGO_URI, or export MONGO_URI."
+  exit 1
+fi
 
 GCP_PROJECT="media-cdn-poc-466009"
 GCP_LOCATION="asia-south1"
@@ -18,8 +35,6 @@ GCP_SA_EMAIL="${GCP_SA_NAME}@${GCP_PROJECT}.iam.gserviceaccount.com"
 AWS_ACCOUNT="107647021172"
 AWS_REGION="us-east-1"
 ECR_BASE="${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-MONGO_URI='mongodb+srv://chai-shots-prod:wwCuI7ThUjIemQD1@prodcluster.mfhti8.mongodb.net/master?retryWrites=true&w=majority'
 
 echo "========================================"
 echo "STEP 1: One-time GCP Setup"
