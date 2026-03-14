@@ -1,6 +1,5 @@
-# Build dashboard image from repo root: docker build -f dashboard/Dockerfile .
+# Build images from repo root: docker build -f <service>/Dockerfile .
 aws-infra
-research-worker
 orchestrator
 .git
 **/__pycache__

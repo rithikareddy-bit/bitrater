@@ -69,6 +69,21 @@
         "golden_recipes.$": "$.Payload.golden_recipes",
         "output_uri.$": "$.Payload.output_uri"
       },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException"],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.checkError",
+          "Next": "JobFailed"
+        }
+      ],
       "Next": "IsComplete"
     },
     "IsComplete": {

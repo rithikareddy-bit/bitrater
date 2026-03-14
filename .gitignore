@@ -3,8 +3,10 @@
 
 # Terraform — state files contain secrets (MONGO_URI etc.) in plaintext
 aws-infra/terraform.tfstate
-aws-infra/terraform.tfstate.backup
+aws-infra/terraform.tfstate*.backup
+aws-infra/tfplan
 aws-infra/.terraform/
+aws-infra/import_existing.sh
 
 # Lambda layer build artifacts (rebuilt by `terraform apply`)
 aws-infra/.pymongo-layer/

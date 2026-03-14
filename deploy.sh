@@ -4,7 +4,7 @@ set -euo pipefail
 # ============================================================
 # Transcoding Optimization — Full Deployment Script
 # ============================================================
-# Run from: video-q-lab/
+# Run from: bitrater/ (project root)
 # Prerequisites: gcloud, aws cli, docker, terraform all installed
 #
 # Secrets are NOT in this repo. Either:
@@ -113,8 +113,7 @@ cd ..
 aws ecr get-login-password --region "${AWS_REGION}" | \
   docker login --username AWS --password-stdin "${ECR_BASE}"
 
-cd research-worker
-docker build --platform linux/amd64 -t chai-q-worker .
+docker build --platform linux/amd64 -f research-worker/Dockerfile -t chai-q-worker .
 docker tag chai-q-worker:latest "${ECR_BASE}/chai-q-worker:latest"
 docker push "${ECR_BASE}/chai-q-worker:latest"
 
@@ -123,12 +122,9 @@ echo "========================================"
 echo "STEP 4: Push Dashboard Image"
 echo "========================================"
 
-cd ../dashboard
-docker build --platform linux/amd64 -t chai-q-dashboard .
+docker build --platform linux/amd64 -f dashboard/Dockerfile -t chai-q-dashboard .
 docker tag chai-q-dashboard:latest "${ECR_BASE}/chai-q-dashboard:latest"
 docker push "${ECR_BASE}/chai-q-dashboard:latest"
-
-cd ..
 
 echo ""
 echo "========================================"

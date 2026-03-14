@@ -30,7 +30,20 @@ resource "aws_route_table_association" "chai_q_subnet_assoc" {
 resource "aws_subnet" "chai_q_subnet" {
   vpc_id                  = aws_vpc.chai_q_vpc.id
   cidr_block              = "10.0.1.0/24"
+  availability_zone       = "us-east-1e"
   map_public_ip_on_launch = true
+}
+
+resource "aws_subnet" "chai_q_subnet_a" {
+  vpc_id                  = aws_vpc.chai_q_vpc.id
+  cidr_block              = "10.0.2.0/24"
+  availability_zone       = "us-east-1a"
+  map_public_ip_on_launch = true
+}
+
+resource "aws_route_table_association" "chai_q_subnet_a_assoc" {
+  subnet_id      = aws_subnet.chai_q_subnet_a.id
+  route_table_id = aws_route_table.chai_q_public.id
 }
 
 resource "aws_security_group" "batch_sg" {
@@ -56,15 +69,15 @@ resource "aws_batch_compute_environment" "spot_env" {
   name = "chai-q-spot-env"
   
   compute_resources {
-    instance_role      = aws_iam_instance_profile.batch_instance_profile.arn
-    instance_type      = ["c5.xlarge", "c5.2xlarge", "c5.4xlarge"]
-    max_vcpus          = 84
-    min_vcpus          = 0
-    security_group_ids = [aws_security_group.batch_sg.id]
-    subnets            = [aws_subnet.chai_q_subnet.id]
-    type               = "SPOT"
+    instance_role       = aws_iam_instance_profile.batch_instance_profile.arn
+    instance_type       = ["c5.xlarge", "c5.2xlarge", "c5.4xlarge"]
+    max_vcpus           = 84
+    min_vcpus           = 0
+    security_group_ids  = [aws_security_group.batch_sg.id]
+    subnets             = [aws_subnet.chai_q_subnet_a.id]
+    type                = "SPOT"
     spot_iam_fleet_role = aws_iam_role.amazon_ec2_spot_fleet_role.arn
-
+    allocation_strategy = "BEST_FIT_PROGRESSIVE"
   }
   service_role = aws_iam_role.batch_service_role.arn
   type         = "MANAGED"

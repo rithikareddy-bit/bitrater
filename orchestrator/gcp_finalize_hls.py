@@ -19,6 +19,7 @@ from google.oauth2 import service_account
 
 MEDIA_API_BASE = "https://media-api.chaishots.in"
 CDN_BASE = "https://cdn.chaishots.in"
+CDN_BUCKET = "chai-shots-manifests"
 
 
 def _get_gcp_credentials():
@@ -31,8 +32,7 @@ def _get_gcp_credentials():
 
 def _get_episode_meta(db, episode_id):
     """Fetch episode metadata from showcache to derive slug and output key."""
-    master_client = pymongo.MongoClient(os.environ["MONGO_URI"])
-    master_db = master_client["master"]
+    master_db = db.client["master"]
     show = master_db["showcache"].find_one(
         {"episodes.id": episode_id},
         {"episodes.$": 1, "slug": 1},
@@ -108,6 +108,23 @@ def _sync_subtitles(subtitle_folder, hls_folder):
     return resp.json()
 
 
+def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id):
+    """Copy all transcoder output from the source bucket to the CDN bucket."""
+    client = gcs.Client(credentials=creds)
+    src_bucket = client.bucket(source_bucket_name)
+    dst_bucket = client.bucket(CDN_BUCKET)
+
+    prefix = f"{episode_id}/"
+    blobs = list(src_bucket.list_blobs(prefix=prefix))
+    print(f"[COPY] Found {len(blobs)} objects in gs://{source_bucket_name}/{prefix}")
+
+    for blob in blobs:
+        dst_name = blob.name
+        src_bucket.copy_blob(blob, dst_bucket, new_name=dst_name)
+
+    print(f"[COPY] Copied {len(blobs)} objects to gs://{CDN_BUCKET}/{prefix}")
+
+
 def handler(event, context):
     episode_id = event["episode_id"]
     golden_recipes = event["golden_recipes"]
@@ -119,9 +136,11 @@ def handler(event, context):
 
     episode_slug, episode_output_key = _get_episode_meta(db, episode_id)
 
-    # GCP Transcoder writes to gs://{bucket}/{episode_id}/ — derive the
-    # GCS prefix so CDN URLs match the actual transcoder output location.
     gcs_prefix = output_uri.replace(f"gs://{gcs_output_bucket}/", "").rstrip("/")
+
+    # Copy transcoder output to CDN-serving bucket so videos are accessible
+    creds = _get_gcp_credentials()
+    _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id)
 
     hls_folder_h264 = f"{gcs_prefix}/h264"
     hls_folder_h265 = f"{gcs_prefix}/h265"

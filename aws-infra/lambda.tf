@@ -34,16 +34,17 @@ resource "aws_iam_role_policy" "lambda_sfn_start" {
 # Built inside Docker to produce Linux x86_64 binaries compatible with Lambda.
 resource "null_resource" "pymongo_layer_build" {
   triggers = {
-    version = "pymongo-srv-4.6.1-linux"
+    version = "pymongo-srv-4.6.1-linux-v2"
   }
   provisioner "local-exec" {
     command = <<-EOT
       rm -rf "${path.module}/.pymongo-layer"
       mkdir -p "${path.module}/.pymongo-layer/python"
       docker run --rm --platform linux/amd64 \
+        --entrypoint pip \
         -v "${path.module}/.pymongo-layer/python:/out" \
         public.ecr.aws/lambda/python:3.11 \
-        pip install "pymongo[srv]==4.6.1" -t /out --quiet
+        install "pymongo[srv]==4.6.1" -t /out --quiet
     EOT
   }
 }
@@ -163,16 +164,17 @@ resource "aws_lambda_function" "mark_lab_failed" {
 # Built inside Docker to produce Linux x86_64 binaries compatible with Lambda.
 resource "null_resource" "gcp_layer_build" {
   triggers = {
-    version = "gcp-transcoder-0.3-linux"
+    version = "gcp-transcoder-0.3-linux-v2"
   }
   provisioner "local-exec" {
     command = <<-EOT
       rm -rf "${path.module}/.gcp-layer"
       mkdir -p "${path.module}/.gcp-layer/python"
       docker run --rm --platform linux/amd64 \
+        --entrypoint pip \
         -v "${path.module}/.gcp-layer/python:/out" \
         public.ecr.aws/lambda/python:3.11 \
-        pip install \
+        install \
           "google-cloud-video-transcoder>=1.0.0" \
           "google-cloud-storage>=2.0.0" \
           "pymongo[srv]==4.6.1" \

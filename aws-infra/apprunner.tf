@@ -19,8 +19,8 @@ resource "null_resource" "dashboard_docker_push" {
       aws ecr get-login-password --region us-east-1 | \
         docker login --username AWS --password-stdin ${aws_ecr_repository.dashboard.repository_url}
 
-      cd ../dashboard
-      docker build --platform linux/amd64 -t chai-q-dashboard .
+      cd ..
+      docker build --platform linux/amd64 -f dashboard/Dockerfile -t chai-q-dashboard .
 
       docker tag chai-q-dashboard:latest ${aws_ecr_repository.dashboard.repository_url}:latest
       docker push ${aws_ecr_repository.dashboard.repository_url}:latest
