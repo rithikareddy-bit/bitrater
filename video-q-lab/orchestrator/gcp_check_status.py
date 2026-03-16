@@ -11,20 +11,13 @@ from datetime import datetime, timezone
 from google.cloud.video import transcoder_v1
 from google.oauth2 import service_account
 
-_GCP_CREDENTIALS_CACHE = None
-
 
 def _get_gcp_credentials():
-    """Load GCP credentials from AWS Secrets Manager (cached per container instance)."""
-    global _GCP_CREDENTIALS_CACHE
-    if _GCP_CREDENTIALS_CACHE is not None:
-        return _GCP_CREDENTIALS_CACHE
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
     sm = boto3.client("secretsmanager")
     secret = sm.get_secret_value(SecretId=secret_arn)
     info = json.loads(secret["SecretString"])
-    _GCP_CREDENTIALS_CACHE = service_account.Credentials.from_service_account_info(info)
-    return _GCP_CREDENTIALS_CACHE
+    return service_account.Credentials.from_service_account_info(info)
 
 
 def handler(event, context):

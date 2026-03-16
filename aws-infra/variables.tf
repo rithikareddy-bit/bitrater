@@ -30,3 +30,9 @@ variable "gcp_credentials_secret_arn" {
   type        = string
   sensitive   = true
 }
+
+variable "subtitle_mongo_uri" {
+  description = "MongoDB URI for subtitle VTT lookup (gld2sqs database)"
+  type        = string
+  sensitive   = true
+}

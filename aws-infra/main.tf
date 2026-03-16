@@ -101,6 +101,8 @@ resource "aws_batch_job_queue" "chai_q_queue" {
 }
 
 # --- Step Function ---
+# Research orchestrator: 21 ladder jobs run in parallel (Map state MaxConcurrency: 0).
+# Total run time ~1–2 h = slowest job; if sequential it would be ~21× that. See orchestrator/README.md.
 resource "aws_sfn_state_machine" "research_orchestrator" {
   name     = "Chai-Q-Orchestrator"
   role_arn = aws_iam_role.step_function_role.arn

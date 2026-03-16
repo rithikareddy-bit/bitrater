@@ -3,11 +3,10 @@ import os
 import json
 from datetime import datetime, timezone
 
-# Thresholds can be overridden per-environment via env vars.
 VMAF_THRESHOLDS = {
-    "1080p": int(os.environ.get("VMAF_THRESHOLD_1080P", 88)),
-    "720p":  int(os.environ.get("VMAF_THRESHOLD_720P",  75)),
-    "480p":  int(os.environ.get("VMAF_THRESHOLD_480P",  48)),
+    "1080p": 88,
+    "720p":  75,
+    "480p":  48,
 }
 
 RESOLUTIONS = ["1080p", "720p", "480p"]

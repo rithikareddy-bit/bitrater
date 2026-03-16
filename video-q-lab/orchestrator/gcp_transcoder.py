@@ -15,7 +15,6 @@ from google.cloud.video.transcoder_v1 import types
 from google.oauth2 import service_account
 from google.protobuf import duration_pb2
 
-_GCP_CREDENTIALS_CACHE = None
 
 PORTRAIT_DIMS = {
     "1080p": (1080, 1920),
@@ -27,16 +26,11 @@ RESOLUTIONS = ["1080p", "720p", "480p"]
 
 
 def _get_gcp_credentials():
-    """Load GCP credentials from AWS Secrets Manager (cached per container instance)."""
-    global _GCP_CREDENTIALS_CACHE
-    if _GCP_CREDENTIALS_CACHE is not None:
-        return _GCP_CREDENTIALS_CACHE
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
     sm = boto3.client("secretsmanager")
     secret = sm.get_secret_value(SecretId=secret_arn)
     info = json.loads(secret["SecretString"])
-    _GCP_CREDENTIALS_CACHE = service_account.Credentials.from_service_account_info(info)
-    return _GCP_CREDENTIALS_CACHE
+    return service_account.Credentials.from_service_account_info(info)
 
 
 def _build_h264_video_stream(res_tag, bitrate_kbps, width, height):

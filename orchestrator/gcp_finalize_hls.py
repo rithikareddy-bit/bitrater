@@ -2,9 +2,11 @@
 State 6 of GCP-Orchestrator: FinalizeHLS
 
 After the GCP Transcoder job succeeds:
-1. Upload subtitles once via media-api (replicates sync_subs_step_4 logic)
-2. Run subtitle sync twice — once for H.264 HLS folder, once for H.265 HLS folder
-3. On both sync successes, write final CDN URLs to MongoDB
+1. Copy transcoder output from GCS output bucket to CDN bucket
+2. Fetch subtitle VTT URLs from subtitle MongoDB, download, upload to GCS
+3. Generate per-language subtitle .m3u8 playlists
+4. Patch master m3u8 manifests (h264 + h265) with subtitle track entries
+5. Write final CDN URLs to MongoDB
 """
 
 import os
@@ -17,9 +19,24 @@ from google.cloud import storage as gcs
 from google.oauth2 import service_account
 
 
-MEDIA_API_BASE = "https://media-api.chaishots.in"
 CDN_BASE = "https://cdn.chaishots.in"
 CDN_BUCKET = "chai-shots-manifests"
+
+SUBTITLE_LANGS = {
+    "english_translation_final": ("en", "English"),
+    "native_script_final":       ("te", "Telugu"),
+    "reviewed_romanized":        ("tlg", "Tinglish"),
+}
+
+SUBTITLE_PLAYLIST_TEMPLATE = """\
+#EXTM3U
+#EXT-X-TARGETDURATION:86400
+#EXT-X-VERSION:3
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXTINF:86400.0,
+{vtt_filename}
+#EXT-X-ENDLIST
+"""
 
 
 def _get_gcp_credentials():
@@ -46,67 +63,123 @@ def _get_episode_meta(db, episode_id):
     return episode_slug, episode_output_key
 
 
-def _upload_subtitles(episode_slug):
-    """
-    Upload subtitles for the episode via media-api /upload-subtitles/.
-    Returns subtitle_folder on success.
-    """
-    url = f"{MEDIA_API_BASE}/upload-subtitles/"
+# ---------------------------------------------------------------------------
+# Subtitle pipeline: MongoDB -> HTTP download -> GCS upload -> manifest patch
+# ---------------------------------------------------------------------------
 
-    vtt_dir = f"/tmp/subtitles/{episode_slug}"
-    if not os.path.isdir(vtt_dir):
-        print(f"[WARN] No subtitle VTT dir at {vtt_dir}, skipping subtitle upload")
-        return None
+def _get_subtitle_vtt_urls(episode_id):
+    """Query the subtitle MongoDB for VTT S3 URLs keyed by language."""
+    subtitle_uri = os.environ.get("SUBTITLE_MONGO_URI")
+    if not subtitle_uri:
+        print("[SUBS] SUBTITLE_MONGO_URI not configured, skipping subtitles")
+        return {}
 
-    vtt_files = sorted(
-        [f for f in os.listdir(vtt_dir) if f.endswith(".vtt")],
-    )
-    if not vtt_files:
-        print(f"[WARN] No VTT files in {vtt_dir}")
-        return None
-
-    languages = []
-    files_payload = []
-    for vtt_name in vtt_files:
-        lang = vtt_name.rsplit("_", 1)[-1].replace(".vtt", "")
-        if lang in ("en", "te", "tlg"):
-            languages.append(lang)
-            fpath = os.path.join(vtt_dir, vtt_name)
-            files_payload.append(("subtitles", (vtt_name, open(fpath, "rb"), "text/vtt")))
-
-    if not languages:
-        print("[WARN] No valid language codes found in VTT filenames")
-        return None
-
-    data = {
-        "bucket": "chai-shots-manifests",
-        "languages": languages,
-    }
-
+    client = pymongo.MongoClient(subtitle_uri)
     try:
-        resp = requests.post(url, data=data, files=files_payload, timeout=120)
-        payload = resp.json() if resp.ok else {}
-        subtitle_folder = payload.get("subtitle_folder") or payload.get("data", {}).get("subtitle_folder")
-        if resp.ok and subtitle_folder:
-            print(f"[OK] Subtitles uploaded, folder: {subtitle_folder}")
-            return subtitle_folder
-        print(f"[ERROR] Subtitle upload failed: {resp.status_code} {resp.text[:300]}")
-        return None
+        db = client["gld2sqs"]
+        doc = db["subtitles"].find_one(
+            {"episodes.episode_id": episode_id},
+            {"episodes.$": 1},
+        )
+        if not doc or not doc.get("episodes"):
+            print(f"[SUBS] No subtitle record for episode {episode_id}")
+            return {}
+
+        vtt_files = doc["episodes"][0].get("vtt_files", {})
+        result = {}
+        for lang_key, (lang_code, _) in SUBTITLE_LANGS.items():
+            url = vtt_files.get(lang_key)
+            if url:
+                result[lang_key] = url
+            else:
+                print(f"[SUBS] Missing {lang_key} VTT for episode {episode_id}")
+        print(f"[SUBS] Found {len(result)} subtitle URLs for {episode_id}")
+        return result
     finally:
-        for _, (_, fh, _) in files_payload:
-            fh.close()
+        client.close()
 
 
-def _sync_subtitles(subtitle_folder, hls_folder):
-    """Call sync-subtitles API for a single HLS folder."""
-    url = f"{MEDIA_API_BASE}/sync-subtitles"
-    form = {"subtitle_folder": subtitle_folder, "hls_folder": hls_folder}
-    print(f"[SYNC] {form}")
-    resp = requests.post(url, data=form, timeout=300)
-    print(f"[SYNC] Response: {resp.status_code} {resp.text[:500]}")
+def _download_vtt(url):
+    """Download VTT content from a public S3 URL."""
+    resp = requests.get(url, timeout=30)
     resp.raise_for_status()
-    return resp.json()
+    return resp.text
 
+
+def _upload_subtitles_to_gcs(creds, episode_id, vtt_urls):
+    """Download VTTs, upload to GCS, and create subtitle .m3u8 playlists.
+    Returns list of (lang_code, display_name, playlist_filename) for uploaded languages."""
+    client = gcs.Client(credentials=creds)
+    bucket = client.bucket(CDN_BUCKET)
+    uploaded = []
+
+    for lang_key, url in vtt_urls.items():
+        lang_code, display_name = SUBTITLE_LANGS[lang_key]
+        vtt_filename = f"subtitle_{lang_code}.vtt"
+        playlist_filename = f"subtitle_{lang_code}.m3u8"
+
+        try:
+            vtt_content = _download_vtt(url)
+            print(f"[SUBS] Downloaded {lang_key}: {len(vtt_content)} bytes")
+
+            vtt_blob = bucket.blob(f"{episode_id}/{vtt_filename}")
+            vtt_blob.upload_from_string(vtt_content, content_type="text/vtt")
+
+            playlist_content = SUBTITLE_PLAYLIST_TEMPLATE.format(vtt_filename=vtt_filename)
+            playlist_blob = bucket.blob(f"{episode_id}/{playlist_filename}")
+            playlist_blob.upload_from_string(playlist_content, content_type="application/x-mpegURL")
+
+            uploaded.append((lang_code, display_name, playlist_filename))
+            print(f"[SUBS] Uploaded {vtt_filename} + {playlist_filename}")
+        except Exception as e:
+            print(f"[SUBS] Failed to process {lang_key}: {e}")
+
+    return uploaded
+
+
+def _patch_master_manifest(creds, episode_id, manifest_name, subtitle_tracks):
+    """Download master .m3u8, inject subtitle entries, re-upload."""
+    if not subtitle_tracks:
+        return
+
+    client = gcs.Client(credentials=creds)
+    bucket = client.bucket(CDN_BUCKET)
+    blob = bucket.blob(f"{episode_id}/{manifest_name}")
+
+    original = blob.download_as_text()
+    lines = original.strip().split("\n")
+
+    subtitle_lines = []
+    for lang_code, display_name, playlist_filename in subtitle_tracks:
+        default = "YES" if lang_code == "en" else "NO"
+        subtitle_lines.append(
+            f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subtitles",'
+            f'NAME="{display_name}",LANGUAGE="{lang_code}",'
+            f'DEFAULT={default},AUTOSELECT=YES,'
+            f'URI="{playlist_filename}"'
+        )
+
+    patched = []
+    header_done = False
+    for line in lines:
+        if line.startswith("#EXT-X-STREAM-INF"):
+            if not header_done:
+                patched.extend(subtitle_lines)
+                header_done = True
+            if 'SUBTITLES=' not in line:
+                line = line.rstrip() + ',SUBTITLES="subtitles"'
+            patched.append(line)
+        else:
+            patched.append(line)
+
+    patched_text = "\n".join(patched) + "\n"
+    blob.upload_from_string(patched_text, content_type="application/x-mpegURL")
+    print(f"[PATCH] Patched {manifest_name} with {len(subtitle_tracks)} subtitle tracks")
+
+
+# ---------------------------------------------------------------------------
+# Copy transcoder output to CDN bucket
+# ---------------------------------------------------------------------------
 
 def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id):
     """Copy all transcoder output from the source bucket to the CDN bucket."""
@@ -119,48 +192,44 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id):
     print(f"[COPY] Found {len(blobs)} objects in gs://{source_bucket_name}/{prefix}")
 
     for blob in blobs:
-        dst_name = blob.name
-        src_bucket.copy_blob(blob, dst_bucket, new_name=dst_name)
+        src_bucket.copy_blob(blob, dst_bucket, new_name=blob.name)
 
     print(f"[COPY] Copied {len(blobs)} objects to gs://{CDN_BUCKET}/{prefix}")
 
 
+# ---------------------------------------------------------------------------
+# Handler
+# ---------------------------------------------------------------------------
+
 def handler(event, context):
     episode_id = event["episode_id"]
-    golden_recipes = event["golden_recipes"]
     output_uri = event["output_uri"]
     mongo_uri = os.environ["MONGO_URI"]
     gcs_output_bucket = os.environ["GCS_OUTPUT_BUCKET"]
 
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
-
-    episode_slug, episode_output_key = _get_episode_meta(db, episode_id)
-
     gcs_prefix = output_uri.replace(f"gs://{gcs_output_bucket}/", "").rstrip("/")
 
-    # Copy transcoder output to CDN-serving bucket so videos are accessible
     creds = _get_gcp_credentials()
     _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id)
 
-    hls_folder_h264 = f"{gcs_prefix}/h264"
-    hls_folder_h265 = f"{gcs_prefix}/h265"
-
-    subtitle_folder = _upload_subtitles(episode_slug)
-
-    if subtitle_folder:
+    # --- Subtitle pipeline ---
+    vtt_urls = _get_subtitle_vtt_urls(episode_id)
+    subtitle_tracks = []
+    if vtt_urls:
         try:
-            _sync_subtitles(subtitle_folder, hls_folder_h264)
-            _sync_subtitles(subtitle_folder, hls_folder_h265)
+            subtitle_tracks = _upload_subtitles_to_gcs(creds, episode_id, vtt_urls)
+            _patch_master_manifest(creds, episode_id, "h264_master.m3u8", subtitle_tracks)
+            _patch_master_manifest(creds, episode_id, "h265_master.m3u8", subtitle_tracks)
         except Exception as e:
+            print(f"[SUBS] Subtitle injection failed (non-fatal): {e}")
             db.video_episodes.update_one(
                 {"episode_id": episode_id},
                 {"$set": {
-                    "gcp_job_status": "SUBTITLE_SYNC_FAILED",
-                    "gcp_error": str(e),
+                    "gcp_subtitle_error": str(e),
                     "gcp_finished_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
-            raise
 
     h264_url = f"{CDN_BASE}/{gcs_prefix}/h264_master.m3u8"
     h265_url = f"{CDN_BASE}/{gcs_prefix}/h265_master.m3u8"
@@ -172,12 +241,14 @@ def handler(event, context):
             "gcp_finished_at": datetime.now(timezone.utc).isoformat(),
             "h264_master_m3u8_url": h264_url,
             "h265_master_m3u8_url": h265_url,
+            "subtitles_injected": len(subtitle_tracks),
         }},
     )
 
     print(f"[OK] Finalized HLS for {episode_id}")
     print(f"  H.264: {h264_url}")
     print(f"  H.265: {h265_url}")
+    print(f"  Subtitles: {len(subtitle_tracks)} tracks")
 
     return {
         "episode_id": episode_id,

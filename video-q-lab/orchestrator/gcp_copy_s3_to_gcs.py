@@ -10,22 +10,15 @@ import json
 import boto3
 from google.cloud import storage as gcs
 from google.oauth2 import service_account
-from s3_utils import parse_s3_url, s3_client_for
-
-_GCP_CREDENTIALS_CACHE = None
 
 
 def _get_gcp_credentials():
-    """Load GCP credentials from AWS Secrets Manager (cached per container instance)."""
-    global _GCP_CREDENTIALS_CACHE
-    if _GCP_CREDENTIALS_CACHE is not None:
-        return _GCP_CREDENTIALS_CACHE
+    """Load GCP credentials from AWS Secrets Manager."""
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
     sm = boto3.client("secretsmanager")
     secret = sm.get_secret_value(SecretId=secret_arn)
     info = json.loads(secret["SecretString"])
-    _GCP_CREDENTIALS_CACHE = service_account.Credentials.from_service_account_info(info)
-    return _GCP_CREDENTIALS_CACHE
+    return service_account.Credentials.from_service_account_info(info)
 
 
 def handler(event, context):
@@ -33,8 +26,24 @@ def handler(event, context):
     s3_url = event["s3_url"]
     gcs_input_bucket = os.environ["GCS_INPUT_BUCKET"]
 
-    s3_bucket, s3_key, region = parse_s3_url(s3_url)
-    s3 = s3_client_for(region)
+    from urllib.parse import urlparse
+    parsed = urlparse(s3_url)
+    host = parsed.netloc
+    path = parsed.path.lstrip("/")
+    if host.startswith("s3") and host.endswith(".amazonaws.com"):
+        parts = path.split("/", 1)
+        s3_bucket = parts[0]
+        s3_key = parts[1] if len(parts) > 1 else ""
+        region = host.split(".")[1] if host.count(".") >= 3 else None
+    else:
+        s3_bucket = host.split(".s3")[0]
+        s3_key = path
+        region = host.split(".s3.")[1].split(".")[0] if ".s3." in host else None
+
+    if region:
+        s3 = boto3.client("s3", region_name=region)
+    else:
+        s3 = boto3.client("s3")
     obj = s3.get_object(Bucket=s3_bucket, Key=s3_key)
 
     creds = _get_gcp_credentials()

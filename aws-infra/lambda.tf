@@ -231,6 +231,7 @@ locals {
     GCS_INPUT_BUCKET           = var.gcs_input_bucket
     GCS_OUTPUT_BUCKET          = var.gcs_output_bucket
     GCP_CREDENTIALS_SECRET_ARN = var.gcp_credentials_secret_arn
+    SUBTITLE_MONGO_URI         = var.subtitle_mongo_uri
   }
 }
 
