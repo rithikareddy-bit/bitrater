@@ -45,7 +45,13 @@ def _build_h264_video_stream(res_tag, bitrate_kbps, width, height):
                 frame_rate=30,
                 profile="high",
                 preset="slower",
+                tune="film",
                 gop_duration=duration_pb2.Duration(seconds=2),
+                enable_two_pass=True,
+                vbv_size_bits=bitrate_kbps * 1000 * 4,
+                vbv_fullness_bits=bitrate_kbps * 1000 * 4 * 9 // 10,
+                aq_strength=1.0,
+                b_frame_count=3,
             ),
         ),
     )
@@ -64,6 +70,11 @@ def _build_h265_video_stream(res_tag, bitrate_kbps, width, height):
                 profile="main",
                 preset="slower",
                 gop_duration=duration_pb2.Duration(seconds=2),
+                enable_two_pass=True,
+                vbv_size_bits=bitrate_kbps * 1000 * 4,
+                vbv_fullness_bits=bitrate_kbps * 1000 * 4 * 9 // 10,
+                aq_strength=1.0,
+                b_frame_count=4,
             ),
         ),
     )
@@ -93,7 +104,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri):
                 container="ts",
                 elementary_streams=[f"{res_tag}_h264", "audio_aac"],
                 segment_settings=types.SegmentSettings(
-                    segment_duration=duration_pb2.Duration(seconds=6),
+                    segment_duration=duration_pb2.Duration(seconds=2),
                 ),
             ))
             h264_mux_keys.append(mux_key)
@@ -103,16 +114,17 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri):
             elementary_streams.append(
                 _build_h265_video_stream(res_tag, h265_recipe["bitrate_kbps"], width, height)
             )
-            mux_key = f"mux_{res_tag}_h265"
+            # fmp4 requires exactly one stream per mux — video and audio are separate
+            video_mux_key = f"mux_{res_tag}_h265_video"
             mux_streams.append(types.MuxStream(
-                key=mux_key,
-                container="ts",
-                elementary_streams=[f"{res_tag}_h265", "audio_aac"],
+                key=video_mux_key,
+                container="fmp4",
+                elementary_streams=[f"{res_tag}_h265"],
                 segment_settings=types.SegmentSettings(
-                    segment_duration=duration_pb2.Duration(seconds=6),
+                    segment_duration=duration_pb2.Duration(seconds=2),
                 ),
             ))
-            h265_mux_keys.append(mux_key)
+            h265_mux_keys.append(video_mux_key)
 
     audio_stream = types.ElementaryStream(
         key="audio_aac",
@@ -125,6 +137,17 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri):
     )
     elementary_streams.append(audio_stream)
 
+    # Shared audio-only fmp4 mux for H.265 (one audio track serves all resolutions)
+    h265_audio_mux_key = "mux_h265_audio"
+    mux_streams.append(types.MuxStream(
+        key=h265_audio_mux_key,
+        container="fmp4",
+        elementary_streams=["audio_aac"],
+        segment_settings=types.SegmentSettings(
+            segment_duration=duration_pb2.Duration(seconds=2),
+        ),
+    ))
+
     manifests = [
         types.Manifest(
             file_name="h264_master.m3u8",
@@ -134,7 +157,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri):
         types.Manifest(
             file_name="h265_master.m3u8",
             type_=types.Manifest.ManifestType.HLS,
-            mux_streams=h265_mux_keys,
+            mux_streams=h265_mux_keys + [h265_audio_mux_key],
         ),
     ]
 

@@ -48,9 +48,11 @@ def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h):
         passlogfile = "/tmp/x264_pass"
         base = [
             "ffmpeg", "-y", "-i", "source.mp4",
-            "-c:v", codec, "-preset", preset, "-b:v", f"{bitrate}k",
+            "-c:v", codec, "-preset", preset, "-tune", "film",
+            "-b:v", f"{bitrate}k",
             "-maxrate", maxrate, "-bufsize", bufsize,
             "-pix_fmt", pix_fmt,
+            "-r", "30", "-g", "60", "-keyint_min", "60",
         ]
         if params:
             base += ["-x264-params", params]
@@ -63,9 +65,9 @@ def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h):
             "ffmpeg", "-y", "-i", "source.mp4",
             "-c:v", codec, "-preset", preset, "-b:v", f"{bitrate}k",
             "-maxrate", maxrate, "-bufsize", bufsize,
-            "-pix_fmt", pix_fmt, "-vf", vf,
+            "-pix_fmt", pix_fmt, "-r", "30", "-vf", vf,
         ]
-        pass_base = f"stats={stats_file}"
+        pass_base = f"stats={stats_file}:keyint=60:min-keyint=60"
         if params:
             pass_base += f":{params}"
         subprocess.run(
@@ -102,7 +104,7 @@ def run_research():
 
     config   = load_heavy_params(codec)
     preset   = config.get("preset", "slower")
-    pix_fmt  = config.get("pix_fmt", "yuv420p10le" if codec == "libx265" else "yuv420p")
+    pix_fmt  = config.get("pix_fmt", "yuv420p")
     params   = config.get("params", "")
 
     _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h)
@@ -112,7 +114,7 @@ def run_research():
     source_fps = max(1, round(info["fps"]))
 
     vmaf_filter = (
-        f"[0:v]setpts=PTS-STARTPTS[ref];"
+        f"[0:v]fps=30,setpts=PTS-STARTPTS[ref];"
         f"[1:v]scale={w}:{h}:flags=lanczos,setpts=PTS-STARTPTS[dist];"
         f"[ref][dist]libvmaf=model=version=vmaf_v0.6.1neg"
         f":log_path=vmaf_results.json:log_fmt=json:n_threads=4"
@@ -131,8 +133,8 @@ def run_research():
 
     frames = data.get("frames", [])
     vmaf_timeline = []
-    for i in range(0, len(frames), source_fps):
-        chunk = frames[i:i + source_fps]
+    for i in range(0, len(frames), 30):
+        chunk = frames[i:i + 30]
         vmaf_timeline.append(round(sum(f["metrics"]["vmaf"] for f in chunk) / len(chunk), 2))
 
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
