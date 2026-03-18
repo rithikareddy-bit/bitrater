@@ -6,6 +6,7 @@ import { TOTAL_JOBS } from '@/lib/constants';
 export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }) {
   const [status, setStatus] = useState(null);
   const [pushing, setPushing] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [pushError, setPushError] = useState(null);
   const [executionArn, setExecutionArn] = useState(null);
   const pollingRef = useRef(null);
@@ -87,6 +88,28 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
   const handleRerun = () => {
     if (!window.confirm('This will delete all existing research data and re-run the full lab. Continue?')) return;
     handlePush();
+  };
+
+  const handleStop = async () => {
+    if (!window.confirm('This will stop the running lab. Continue?')) return;
+    setStopping(true);
+    try {
+      const res = await fetch('/api/stop-lab', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodeId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Stop failed');
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+      if (onRunComplete) onRunComplete();
+      fetchStatus();
+    } catch (err) {
+      setPushError(err.message);
+    } finally {
+      setStopping(false);
+    }
   };
 
   const succeeded = status?.succeeded ?? 0;
@@ -249,36 +272,61 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
           ↻ Rerun Lab
         </button>
       ) : (
-        <button
-          onClick={handlePush}
-          disabled={pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            background: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#1e1e1e' : '#4da6ff',
-            color: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#555' : '#000',
-            border: 'none',
-            borderRadius: 8,
-            padding: '10px 20px',
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? 'not-allowed' : 'pointer',
-            transition: 'background 0.2s',
-            width: '100%',
-            justifyContent: 'center',
-          }}
-        >
-          {pushing ? (
-            <><Spinner /> Starting…</>
-          ) : showLabSpinner ? (
-            <><Spinner /> Lab Running…</>
-          ) : batchAllSucceeded && !hasGolden ? (
-            <><Spinner /> Finalizing…</>
-          ) : (
-            '▶ Run Lab'
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={handlePush}
+            disabled={pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              background: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#1e1e1e' : '#4da6ff',
+              color: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#555' : '#000',
+              border: 'none',
+              borderRadius: 8,
+              padding: '10px 20px',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? 'not-allowed' : 'pointer',
+              transition: 'background 0.2s',
+              flex: 1,
+              justifyContent: 'center',
+            }}
+          >
+            {pushing ? (
+              <><Spinner /> Starting…</>
+            ) : showLabSpinner ? (
+              <><Spinner /> Lab Running…</>
+            ) : batchAllSucceeded && !hasGolden ? (
+              <><Spinner /> Finalizing…</>
+            ) : (
+              '▶ Run Lab'
+            )}
+          </button>
+          {(isRunning || (!isDone && serverRunning)) && (
+            <button
+              onClick={handleStop}
+              disabled={stopping}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                background: stopping ? '#1e1e1e' : '#7f1d1d',
+                color: stopping ? '#555' : '#fca5a5',
+                border: '1px solid #991b1b',
+                borderRadius: 8,
+                padding: '10px 16px',
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: stopping ? 'not-allowed' : 'pointer',
+                transition: 'background 0.2s',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {stopping ? 'Stopping…' : '■ Stop'}
+            </button>
           )}
-        </button>
+        </div>
       )}
 
       {pushError && (

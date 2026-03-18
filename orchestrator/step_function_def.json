@@ -9,8 +9,8 @@
         {"codec": "libx265", "bitrate": "2200", "resolution": "1080"},
         {"codec": "libx265", "bitrate": "3000", "resolution": "1080"},
         {"codec": "libx264", "bitrate": "2000", "resolution": "1080"},
+        {"codec": "libx264", "bitrate": "2700", "resolution": "1080"},
         {"codec": "libx264", "bitrate": "3500", "resolution": "1080"},
-        {"codec": "libx264", "bitrate": "5000", "resolution": "1080"},
 
         {"codec": "libx265", "bitrate": "500",  "resolution": "720"},
         {"codec": "libx265", "bitrate": "700",  "resolution": "720"},

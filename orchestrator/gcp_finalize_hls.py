@@ -178,8 +178,21 @@ def _patch_master_manifest(creds, episode_id, manifest_name, subtitle_tracks):
 
 
 # ---------------------------------------------------------------------------
-# Copy transcoder output to CDN bucket
+# Clear stale CDN bucket objects + copy transcoder output
 # ---------------------------------------------------------------------------
+
+def _clear_cdn_bucket(creds, episode_id):
+    """Delete all existing objects for this episode in the CDN bucket before re-copy."""
+    client = gcs.Client(credentials=creds)
+    bucket = client.bucket(CDN_BUCKET)
+    prefix = f"{episode_id}/"
+    blobs = list(bucket.list_blobs(prefix=prefix))
+    if blobs:
+        bucket.delete_blobs(blobs)
+        print(f"[CLEAR] Deleted {len(blobs)} old objects from gs://{CDN_BUCKET}/{prefix}")
+    else:
+        print(f"[CLEAR] No existing objects in gs://{CDN_BUCKET}/{prefix}")
+
 
 def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id):
     """Copy all transcoder output from the source bucket to the CDN bucket."""
@@ -197,6 +210,21 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id):
     print(f"[COPY] Copied {len(blobs)} objects to gs://{CDN_BUCKET}/{prefix}")
 
 
+def _fix_audio_name(creds, episode_id, slug):
+    """Replace placeholder audio NAME in master manifests with the episode slug."""
+    client = gcs.Client(credentials=creds)
+    bucket = client.bucket(CDN_BUCKET)
+    for manifest_name in ("h264_master.m3u8", "h265_master.m3u8"):
+        blob = bucket.blob(f"{episode_id}/{manifest_name}")
+        if not blob.exists():
+            continue
+        text = blob.download_as_text()
+        patched = text.replace('NAME="Test Language"', f'NAME="{slug}"')
+        if patched != text:
+            blob.upload_from_string(patched, content_type="application/x-mpegURL")
+            print(f"[PATCH] Fixed audio NAME to '{slug}' in {manifest_name}")
+
+
 # ---------------------------------------------------------------------------
 # Handler
 # ---------------------------------------------------------------------------
@@ -210,8 +238,12 @@ def handler(event, context):
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
     gcs_prefix = output_uri.replace(f"gs://{gcs_output_bucket}/", "").rstrip("/")
 
+    episode_slug, _ = _get_episode_meta(db, episode_id)
+
     creds = _get_gcp_credentials()
+    _clear_cdn_bucket(creds, episode_id)
     _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id)
+    _fix_audio_name(creds, episode_id, episode_slug)
 
     # --- Subtitle pipeline ---
     vtt_urls = _get_subtitle_vtt_urls(episode_id)

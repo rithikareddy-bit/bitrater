@@ -48,6 +48,15 @@ def handler(event, context):
 
     creds = _get_gcp_credentials()
     gcs_client = gcs.Client(credentials=creds, project=os.environ["GCP_PROJECT"])
+
+    gcs_output_bucket = os.environ.get("GCS_OUTPUT_BUCKET")
+    if gcs_output_bucket:
+        out_bucket = gcs_client.bucket(gcs_output_bucket)
+        old_blobs = list(out_bucket.list_blobs(prefix=f"{episode_id}/"))
+        if old_blobs:
+            out_bucket.delete_blobs(old_blobs)
+            print(f"[CLEAR] Deleted {len(old_blobs)} stale objects from gs://{gcs_output_bucket}/{episode_id}/")
+
     bucket = gcs_client.bucket(gcs_input_bucket)
     blob = bucket.blob(f"{episode_id}/source.mp4")
 

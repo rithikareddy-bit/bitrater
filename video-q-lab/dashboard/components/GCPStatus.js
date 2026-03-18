@@ -102,10 +102,14 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       )}
 
       {/* HLS URLs */}
-      {isSucceeded && status?.h264_master_m3u8_url && (
+      {isSucceeded && (status?.h264_master_m3u8_url || status?.h265_master_m3u8_url) && (
         <div style={{ fontSize: 12, color: '#888', marginBottom: 12, wordBreak: 'break-all' }}>
-          <div><strong style={{ color: '#aaa' }}>H.264:</strong> {status.h264_master_m3u8_url}</div>
-          <div><strong style={{ color: '#aaa' }}>H.265:</strong> {status.h265_master_m3u8_url}</div>
+          {status.h264_master_m3u8_url && (
+            <div><strong style={{ color: '#aaa' }}>H.264:</strong> {status.h264_master_m3u8_url}</div>
+          )}
+          {status.h265_master_m3u8_url && (
+            <div><strong style={{ color: '#aaa' }}>H.265:</strong> {status.h265_master_m3u8_url}</div>
+          )}
         </div>
       )}
 

@@ -70,12 +70,17 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "StartStepFunction"
+        Sid      = "ManageStepFunction"
         Effect   = "Allow"
-        Action   = "states:StartExecution"
+        Action   = [
+          "states:StartExecution",
+          "states:StopExecution",
+        ]
         Resource = [
           aws_sfn_state_machine.research_orchestrator.arn,
           aws_sfn_state_machine.gcp_orchestrator.arn,
+          "arn:aws:states:us-east-1:107647021172:execution:Chai-Q-Orchestrator:*",
+          "arn:aws:states:us-east-1:107647021172:execution:GCP-Orchestrator:*",
         ]
       },
       {
