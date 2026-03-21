@@ -50,10 +50,10 @@ export default function BIHeader({
     const h265Rows = resRows.filter((r) => r.codec === 'libx265');
     const h264W = pickWinner(h264Rows, vmafThreshold);
     const h265W = pickWinner(h265Rows, vmafThreshold);
-    if (h264W && h265W) {
+    if (h264W || h265W) {
       primary = {
-        h264: h264W,
-        h265: h265W,
+        h264: h264W ?? primary?.h264,
+        h265: h265W ?? primary?.h265,
       };
     }
   }
@@ -85,7 +85,7 @@ export default function BIHeader({
   const efficiencyGain = golden?.efficiency_gain?.[selectedRes];
 
   const storageSaved =
-    h264_bitrate && h265_bitrate
+    h264_bitrate && h265_bitrate && h265_bitrate > 0
       ? ((1 - h265_bitrate / h264_bitrate) * 100).toFixed(1)
       : null;
 

@@ -2,11 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+function hasGoldenForCodec(resolutions, codec) {
+  if (!resolutions) return false;
+  for (const r of ['1080p', '720p', '480p']) {
+    if (!resolutions[r]?.[codec]) return false;
+  }
+  return true;
+}
+
 export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [status, setStatus] = useState(null);
-  const [pushing, setPushing] = useState(false);
+  const [pushing, setPushing] = useState(null);
   const [pushError, setPushError] = useState(null);
   const pollingRef = useRef(null);
+
+  const resolutions = goldenRecipes?.resolutions;
+  const labCompleteH264 = hasGoldenForCodec(resolutions, 'h264');
+  const labCompleteH265 = hasGoldenForCodec(resolutions, 'h265');
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -14,7 +26,9 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       const data = await res.json();
       setStatus(data);
 
-      if (data.gcp_job_status === 'SUCCEEDED' || data.gcp_job_status === 'FAILED' || data.gcp_job_status === 'SUBTITLE_SYNC_FAILED') {
+      const h264Done = !data.h264?.gcp_job_status || !['PENDING', 'RUNNING'].includes(data.h264.gcp_job_status);
+      const h265Done = !data.h265?.gcp_job_status || !['PENDING', 'RUNNING'].includes(data.h265.gcp_job_status);
+      if (h264Done && h265Done) {
         clearInterval(pollingRef.current);
         pollingRef.current = null;
       }
@@ -33,76 +47,84 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
     return () => clearInterval(pollingRef.current);
   }, [fetchStatus]);
 
-  const handleRunGCP = async () => {
-    setPushing(true);
+  const handleRunGCP = async (codec) => {
+    setPushing(codec);
     setPushError(null);
     try {
       const res = await fetch('/api/gcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ episodeId }),
+        body: JSON.stringify({ episodeId, codec }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'GCP push failed');
-      setPushing(false);
+      setPushing(null);
       startPolling();
     } catch (err) {
       setPushError(err.message);
-      setPushing(false);
+      setPushing(null);
     }
   };
 
-  const labComplete = (() => {
-    const res = goldenRecipes?.resolutions;
-    if (!res) return false;
-    for (const r of ['1080p', '720p', '480p']) {
-      if (!res[r]?.h264 || !res[r]?.h265) return false;
-    }
-    return true;
-  })();
-
-  const gcpStatus = status?.gcp_job_status;
-  const isActive = gcpStatus === 'PENDING' || gcpStatus === 'RUNNING';
-  const isSucceeded = gcpStatus === 'SUCCEEDED';
-  const isFailed = gcpStatus === 'FAILED' || gcpStatus === 'SUBTITLE_SYNC_FAILED';
-  const canRun = labComplete && !isActive && !pushing;
+  const h264Status = status?.h264?.gcp_job_status;
+  const h265Status = status?.h265?.gcp_job_status;
+  const isActiveH264 = h264Status === 'PENDING' || h264Status === 'RUNNING';
+  const isActiveH265 = h265Status === 'PENDING' || h265Status === 'RUNNING';
+  const canRunH264 = labCompleteH264 && !isActiveH264 && pushing !== 'h264';
+  const canRunH265 = labCompleteH265 && !isActiveH265 && pushing !== 'h265';
 
   useEffect(() => {
-    if (isActive && !pollingRef.current) startPolling();
-  }, [gcpStatus, isActive, startPolling]);
+    if ((isActiveH264 || isActiveH265) && !pollingRef.current) startPolling();
+  }, [h264Status, h265Status, isActiveH264, isActiveH265, startPolling]);
 
   return (
     <div>
-      {/* Status badge */}
-      {isSucceeded && (
-        <div style={{
-          background: '#052e16', border: '1px solid #22c55e', borderRadius: 6,
-          padding: '8px 12px', fontSize: 13, color: '#22c55e', marginBottom: 14,
-        }}>
-          GCP Transcoding complete
-        </div>
-      )}
-
-      {isActive && (
+      {/* Per-codec status badges */}
+      {isActiveH264 && (
         <div style={{
           background: '#1c1a07', border: '1px solid #f59e0b', borderRadius: 6,
           padding: '8px 12px', fontSize: 13, color: '#f59e0b', marginBottom: 14,
         }}>
-          GCP job {gcpStatus?.toLowerCase()} — polling every 10s…
+          H.264 GCP job {h264Status?.toLowerCase()} — polling every 10s…
         </div>
       )}
-
-      {isFailed && (
+      {isActiveH265 && (
+        <div style={{
+          background: '#1c1a07', border: '1px solid #f59e0b', borderRadius: 6,
+          padding: '8px 12px', fontSize: 13, color: '#f59e0b', marginBottom: 14,
+        }}>
+          H.265 GCP job {h265Status?.toLowerCase()} — polling every 10s…
+        </div>
+      )}
+      {(h264Status === 'SUCCEEDED' || h265Status === 'SUCCEEDED') && (
+        <div style={{
+          background: '#052e16', border: '1px solid #22c55e', borderRadius: 6,
+          padding: '8px 12px', fontSize: 13, color: '#22c55e', marginBottom: 14,
+        }}>
+          {h264Status === 'SUCCEEDED' && h265Status === 'SUCCEEDED'
+            ? 'GCP Transcoding complete'
+            : `${h264Status === 'SUCCEEDED' ? 'H.264' : 'H.265'} GCP complete`}
+        </div>
+      )}
+      {(h264Status === 'FAILED' || h264Status === 'SUBTITLE_SYNC_FAILED') && (
         <div style={{
           background: '#1c0707', border: '1px solid #ef4444', borderRadius: 6,
           padding: '8px 12px', fontSize: 13, color: '#ef4444', marginBottom: 14,
         }}>
-          GCP job failed{status?.gcp_error ? `: ${status.gcp_error}` : ''}
+          H.264 GCP failed{status?.h264?.gcp_error ? `: ${status.h264.gcp_error}` : ''}
+        </div>
+      )}
+      {(h265Status === 'FAILED' || h265Status === 'SUBTITLE_SYNC_FAILED') && (
+        <div style={{
+          background: '#1c0707', border: '1px solid #ef4444', borderRadius: 6,
+          padding: '8px 12px', fontSize: 13, color: '#ef4444', marginBottom: 14,
+        }}>
+          H.265 GCP failed{status?.h265?.gcp_error ? `: ${status.h265.gcp_error}` : ''}
         </div>
       )}
 
       {/* HLS URLs */}
-      {isSucceeded && (status?.h264_master_m3u8_url || status?.h265_master_m3u8_url) && (
+      {(status?.h264_master_m3u8_url || status?.h265_master_m3u8_url) && (
         <div style={{ fontSize: 12, color: '#888', marginBottom: 12, wordBreak: 'break-all' }}>
           {status.h264_master_m3u8_url && (
             <div><strong style={{ color: '#aaa' }}>H.264:</strong> {status.h264_master_m3u8_url}</div>
@@ -113,32 +135,39 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         </div>
       )}
 
-      {/* Run GCP button */}
-      <button
-        onClick={handleRunGCP}
-        disabled={!canRun}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          background: canRun ? '#9333ea' : '#1e1e1e',
-          color: canRun ? '#fff' : '#555',
-          border: 'none', borderRadius: 8, padding: '10px 20px',
-          fontSize: 14, fontWeight: 600,
-          cursor: canRun ? 'pointer' : 'not-allowed',
-          transition: 'background 0.2s', width: '100%', justifyContent: 'center',
-        }}
-      >
-        {pushing || isActive ? (
-          <>
-            <Spinner /> Running GCP…
-          </>
-        ) : isSucceeded ? (
-          'GCP Complete'
-        ) : !labComplete ? (
-          'Lab not complete'
-        ) : (
-          '▶ Run GCP'
-        )}
-      </button>
+      {/* Run GCP buttons */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <button
+          onClick={() => handleRunGCP('h264')}
+          disabled={!canRunH264}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: canRunH264 ? '#9333ea' : '#1e1e1e',
+            color: canRunH264 ? '#fff' : '#555',
+            border: 'none', borderRadius: 8, padding: '10px 20px',
+            fontSize: 14, fontWeight: 600,
+            cursor: canRunH264 ? 'pointer' : 'not-allowed',
+            transition: 'background 0.2s', width: '100%', justifyContent: 'center',
+          }}
+        >
+          {pushing === 'h264' ? <><Spinner /> Running…</> : '▶ Run GCP H.264'}
+        </button>
+        <button
+          onClick={() => handleRunGCP('h265')}
+          disabled={!canRunH265}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: canRunH265 ? '#9333ea' : '#1e1e1e',
+            color: canRunH265 ? '#fff' : '#555',
+            border: 'none', borderRadius: 8, padding: '10px 20px',
+            fontSize: 14, fontWeight: 600,
+            cursor: canRunH265 ? 'pointer' : 'not-allowed',
+            transition: 'background 0.2s', width: '100%', justifyContent: 'center',
+          }}
+        >
+          {pushing === 'h265' ? <><Spinner /> Running…</> : '▶ Run GCP H.265'}
+        </button>
+      </div>
 
       {pushError && (
         <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>

@@ -1,14 +1,26 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { TOTAL_JOBS } from '@/lib/constants';
+import { TOTAL_JOBS_H264, TOTAL_JOBS_H265 } from '@/lib/constants';
+
+const CODEC_CONFIG = {
+  h264: { total: TOTAL_JOBS_H264, label: 'H.264' },
+  h265: { total: TOTAL_JOBS_H265, label: 'H.265' },
+};
+
+function hasGoldenForCodec(golden, codec) {
+  const res = golden?.golden_recipes?.resolutions;
+  if (!res) return false;
+  const resolutions = ['1080p', '720p', '480p'];
+  return resolutions.every((r) => res[r]?.[codec]);
+}
 
 export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }) {
   const [status, setStatus] = useState(null);
-  const [pushing, setPushing] = useState(false);
-  const [stopping, setStopping] = useState(false);
+  const [pushing, setPushing] = useState(null);
+  const [stopping, setStopping] = useState(null);
   const [pushError, setPushError] = useState(null);
-  const [executionArn, setExecutionArn] = useState(null);
+  const [executionArns, setExecutionArns] = useState({});
   const pollingRef = useRef(null);
   const goldenPollRef = useRef(null);
 
@@ -18,7 +30,10 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
       const data = await res.json();
       setStatus(data);
 
-      if (data.succeeded + data.failed >= TOTAL_JOBS || data.labStatus === 'FAILED') {
+      const h264 = data.h264 ?? data;
+      const h265 = data.h265 ?? data;
+      const neitherRunning = h264?.labStatus !== 'RUNNING' && h265?.labStatus !== 'RUNNING';
+      if (neitherRunning) {
         clearInterval(pollingRef.current);
         pollingRef.current = null;
         if (onRunComplete) onRunComplete();
@@ -29,7 +44,6 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
     }
   };
 
-  /** Poll episode data every 5s until lab_status flips to COMPLETE or FAILED */
   const startGoldenPoll = () => {
     if (goldenPollRef.current) return;
     goldenPollRef.current = setInterval(() => {
@@ -43,11 +57,12 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
   };
 
   useEffect(() => {
-    const labStatus = golden?.lab_status;
-    if (labStatus === 'COMPLETE' || labStatus === 'FAILED') {
+    const h264Complete = golden?.lab_status_h264 === 'COMPLETE' || golden?.lab_status_h264 === 'FAILED';
+    const h265Complete = golden?.lab_status_h265 === 'COMPLETE' || golden?.lab_status_h265 === 'FAILED';
+    if (h264Complete && h265Complete) {
       stopGoldenPoll();
     }
-  }, [golden?.lab_status]);
+  }, [golden?.lab_status_h264, golden?.lab_status_h265]);
 
   useEffect(() => {
     fetchStatus();
@@ -62,8 +77,8 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
     pollingRef.current = setInterval(fetchStatus, 5000);
   };
 
-  const handlePush = async () => {
-    setPushing(true);
+  const handlePush = async (codec) => {
+    setPushing(codec);
     setPushError(null);
     try {
       if (!videoUrl) {
@@ -72,32 +87,32 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
       const res = await fetch('/api/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ episodeId, s3Url: videoUrl }),
+        body: JSON.stringify({ episodeId, s3Url: videoUrl, codec }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Push failed');
-      setExecutionArn(data.executionArn);
-      setPushing(false);
+      setExecutionArns((prev) => ({ ...prev, [codec]: data.executionArn }));
+      setPushing(null);
       startPolling();
     } catch (err) {
       setPushError(err.message);
-      setPushing(false);
+      setPushing(null);
     }
   };
 
-  const handleRerun = () => {
-    if (!window.confirm('This will delete all existing research data and re-run the full lab. Continue?')) return;
-    handlePush();
+  const handleRerun = (codec) => {
+    if (!window.confirm(`This will delete all H.${codec === 'h264' ? '264' : '265'} research data and re-run. Continue?`)) return;
+    handlePush(codec);
   };
 
-  const handleStop = async () => {
-    if (!window.confirm('This will stop the running lab. Continue?')) return;
-    setStopping(true);
+  const handleStop = async (codec) => {
+    if (!window.confirm(`Stop the running H.${codec === 'h264' ? '264' : '265'} lab?`)) return;
+    setStopping(codec);
     try {
       const res = await fetch('/api/stop-lab', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ episodeId }),
+        body: JSON.stringify({ episodeId, codec }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Stop failed');
@@ -108,48 +123,124 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
     } catch (err) {
       setPushError(err.message);
     } finally {
-      setStopping(false);
+      setStopping(null);
     }
   };
 
-  const succeeded = status?.succeeded ?? 0;
-  const failed = status?.failed ?? 0;
-  const running = status?.running ?? 0;
-  const total = TOTAL_JOBS;
-  const pct = Math.round((succeeded / total) * 100);
-  const isDone = succeeded + failed >= total && total > 0;
-  const batchAllSucceeded = isDone && failed === 0 && succeeded >= total;
-  const isRunning = !isDone && (running > 0 || (succeeded > 0 && succeeded + failed < total));
-  const serverRunning = status?.labStatus === 'RUNNING';
-  const serverComplete = golden?.lab_status === 'COMPLETE';
-  const serverFailed = status?.labStatus === 'FAILED' || golden?.lab_status === 'FAILED';
-  const hasGolden = !!golden?.golden_recipes?.resolutions;
-  const showLabSpinner = pushing || (!isDone && (running > 0 || serverRunning));
-  const isPartialFailure =
-    (isDone && failed > 0 && !hasGolden) || (serverFailed && !hasGolden);
-  const labComplete = isDone && !isPartialFailure && (hasGolden || serverComplete);
-
-  useEffect(() => {
-    if (serverRunning && !pollingRef.current) startPolling();
-  }, [status?.labStatus, serverRunning]);
-
-  // --- Duration ---
-  const labDuration = (() => {
-    const start = golden?.lab_run_started_at;
-    const end = golden?.lab_finished_at;
-    if (!start || !end) return null;
-    const ms = new Date(end).getTime() - new Date(start).getTime();
-    if (ms <= 0 || isNaN(ms)) return null;
-    const totalSec = Math.round(ms / 1000);
-    const m = Math.floor(totalSec / 60);
-    const s = totalSec % 60;
-    const avgSec = Math.round(totalSec / total);
-    return { text: `${m}m ${s}s`, avgText: `~${avgSec}s avg per encode` };
-  })();
-
   return (
     <div>
-      {/* Progress bar */}
+      {(['h264', 'h265']).map((codec) => {
+        const cfg = CODEC_CONFIG[codec];
+        const s = status?.[codec] ?? status ?? {};
+        const total = cfg.total;
+        const succeeded = s.succeeded ?? 0;
+        const failed = s.failed ?? 0;
+        const running = s.running ?? 0;
+        const pct = Math.round((succeeded / total) * 100);
+        const isDone = succeeded + failed >= total && total > 0;
+        const batchAllSucceeded = isDone && failed === 0 && succeeded >= total;
+        const serverRunning = s.labStatus === 'RUNNING';
+        const labStatusKey = `lab_status_${codec}`;
+        const labErrorKey = `lab_error_${codec}`;
+        const labFinishedKey = `lab_finished_at_${codec}`;
+        const labStartedKey = `lab_run_started_at_${codec}`;
+        const serverComplete = golden?.[labStatusKey] === 'COMPLETE';
+        const serverFailed = s.labStatus === 'FAILED' || golden?.[labStatusKey] === 'FAILED';
+        const hasGolden = hasGoldenForCodec(golden, codec);
+        const showLabSpinner = pushing === codec || (!isDone && (running > 0 || serverRunning));
+        const isPartialFailure = (isDone && failed > 0 && !hasGolden) || (serverFailed && !hasGolden);
+        const labComplete = isDone && !isPartialFailure && (hasGolden || serverComplete);
+        const otherRunning = (codec === 'h264' ? status?.h265?.labStatus : status?.h264?.labStatus) === 'RUNNING';
+
+        const labDuration = (() => {
+          const start = golden?.[labStartedKey];
+          const end = golden?.[labFinishedKey];
+          if (!start || !end) return null;
+          const ms = new Date(end).getTime() - new Date(start).getTime();
+          if (ms <= 0 || isNaN(ms)) return null;
+          const totalSec = Math.round(ms / 1000);
+          const m = Math.floor(totalSec / 60);
+          const s_ = totalSec % 60;
+          const avgSec = Math.round(totalSec / total);
+          return { text: `${m}m ${s_}s`, avgText: `~${avgSec}s avg per encode` };
+        })();
+
+        return (
+          <LabSection
+            key={codec}
+            codec={codec}
+            label={cfg.label}
+            total={total}
+            succeeded={succeeded}
+            failed={failed}
+            running={running}
+            pct={pct}
+            isPartialFailure={isPartialFailure}
+            labComplete={labComplete}
+            batchAllSucceeded={batchAllSucceeded}
+            labDuration={labDuration}
+            showLabSpinner={showLabSpinner}
+            isRunning={!isDone && (running > 0 || serverRunning)}
+            serverRunning={serverRunning}
+            serverComplete={serverComplete}
+            hasGolden={hasGolden}
+            serverFailed={serverFailed}
+            labError={golden?.[labErrorKey]}
+            executionArn={executionArns[codec]}
+            pushing={pushing === codec}
+            stopping={stopping === codec}
+            disabledByOther={otherRunning}
+            onPush={() => handlePush(codec)}
+            onRerun={() => handleRerun(codec)}
+            onStop={() => handleStop(codec)}
+          />
+        );
+      })}
+
+      {pushError && (
+        <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
+          Error: {pushError}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LabSection({
+  codec,
+  label,
+  total,
+  succeeded,
+  failed,
+  running,
+  pct,
+  isPartialFailure,
+  labComplete,
+  batchAllSucceeded,
+  labDuration,
+  showLabSpinner,
+  isRunning,
+  serverRunning,
+  serverComplete,
+  hasGolden,
+  serverFailed,
+  labError,
+  executionArn,
+  pushing,
+  stopping,
+  disabledByOther,
+  onPush,
+  onRerun,
+  onStop,
+}) {
+  const isDone = succeeded + failed >= total && total > 0;
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 8 }}>
+        {label} ({total} jobs)
+      </div>
+
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#888', marginBottom: 6 }}>
           <span>{succeeded}/{total} jobs succeeded</span>
@@ -173,7 +264,6 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
         </div>
       </div>
 
-      {/* Status badges */}
       {isPartialFailure && (
         <div style={{
           background: '#1c0707',
@@ -184,11 +274,11 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
           color: '#ef4444',
           marginBottom: 14,
         }}>
-          Lab failed — {failed > 0 ? `${failed}/${total} Batch jobs failed. ` : ''}
+          {label} lab failed — {failed > 0 ? `${failed}/${total} jobs failed. ` : ''}
           Aggregation did not complete. Re-run to retry.
-          {golden?.lab_error && (
+          {labError && (
             <pre style={{ fontSize: 10, marginTop: 8, whiteSpace: 'pre-wrap', color: '#888' }}>
-              {String(golden.lab_error).slice(0, 500)}
+              {String(labError).slice(0, 500)}
             </pre>
           )}
         </div>
@@ -204,7 +294,7 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
           color: '#22c55e',
           marginBottom: 14,
         }}>
-          Lab run complete — {succeeded}/{total} encodes succeeded
+          {label} lab complete — {succeeded}/{total} encodes succeeded
           {labDuration && (
             <span style={{ color: '#6ee7b7', marginLeft: 8 }}>
               ({labDuration.text}, {labDuration.avgText})
@@ -223,7 +313,7 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
           color: '#f59e0b',
           marginBottom: 14,
         }}>
-          Lab running — {succeeded + failed}/{total} completed ({running} active)
+          {label} lab running — {succeeded + failed}/{total} completed ({running} active)
         </div>
       )}
 
@@ -237,7 +327,7 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
           color: '#eab308',
           marginBottom: 14,
         }}>
-          All encodes finished — waiting for aggregator to compute golden recipes…
+          All {label} encodes finished — waiting for aggregator…
         </div>
       )}
 
@@ -247,47 +337,46 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
         </div>
       )}
 
-      {/* Primary action button */}
       {labComplete ? (
         <button
-          onClick={handleRerun}
-          disabled={pushing}
+          onClick={onRerun}
+          disabled={pushing || disabledByOther}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            background: pushing ? '#1e1e1e' : '#334155',
-            color: pushing ? '#555' : '#e2e8f0',
+            background: (pushing || disabledByOther) ? '#1e1e1e' : '#334155',
+            color: (pushing || disabledByOther) ? '#555' : '#e2e8f0',
             border: '1px solid #475569',
             borderRadius: 8,
             padding: '10px 20px',
             fontSize: 14,
             fontWeight: 600,
-            cursor: pushing ? 'not-allowed' : 'pointer',
+            cursor: (pushing || disabledByOther) ? 'not-allowed' : 'pointer',
             transition: 'background 0.2s',
             width: '100%',
             justifyContent: 'center',
           }}
         >
-          ↻ Rerun Lab
+          ↻ Rerun {label} Lab
         </button>
       ) : (
         <div style={{ display: 'flex', gap: 8 }}>
           <button
-            onClick={handlePush}
-            disabled={pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)}
+            onClick={onPush}
+            disabled={pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed) || disabledByOther}
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: 8,
-              background: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#1e1e1e' : '#4da6ff',
-              color: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#555' : '#000',
+              background: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed) || disabledByOther) ? '#1e1e1e' : '#4da6ff',
+              color: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed) || disabledByOther) ? '#555' : '#000',
               border: 'none',
               borderRadius: 8,
               padding: '10px 20px',
               fontSize: 14,
               fontWeight: 600,
-              cursor: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? 'not-allowed' : 'pointer',
+              cursor: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed) || disabledByOther) ? 'not-allowed' : 'pointer',
               transition: 'background 0.2s',
               flex: 1,
               justifyContent: 'center',
@@ -296,16 +385,16 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
             {pushing ? (
               <><Spinner /> Starting…</>
             ) : showLabSpinner ? (
-              <><Spinner /> Lab Running…</>
+              <><Spinner /> {label} Lab Running…</>
             ) : batchAllSucceeded && !hasGolden ? (
               <><Spinner /> Finalizing…</>
             ) : (
-              '▶ Run Lab'
+              `▶ Run lab ${label}`
             )}
           </button>
           {(isRunning || (!isDone && serverRunning)) && (
             <button
-              onClick={handleStop}
+              onClick={onStop}
               disabled={stopping}
               style={{
                 display: 'flex',
@@ -326,12 +415,6 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
               {stopping ? 'Stopping…' : '■ Stop'}
             </button>
           )}
-        </div>
-      )}
-
-      {pushError && (
-        <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
-          Error: {pushError}
         </div>
       )}
     </div>

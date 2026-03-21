@@ -51,4 +51,5 @@ def handler(event, context):
         "gcp_job_state": state,
         "golden_recipes": event["golden_recipes"],
         "output_uri": event["output_uri"],
+        "codec": event.get("codec"),
     }

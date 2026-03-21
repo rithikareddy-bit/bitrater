@@ -10,6 +10,14 @@ output "step_function_arn" {
   value = aws_sfn_state_machine.research_orchestrator.arn
 }
 
+output "step_function_arn_h264" {
+  value = aws_sfn_state_machine.research_orchestrator_h264.arn
+}
+
+output "step_function_arn_h265" {
+  value = aws_sfn_state_machine.research_orchestrator_h265.arn
+}
+
 output "dashboard_ecr_url" {
   value = aws_ecr_repository.dashboard.repository_url
 }

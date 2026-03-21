@@ -7,14 +7,15 @@ This document explains the **entire video pipeline** from raw upload to final HL
 ## Table of Contents
 
 1. [What This Project Does](#what-this-project-does)
-2. [Prerequisites](#prerequisites)
-3. [High-Level Architecture](#high-level-architecture)
-4. [Pipeline 1: Research (VMAF Lab)](#pipeline-1-research-vmaf-lab)
-5. [Pipeline 2: GCP Transcoder (Production HLS)](#pipeline-2-gcp-transcoder-production-hls)
-6. [Important Code Reference](#important-code-reference)
-7. [Environment Variables & Secrets](#environment-variables--secrets)
-8. [Deployment](#deployment)
-9. [How to Verify Everything Works](#how-to-verify-everything-works)
+2. [End-to-End Flowchart](#end-to-end-flowchart)
+3. [Prerequisites](#prerequisites)
+4. [High-Level Architecture](#high-level-architecture)
+5. [Pipeline 1: Research (VMAF Lab)](#pipeline-1-research-vmaf-lab)
+6. [Pipeline 2: GCP Transcoder (Production HLS)](#pipeline-2-gcp-transcoder-production-hls)
+7. [Important Code Reference](#important-code-reference)
+8. [Environment Variables & Secrets](#environment-variables--secrets)
+9. [Deployment](#deployment)
+10. [How to Verify Everything Works](#how-to-verify-everything-works)
 
 ---
 
@@ -28,13 +29,91 @@ So: **Research finds the best encoding settings; GCP turns the same source into 
 
 ---
 
+## End-to-End Flowchart
+
+The diagram below shows the full journey — from a raw video upload all the way to a player streaming HLS from the CDN.
+
+```mermaid
+flowchart TD
+    A([Source video in S3\n+ episode in MongoDB master.showcache])
+
+    %% ── Trigger ──────────────────────────────────────────
+    A --> TR{How pipeline starts}
+    TR -->|S3 upload event| TL[lambda_trigger.py\nS3 Event Lambda]
+    TR -->|Dashboard "Run Lab" button| DA[Dashboard\nPOST /api/push]
+    TL --> SFR
+    DA --> SFR
+
+    %% ── Research Step Function ────────────────────────────
+    subgraph RESEARCH ["Pipeline 1 — Research / VMAF Lab  (AWS)"]
+        SFR[Chai-Q-Orchestrator\nStep Function]
+        SFR --> GL[GenerateLadder\nPass state\n→ 21 items\ncodec × bitrate × resolution]
+        GL --> PR[ParallelResearch\nMap state  MaxConcurrency: 0\n21 Batch jobs launch simultaneously]
+
+        PR --> B1[Batch Job 1\nlibx265 · 480p · 500 kbps]
+        PR --> B2[Batch Job 2\nlibx265 · 480p · 800 kbps]
+        PR --> BN[··· 19 more jobs ···]
+
+        B1 & B2 & BN --> RW[research-worker container\nFFmpeg 2-pass encode\n+ libvmaf quality score]
+        RW -->|VMAF score + timeline| MV[(MongoDB: chai_q_lab\nvideo_vmaf_research)]
+
+        MV --> AGG[aggregator.py Lambda\nCalculateGoldenRecipe\nThresholds: 1080p ≥ 88 · 720p ≥ 75 · 480p ≥ 48\nLowest bitrate that meets threshold wins]
+        AGG -->|golden_recipes\nlab_status: COMPLETE| ME[(MongoDB: chai_q_lab\nvideo_episodes)]
+
+        PR & AGG -->|on any error| MF[mark_lab_failed.py Lambda\nlab_status: FAILED]
+    end
+
+    %% ── Dashboard ─────────────────────────────────────────
+    subgraph DASH ["Dashboard  (AWS App Runner — Next.js 14)"]
+        DB[Dashboard UI\nRD Curve · VMAF Heatmap\nFrame Comparison · Lab Status · GCP Status]
+        MC[(MongoDB: master\nshowcache — catalog)]
+        DB <-->|show & episode list| MC
+        DB <-->|research data, golden recipes\nGCP status, HLS URLs| ME
+    end
+
+    ME --> DB
+
+    %% ── GCP Trigger ───────────────────────────────────────
+    DB -->|"Run GCP" button\nPOST /api/gcp| SFG
+
+    %% ── GCP Step Function ─────────────────────────────────
+    subgraph GCP_SF ["Pipeline 2 — Production HLS  (AWS + GCP)"]
+        SFG[GCP-Orchestrator\nStep Function]
+
+        SFG --> CP[gcp_copy_s3_to_gcs.py Lambda\nStream S3 source → GCS input bucket\nno /tmp buffering]
+
+        CP --> TR2[gcp_transcoder.py Lambda\nBuild JobConfig from golden_recipes\n6 video streams · 1 AAC audio · 2 HLS manifests]
+
+        TR2 -->|create_job API call| GT[GCP Transcoder\nH.264 TS × 3 resolutions\nH.265 fMP4 × 3 resolutions\nAAC 128 kbps]
+
+        GT --> WT[WaitForJob\n60 s]
+        WT --> CS[gcp_check_status.py Lambda\nget_job → gcp_job_state]
+        CS -->|RUNNING| WT
+        CS -->|FAILED| JF([JobFailed\nFail state])
+
+        CS -->|SUCCEEDED| FH[gcp_finalize_hls.py Lambda\n1 Copy GCS output → CDN bucket\n2 Fetch subtitle VTTs from gld2sqs MongoDB\n3 Upload VTTs to GCS + generate subtitle playlists\n4 Patch h264_master.m3u8 + h265_master.m3u8\n5 Write CDN URLs to MongoDB]
+
+        SUB[(MongoDB: gld2sqs\nsubtitle VTT URLs)]
+        FH <-->|fetch subtitles| SUB
+
+        FH -->|h264_master_m3u8_url\nh265_master_m3u8_url\ngcp_job_status: SUCCEEDED| ME
+        FH --> CDN[GCS CDN bucket\nchai-shots-manifests\nh264_master.m3u8\nh265_master.m3u8\n+ subtitle .vtt + .m3u8]
+    end
+
+    %% ── Player ────────────────────────────────────────────
+    CDN --> PL([Player streams HLS\nhttps://cdn.chaishots.in])
+```
+
+---
+
 ## Prerequisites
 
 - **AWS:** Account, CLI configured, Terraform.
 - **GCP:** Project, `gcloud` CLI, Transcoder API enabled, GCS buckets.
 - **Docker:** For building Lambda layers (Linux x86_64) and worker/dashboard images.
-- **MongoDB:** Two databases used:
-  - `chai_q_lab` — episode state, golden recipes, VMAF results, final HLS URLs.
+- **MongoDB:** Three databases used:
+  - `master` — show/episode catalog (`showcache` collection with `s3_url`, slugs, metadata). Read by the dashboard.
+  - `chai_q_lab` — episode state, golden recipes, VMAF results, final HLS URLs (`video_vmaf_research` + `video_episodes` collections).
   - `gld2sqs` (subtitle DB) — VTT file URLs for subtitles (optional).
 
 ---

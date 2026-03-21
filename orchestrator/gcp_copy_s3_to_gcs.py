@@ -69,4 +69,5 @@ def handler(event, context):
         "episode_id": episode_id,
         "gcs_input_uri": gcs_uri,
         "golden_recipes": event["golden_recipes"],
+        "codec": event.get("codec"),
     }

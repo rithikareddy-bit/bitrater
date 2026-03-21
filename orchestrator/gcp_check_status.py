@@ -35,13 +35,17 @@ def handler(event, context):
     if state == "FAILED":
         mongo_uri = os.environ["MONGO_URI"]
         db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
+        codec = event.get("codec", "h265")
+        status_key = f"gcp_job_status_{codec}"
+        error_key = f"gcp_error_{codec}"
+        finished_key = f"gcp_finished_at_{codec}"
         error_msg = getattr(job.error, "message", "Unknown error") if job.error else "Unknown error"
         db.video_episodes.update_one(
             {"episode_id": episode_id},
             {"$set": {
-                "gcp_job_status": "FAILED",
-                "gcp_error": error_msg,
-                "gcp_finished_at": datetime.now(timezone.utc).isoformat(),
+                status_key: "FAILED",
+                error_key: error_msg,
+                finished_key: datetime.now(timezone.utc).isoformat(),
             }},
         )
 
@@ -51,4 +55,5 @@ def handler(event, context):
         "gcp_job_state": state,
         "golden_recipes": event["golden_recipes"],
         "output_uri": event["output_uri"],
+        "codec": event.get("codec"),
     }

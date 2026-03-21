@@ -9,13 +9,15 @@
         "Payload": {
           "episode_id.$": "$$.Execution.Input.episode_id",
           "s3_url.$": "$$.Execution.Input.s3_url",
-          "golden_recipes.$": "$$.Execution.Input.golden_recipes"
+          "golden_recipes.$": "$$.Execution.Input.golden_recipes",
+          "codec.$": "$$.Execution.Input.codec"
         }
       },
       "ResultSelector": {
         "episode_id.$": "$.Payload.episode_id",
         "gcs_input_uri.$": "$.Payload.gcs_input_uri",
-        "golden_recipes.$": "$.Payload.golden_recipes"
+        "golden_recipes.$": "$.Payload.golden_recipes",
+        "codec.$": "$.Payload.codec"
       },
       "Retry": [
         {
@@ -38,7 +40,8 @@
         "episode_id.$": "$.Payload.episode_id",
         "gcp_job_name.$": "$.Payload.gcp_job_name",
         "golden_recipes.$": "$.Payload.golden_recipes",
-        "output_uri.$": "$.Payload.output_uri"
+        "output_uri.$": "$.Payload.output_uri",
+        "codec.$": "$.Payload.codec"
       },
       "Retry": [
         {
@@ -67,7 +70,8 @@
         "gcp_job_name.$": "$.Payload.gcp_job_name",
         "gcp_job_state.$": "$.Payload.gcp_job_state",
         "golden_recipes.$": "$.Payload.golden_recipes",
-        "output_uri.$": "$.Payload.output_uri"
+        "output_uri.$": "$.Payload.output_uri",
+        "codec.$": "$.Payload.codec"
       },
       "Retry": [
         {

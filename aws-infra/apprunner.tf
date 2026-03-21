@@ -78,8 +78,12 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
         ]
         Resource = [
           aws_sfn_state_machine.research_orchestrator.arn,
+          aws_sfn_state_machine.research_orchestrator_h264.arn,
+          aws_sfn_state_machine.research_orchestrator_h265.arn,
           aws_sfn_state_machine.gcp_orchestrator.arn,
           "arn:aws:states:us-east-1:107647021172:execution:Chai-Q-Orchestrator:*",
+          "arn:aws:states:us-east-1:107647021172:execution:Chai-Q-Orchestrator-H264:*",
+          "arn:aws:states:us-east-1:107647021172:execution:Chai-Q-Orchestrator-H265:*",
           "arn:aws:states:us-east-1:107647021172:execution:GCP-Orchestrator:*",
         ]
       },
@@ -118,6 +122,8 @@ resource "aws_apprunner_service" "dashboard" {
         runtime_environment_variables = {
           MONGO_URI               = var.mongo_uri
           SFN_ARN                 = aws_sfn_state_machine.research_orchestrator.arn
+          SFN_ARN_H264            = aws_sfn_state_machine.research_orchestrator_h264.arn
+          SFN_ARN_H265            = aws_sfn_state_machine.research_orchestrator_h265.arn
           GCP_SFN_ARN             = aws_sfn_state_machine.gcp_orchestrator.arn
           BATCH_JOB_QUEUE         = aws_batch_job_queue.chai_q_queue.name
           NEXT_TELEMETRY_DISABLED = "1"

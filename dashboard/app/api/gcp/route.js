@@ -6,10 +6,13 @@ const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 export async function POST(request) {
   try {
-    const { episodeId } = await request.json();
+    const { episodeId, codec } = await request.json();
 
     if (!episodeId) {
       return NextResponse.json({ error: 'episodeId is required' }, { status: 400 });
+    }
+    if (!codec || !['h264', 'h265'].includes(codec)) {
+      return NextResponse.json({ error: 'codec must be "h264" or "h265"' }, { status: 400 });
     }
 
     const gcpSfnArn = process.env.GCP_SFN_ARN;
@@ -23,9 +26,11 @@ export async function POST(request) {
 
     const episode = await labDb.collection('video_episodes').findOne({ episode_id: episodeId });
 
-    if (episode?.gcp_job_status === 'RUNNING' || episode?.gcp_job_status === 'PENDING') {
+    const statusKey = `gcp_job_status_${codec}`;
+    const status = episode?.[statusKey];
+    if (status === 'RUNNING' || status === 'PENDING') {
       return NextResponse.json(
-        { error: 'A GCP job is already active for this episode' },
+        { error: `A GCP ${codec.toUpperCase()} job is already active for this episode` },
         { status: 409 },
       );
     }
@@ -37,9 +42,10 @@ export async function POST(request) {
 
     const resolutions = goldenRecipes.resolutions;
     for (const res of ['1080p', '720p', '480p']) {
-      if (!resolutions[res]?.h264 || !resolutions[res]?.h265) {
+      const recipe = resolutions[res]?.[codec];
+      if (!recipe) {
         return NextResponse.json(
-          { error: `Incomplete lab results for ${res} — both H.264 and H.265 winners required` },
+          { error: `Missing ${codec.toUpperCase()} golden recipe for ${res} — run the lab first` },
           { status: 400 },
         );
       }
@@ -54,20 +60,26 @@ export async function POST(request) {
       return NextResponse.json({ error: 'No s3_url found for this episode' }, { status: 400 });
     }
 
+    const urlKey = codec === 'h264' ? 'h264_master_m3u8_url' : 'h265_master_m3u8_url';
+    const execArnKey = `gcp_execution_arn_${codec}`;
+    const startedAtKey = `gcp_started_at_${codec}`;
+    const errorKey = `gcp_error_${codec}`;
+    const finishedAtKey = `gcp_finished_at_${codec}`;
+    const jobNameKey = `gcp_job_name_${codec}`;
+    const now = new Date().toISOString();
+
     await labDb.collection('video_episodes').updateOne(
       { episode_id: episodeId },
       {
         $set: {
-          gcp_job_status: 'PENDING',
-          gcp_started_at: new Date().toISOString(),
-          gcp_error: null,
-          gcp_finished_at: null,
-          gcp_job_name: null,
+          [statusKey]: 'PENDING',
+          [startedAtKey]: now,
+          [execArnKey]: null,
+          [errorKey]: null,
+          [finishedAtKey]: null,
+          [jobNameKey]: null,
         },
-        $unset: {
-          h264_master_m3u8_url: '',
-          h265_master_m3u8_url: '',
-        },
+        $unset: { [urlKey]: '', gcp_subtitle_error: '' },
       },
     );
 
@@ -75,14 +87,30 @@ export async function POST(request) {
       episode_id: episodeId,
       s3_url: s3Url,
       golden_recipes: goldenRecipes,
+      codec,
     });
 
-    const cmd = new StartExecutionCommand({ stateMachineArn: gcpSfnArn, input });
-    const result = await sfn.send(cmd);
+    let result;
+    try {
+      const cmd = new StartExecutionCommand({ stateMachineArn: gcpSfnArn, input });
+      result = await sfn.send(cmd);
+    } catch (sfnErr) {
+      await labDb.collection('video_episodes').updateOne(
+        { episode_id: episodeId },
+        {
+          $set: {
+            [statusKey]: 'FAILED',
+            [errorKey]: sfnErr.message || 'Failed to start Step Function',
+            [finishedAtKey]: new Date().toISOString(),
+          },
+        },
+      );
+      throw sfnErr;
+    }
 
     await labDb.collection('video_episodes').updateOne(
       { episode_id: episodeId },
-      { $set: { gcp_execution_arn: result.executionArn } },
+      { $set: { [execArnKey]: result.executionArn } },
     );
 
     return NextResponse.json({ executionArn: result.executionArn });

@@ -107,3 +107,39 @@ resource "aws_sfn_state_machine" "research_orchestrator" {
     ctx_episode_id                = "$$.Execution.Input.episode_id"
   })
 }
+
+# --- H.264 Research Orchestrator (9 jobs) ---
+resource "aws_sfn_state_machine" "research_orchestrator_h264" {
+  name     = "Chai-Q-Orchestrator-H264"
+  role_arn = aws_iam_role.step_function_role.arn
+
+  definition = templatefile("../orchestrator/step_function_def_h264.json", {
+    batch_job_queue_arn        = aws_batch_job_queue.chai_q_queue.arn
+    batch_job_definition_arn   = aws_batch_job_definition.chai_q_worker_def.arn
+    aggregator_lambda_arn      = aws_lambda_function.aggregator.arn
+    mark_lab_failed_lambda_arn = aws_lambda_function.mark_lab_failed.arn
+    ctx_bitrate                = "$.bitrate"
+    ctx_codec                  = "$.codec"
+    ctx_resolution             = "$.resolution"
+    ctx_s3_url                 = "$$.Execution.Input.s3_url"
+    ctx_episode_id             = "$$.Execution.Input.episode_id"
+  })
+}
+
+# --- H.265 Research Orchestrator (12 jobs) ---
+resource "aws_sfn_state_machine" "research_orchestrator_h265" {
+  name     = "Chai-Q-Orchestrator-H265"
+  role_arn = aws_iam_role.step_function_role.arn
+
+  definition = templatefile("../orchestrator/step_function_def_h265.json", {
+    batch_job_queue_arn        = aws_batch_job_queue.chai_q_queue.arn
+    batch_job_definition_arn   = aws_batch_job_definition.chai_q_worker_def.arn
+    aggregator_lambda_arn      = aws_lambda_function.aggregator.arn
+    mark_lab_failed_lambda_arn = aws_lambda_function.mark_lab_failed.arn
+    ctx_bitrate                = "$.bitrate"
+    ctx_codec                  = "$.codec"
+    ctx_resolution             = "$.resolution"
+    ctx_s3_url                 = "$$.Execution.Input.s3_url"
+    ctx_episode_id             = "$$.Execution.Input.episode_id"
+  })
+}

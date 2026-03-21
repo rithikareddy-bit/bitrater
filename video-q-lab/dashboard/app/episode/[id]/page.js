@@ -94,13 +94,16 @@ export default function EpisodePage() {
       )
     : null;
 
-  /* Fallback: if golden_recipes hasn't arrived yet, pick the H.265 winner from research */
+  /* Fallback: if golden_recipes hasn't arrived yet, pick winner from research (prefer H.265, then H.264) */
   if (!goldenRow && research.length > 0) {
-    const resRows = research.filter((r) => r.resolution === selectedRes && r.codec === 'libx265');
-    if (resRows.length > 0) {
-      const sorted = [...resRows].sort((a, b) => a.bitrate_kbps - b.bitrate_kbps);
-      const above = sorted.filter((r) => r.vmaf_score >= vmafThreshold);
-      goldenRow = above.length > 0 ? above[0] : sorted.reduce((a, b) => (a.vmaf_score >= b.vmaf_score ? a : b));
+    for (const codec of ['libx265', 'libx264']) {
+      const resRows = research.filter((r) => r.resolution === selectedRes && r.codec === codec);
+      if (resRows.length > 0) {
+        const sorted = [...resRows].sort((a, b) => a.bitrate_kbps - b.bitrate_kbps);
+        const above = sorted.filter((r) => r.vmaf_score >= vmafThreshold);
+        goldenRow = above.length > 0 ? above[0] : sorted.reduce((a, b) => (a.vmaf_score >= b.vmaf_score ? a : b));
+        break;
+      }
     }
   }
 

@@ -1,9 +1,9 @@
 """
-State 2 of GCP-Orchestrator: Build a dual-codec GCP Transcoder JobConfig
+State 2 of GCP-Orchestrator: Build a codec-specific GCP Transcoder JobConfig
 from golden_recipes and submit the job.
 
-Produces six video ElementaryStreams (3 H.264 + 3 H.265), one shared audio
-stream, six MuxStreams, and two HLS manifests (h264_master / h265_master).
+When codec=h264: produces only H.264 streams and h264_master.m3u8.
+When codec=h265: produces only H.265 streams and h265_master.m3u8.
 """
 
 import os
@@ -80,51 +80,81 @@ def _build_h265_video_stream(res_tag, bitrate_kbps, width, height):
     )
 
 
-def _build_job_config(gcs_input_uri, golden_recipes, output_uri):
-    """Construct a full GCP Transcoder JobConfig from golden_recipes."""
+def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec):
+    """Construct a GCP Transcoder JobConfig for the requested codec."""
     resolutions_data = golden_recipes["resolutions"]
 
     elementary_streams = []
     mux_streams = []
-    h264_mux_keys = []
-    h265_mux_keys = []
+    manifests = []
 
-    for res_tag in RESOLUTIONS:
-        width, height = PORTRAIT_DIMS[res_tag]
-        res_recipes = resolutions_data.get(res_tag, {})
+    codec_lower = (codec or "h265").lower()
 
-        h264_recipe = res_recipes.get("h264")
-        if h264_recipe:
-            elementary_streams.append(
-                _build_h264_video_stream(res_tag, h264_recipe["bitrate_kbps"], width, height)
-            )
-            mux_key = f"mux_{res_tag}_h264"
-            mux_streams.append(types.MuxStream(
-                key=mux_key,
-                container="ts",
-                elementary_streams=[f"{res_tag}_h264", "audio_aac"],
-                segment_settings=types.SegmentSettings(
-                    segment_duration=duration_pb2.Duration(seconds=2),
-                ),
-            ))
-            h264_mux_keys.append(mux_key)
+    if codec_lower == "h264":
+        h264_mux_keys = []
+        for res_tag in RESOLUTIONS:
+            width, height = PORTRAIT_DIMS[res_tag]
+            res_recipes = resolutions_data.get(res_tag, {})
+            h264_recipe = res_recipes.get("h264")
+            if h264_recipe:
+                elementary_streams.append(
+                    _build_h264_video_stream(res_tag, h264_recipe["bitrate_kbps"], width, height)
+                )
+                mux_key = f"mux_{res_tag}_h264"
+                mux_streams.append(types.MuxStream(
+                    key=mux_key,
+                    container="ts",
+                    elementary_streams=[f"{res_tag}_h264", "audio_aac"],
+                    segment_settings=types.SegmentSettings(
+                        segment_duration=duration_pb2.Duration(seconds=2),
+                    ),
+                ))
+                h264_mux_keys.append(mux_key)
+        manifests = [
+            types.Manifest(
+                file_name="h264_master.m3u8",
+                type_=types.Manifest.ManifestType.HLS,
+                mux_streams=h264_mux_keys,
+            ),
+        ]
 
-        h265_recipe = res_recipes.get("h265")
-        if h265_recipe:
-            elementary_streams.append(
-                _build_h265_video_stream(res_tag, h265_recipe["bitrate_kbps"], width, height)
-            )
-            # fmp4 requires exactly one stream per mux — video and audio are separate
-            video_mux_key = f"mux_{res_tag}_h265_video"
-            mux_streams.append(types.MuxStream(
-                key=video_mux_key,
-                container="fmp4",
-                elementary_streams=[f"{res_tag}_h265"],
-                segment_settings=types.SegmentSettings(
-                    segment_duration=duration_pb2.Duration(seconds=2),
-                ),
-            ))
-            h265_mux_keys.append(video_mux_key)
+    else:
+        h265_mux_keys = []
+        h265_audio_mux_key = "mux_h265_audio"
+        for res_tag in RESOLUTIONS:
+            width, height = PORTRAIT_DIMS[res_tag]
+            res_recipes = resolutions_data.get(res_tag, {})
+            h265_recipe = res_recipes.get("h265")
+            if h265_recipe:
+                elementary_streams.append(
+                    _build_h265_video_stream(res_tag, h265_recipe["bitrate_kbps"], width, height)
+                )
+                video_mux_key = f"mux_{res_tag}_h265_video"
+                mux_streams.append(types.MuxStream(
+                    key=video_mux_key,
+                    container="fmp4",
+                    elementary_streams=[f"{res_tag}_h265"],
+                    segment_settings=types.SegmentSettings(
+                        segment_duration=duration_pb2.Duration(seconds=2),
+                    ),
+                ))
+                h265_mux_keys.append(video_mux_key)
+
+        mux_streams.append(types.MuxStream(
+            key=h265_audio_mux_key,
+            container="fmp4",
+            elementary_streams=["audio_aac"],
+            segment_settings=types.SegmentSettings(
+                segment_duration=duration_pb2.Duration(seconds=2),
+            ),
+        ))
+        manifests = [
+            types.Manifest(
+                file_name="h265_master.m3u8",
+                type_=types.Manifest.ManifestType.HLS,
+                mux_streams=h265_mux_keys + [h265_audio_mux_key],
+            ),
+        ]
 
     audio_stream = types.ElementaryStream(
         key="audio_aac",
@@ -136,30 +166,6 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri):
         ),
     )
     elementary_streams.append(audio_stream)
-
-    # Shared audio-only fmp4 mux for H.265 (one audio track serves all resolutions)
-    h265_audio_mux_key = "mux_h265_audio"
-    mux_streams.append(types.MuxStream(
-        key=h265_audio_mux_key,
-        container="fmp4",
-        elementary_streams=["audio_aac"],
-        segment_settings=types.SegmentSettings(
-            segment_duration=duration_pb2.Duration(seconds=2),
-        ),
-    ))
-
-    manifests = [
-        types.Manifest(
-            file_name="h264_master.m3u8",
-            type_=types.Manifest.ManifestType.HLS,
-            mux_streams=h264_mux_keys,
-        ),
-        types.Manifest(
-            file_name="h265_master.m3u8",
-            type_=types.Manifest.ManifestType.HLS,
-            mux_streams=h265_mux_keys + [h265_audio_mux_key],
-        ),
-    ]
 
     return types.JobConfig(
         inputs=[types.Input(key="input0", uri=gcs_input_uri)],
@@ -174,6 +180,7 @@ def handler(event, context):
     episode_id = event["episode_id"]
     gcs_input_uri = event["gcs_input_uri"]
     golden_recipes = event["golden_recipes"]
+    codec = event.get("codec", "h265")
     mongo_uri = os.environ["MONGO_URI"]
 
     gcp_project = os.environ["GCP_PROJECT"]
@@ -182,7 +189,7 @@ def handler(event, context):
 
     output_uri = f"gs://{gcs_output_bucket}/{episode_id}/"
 
-    job_config = _build_job_config(gcs_input_uri, golden_recipes, output_uri)
+    job_config = _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec)
 
     creds = _get_gcp_credentials()
     client = transcoder_v1.TranscoderServiceClient(credentials=creds)
@@ -192,14 +199,16 @@ def handler(event, context):
     response = client.create_job(parent=parent, job=job)
     job_name = response.name
 
-    print(f"[OK] Submitted GCP Transcoder job: {job_name}")
+    print(f"[OK] Submitted GCP Transcoder job: {job_name} (codec={codec})")
 
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
+    codec_key = f"gcp_job_status_{codec}"
+    job_name_key = f"gcp_job_name_{codec}"
     db.video_episodes.update_one(
         {"episode_id": episode_id},
         {"$set": {
-            "gcp_job_status": "RUNNING",
-            "gcp_job_name": job_name,
+            codec_key: "RUNNING",
+            job_name_key: job_name,
         }},
     )
 
@@ -208,4 +217,5 @@ def handler(event, context):
         "gcp_job_name": job_name,
         "golden_recipes": golden_recipes,
         "output_uri": output_uri,
+        "codec": codec,
     }

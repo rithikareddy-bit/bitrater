@@ -2,11 +2,12 @@
 State 6 of GCP-Orchestrator: FinalizeHLS
 
 After the GCP Transcoder job succeeds:
-1. Copy transcoder output from GCS output bucket to CDN bucket
-2. Fetch subtitle VTT URLs from subtitle MongoDB, download, upload to GCS
-3. Generate per-language subtitle .m3u8 playlists
-4. Patch master m3u8 manifests (h264 + h265) with subtitle track entries
-5. Write final CDN URLs to MongoDB
+1. Clear only this codec's files from CDN bucket
+2. Copy transcoder output (codec-specific) from GCS to CDN
+3. Fetch subtitle VTT URLs, upload to GCS, generate subtitle playlists
+4. Patch only this codec's master m3u8 with subtitle track entries
+5. Write only this codec's CDN URL to MongoDB
+6. Return both URL keys (null for codec not produced)
 """
 
 import os
@@ -146,6 +147,10 @@ def _patch_master_manifest(creds, episode_id, manifest_name, subtitle_tracks):
     bucket = client.bucket(CDN_BUCKET)
     blob = bucket.blob(f"{episode_id}/{manifest_name}")
 
+    if not blob.exists():
+        print(f"[PATCH] Skipping {manifest_name} — does not exist")
+        return
+
     original = blob.download_as_text()
     lines = original.strip().split("\n")
 
@@ -178,20 +183,29 @@ def _patch_master_manifest(creds, episode_id, manifest_name, subtitle_tracks):
 
 
 # ---------------------------------------------------------------------------
-# Clear stale CDN bucket objects + copy transcoder output
+# Clear codec-specific CDN files + copy transcoder output
 # ---------------------------------------------------------------------------
 
-def _clear_cdn_bucket(creds, episode_id):
-    """Delete all existing objects for this episode in the CDN bucket before re-copy."""
+def _codec_filename_pattern(codec):
+    """Blob names that belong to this codec."""
+    if codec == "h264":
+        return "h264"
+    return "h265"
+
+
+def _clear_cdn_bucket_codec(creds, episode_id, codec):
+    """Delete only this codec's objects for this episode in the CDN bucket."""
+    pattern = _codec_filename_pattern(codec)
     client = gcs.Client(credentials=creds)
     bucket = client.bucket(CDN_BUCKET)
     prefix = f"{episode_id}/"
     blobs = list(bucket.list_blobs(prefix=prefix))
-    if blobs:
-        bucket.delete_blobs(blobs)
-        print(f"[CLEAR] Deleted {len(blobs)} old objects from gs://{CDN_BUCKET}/{prefix}")
+    to_delete = [b for b in blobs if pattern in b.name]
+    if to_delete:
+        bucket.delete_blobs(to_delete)
+        print(f"[CLEAR] Deleted {len(to_delete)} {codec} objects from gs://{CDN_BUCKET}/{prefix}")
     else:
-        print(f"[CLEAR] No existing objects in gs://{CDN_BUCKET}/{prefix}")
+        print(f"[CLEAR] No existing {codec} objects in gs://{CDN_BUCKET}/{prefix}")
 
 
 def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id):
@@ -210,19 +224,19 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id):
     print(f"[COPY] Copied {len(blobs)} objects to gs://{CDN_BUCKET}/{prefix}")
 
 
-def _fix_audio_name(creds, episode_id, slug):
-    """Replace placeholder audio NAME in master manifests with the episode slug."""
+def _fix_audio_name(creds, episode_id, slug, codec):
+    """Replace placeholder audio NAME in the codec's master manifest."""
+    manifest_name = f"{codec}_master.m3u8"
     client = gcs.Client(credentials=creds)
     bucket = client.bucket(CDN_BUCKET)
-    for manifest_name in ("h264_master.m3u8", "h265_master.m3u8"):
-        blob = bucket.blob(f"{episode_id}/{manifest_name}")
-        if not blob.exists():
-            continue
-        text = blob.download_as_text()
-        patched = text.replace('NAME="Test Language"', f'NAME="{slug}"')
-        if patched != text:
-            blob.upload_from_string(patched, content_type="application/x-mpegURL")
-            print(f"[PATCH] Fixed audio NAME to '{slug}' in {manifest_name}")
+    blob = bucket.blob(f"{episode_id}/{manifest_name}")
+    if not blob.exists():
+        return
+    text = blob.download_as_text()
+    patched = text.replace('NAME="Test Language"', f'NAME="{slug}"')
+    if patched != text:
+        blob.upload_from_string(patched, content_type="application/x-mpegURL")
+        print(f"[PATCH] Fixed audio NAME to '{slug}' in {manifest_name}")
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +246,7 @@ def _fix_audio_name(creds, episode_id, slug):
 def handler(event, context):
     episode_id = event["episode_id"]
     output_uri = event["output_uri"]
+    codec = event.get("codec", "h265")
     mongo_uri = os.environ["MONGO_URI"]
     gcs_output_bucket = os.environ["GCS_OUTPUT_BUCKET"]
 
@@ -241,18 +256,18 @@ def handler(event, context):
     episode_slug, _ = _get_episode_meta(db, episode_id)
 
     creds = _get_gcp_credentials()
-    _clear_cdn_bucket(creds, episode_id)
+    _clear_cdn_bucket_codec(creds, episode_id, codec)
     _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id)
-    _fix_audio_name(creds, episode_id, episode_slug)
+    _fix_audio_name(creds, episode_id, episode_slug, codec)
 
-    # --- Subtitle pipeline ---
+    # --- Subtitle pipeline (only for this codec's manifest) ---
     vtt_urls = _get_subtitle_vtt_urls(episode_id)
     subtitle_tracks = []
     if vtt_urls:
         try:
             subtitle_tracks = _upload_subtitles_to_gcs(creds, episode_id, vtt_urls)
-            _patch_master_manifest(creds, episode_id, "h264_master.m3u8", subtitle_tracks)
-            _patch_master_manifest(creds, episode_id, "h265_master.m3u8", subtitle_tracks)
+            manifest_name = f"{codec}_master.m3u8"
+            _patch_master_manifest(creds, episode_id, manifest_name, subtitle_tracks)
         except Exception as e:
             print(f"[SUBS] Subtitle injection failed (non-fatal): {e}")
             db.video_episodes.update_one(
@@ -263,23 +278,36 @@ def handler(event, context):
                 }},
             )
 
-    h264_url = f"{CDN_BASE}/{gcs_prefix}/h264_master.m3u8"
-    h265_url = f"{CDN_BASE}/{gcs_prefix}/h265_master.m3u8"
+    url_value = f"{CDN_BASE}/{gcs_prefix}/{codec}_master.m3u8"
+    now_iso = datetime.now(timezone.utc).isoformat()
 
+    url_key = f"{codec}_master_m3u8_url"
+    update = {
+        "gcp_job_status": "SUCCEEDED",
+        "gcp_finished_at": now_iso,
+        url_key: url_value,
+        "subtitles_injected": len(subtitle_tracks),
+    }
     db.video_episodes.update_one(
         {"episode_id": episode_id},
-        {"$set": {
-            "gcp_job_status": "SUCCEEDED",
-            "gcp_finished_at": datetime.now(timezone.utc).isoformat(),
-            "h264_master_m3u8_url": h264_url,
-            "h265_master_m3u8_url": h265_url,
-            "subtitles_injected": len(subtitle_tracks),
-        }},
+        {"$set": update},
     )
 
-    print(f"[OK] Finalized HLS for {episode_id}")
-    print(f"  H.264: {h264_url}")
-    print(f"  H.265: {h265_url}")
+    h264_url = url_value if codec == "h264" else None
+    h265_url = url_value if codec == "h265" else None
+
+    # Preserve existing URL for the other codec when $set
+    existing = db.video_episodes.find_one(
+        {"episode_id": episode_id},
+        {"h264_master_m3u8_url": 1, "h265_master_m3u8_url": 1},
+    )
+    if codec == "h264":
+        h265_url = existing.get("h265_master_m3u8_url")
+    else:
+        h264_url = existing.get("h264_master_m3u8_url")
+
+    print(f"[OK] Finalized HLS for {episode_id} (codec={codec})")
+    print(f"  {codec.upper()}: {url_value}")
     print(f"  Subtitles: {len(subtitle_tracks)} tracks")
 
     return {

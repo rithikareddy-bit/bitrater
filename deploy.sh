@@ -90,8 +90,21 @@ echo "========================================"
 
 cd aws-infra
 
-echo "[2a] Cleaning old Lambda layers (will be rebuilt via Docker for Linux x86_64)..."
-rm -rf .pymongo-layer .pymongo-layer.zip .gcp-layer .gcp-layer.zip
+echo "[2a] Building Lambda layers if missing (pymongo, gcp deps)..."
+if [ ! -d .pymongo-layer ]; then
+  mkdir -p .pymongo-layer/python
+  docker run --rm --platform linux/amd64 --entrypoint pip \
+    -v "$(pwd)/.pymongo-layer/python:/out" \
+    public.ecr.aws/lambda/python:3.11 \
+    install "pymongo[srv]==4.6.1" -t /out --quiet
+fi
+if [ ! -d .gcp-layer ]; then
+  mkdir -p .gcp-layer/python
+  docker run --rm --platform linux/amd64 --entrypoint pip \
+    -v "$(pwd)/.gcp-layer/python:/out" \
+    public.ecr.aws/lambda/python:3.11 \
+    install "google-cloud-video-transcoder>=1.0.0" "google-cloud-storage>=2.0.0" "pymongo[srv]==4.6.1" "requests>=2.31.0" -t /out --quiet
+fi
 
 terraform init -upgrade
 

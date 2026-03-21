@@ -41,13 +41,32 @@ def handler(event, context):
             "params": winner["params"],
         }
 
+    # Use codec from SFN input when present; fallback to inference for legacy single-codec runs
+    codec_from_event = event.get("codec")
+    if codec_from_event in ("h264", "h265"):
+        codec_inferred = codec_from_event
+    else:
+        codecs_present = {r["codec"] for r in results}
+        codec_inferred = "h264" if "libx264" in codecs_present else "h265"
+
+    existing = db.video_episodes.find_one(
+        {"episode_id": episode_id},
+        {"golden_recipes": 1, "efficiency_gain": 1},
+    )
+    existing_resolutions = (
+        existing.get("golden_recipes", {}).get("resolutions", {})
+        if existing else {}
+    )
+    existing_efficiency = existing.get("efficiency_gain", {}) or {}
+
+    set_op = {}
+    efficiency_gain = dict(existing_efficiency)
     resolutions_data = {}
-    efficiency_gain = {}
 
     for res in RESOLUTIONS:
         threshold = VMAF_THRESHOLDS[res]
         res_results = [r for r in results if r.get("resolution") == res]
-        codec_winners = {}
+        codec_winners = dict(existing_resolutions.get(res, {}))
 
         for codec in CODECS:
             codec_key = "h265" if codec == "libx265" else "h264"
@@ -55,6 +74,7 @@ def handler(event, context):
             winner = find_winner(subset, threshold)
             if winner:
                 codec_winners[codec_key] = winner
+                set_op[f"golden_recipes.resolutions.{res}.{codec_key}"] = winner
 
         resolutions_data[res] = codec_winners
 
@@ -66,15 +86,15 @@ def handler(event, context):
         else:
             efficiency_gain[res] = "N/A"
 
+    now_iso = datetime.now(timezone.utc).isoformat()
+    set_op["status"] = "ANALYSIS_COMPLETE"
+    set_op[f"lab_status_{codec_inferred}"] = "COMPLETE"
+    set_op[f"lab_finished_at_{codec_inferred}"] = now_iso
+    set_op["efficiency_gain"] = efficiency_gain
+
     db.video_episodes.update_one(
         {"episode_id": episode_id},
-        {"$set": {
-            "status": "ANALYSIS_COMPLETE",
-            "lab_status": "COMPLETE",
-            "lab_finished_at": datetime.now(timezone.utc).isoformat(),
-            "golden_recipes": {"resolutions": resolutions_data},
-            "efficiency_gain": efficiency_gain,
-        }},
+        {"$set": set_op},
         upsert=True,
     )
 

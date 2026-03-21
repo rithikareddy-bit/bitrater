@@ -6,10 +6,13 @@ const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 export async function POST(request) {
   try {
-    const { episodeId } = await request.json();
+    const { episodeId, codec } = await request.json();
 
     if (!episodeId) {
       return NextResponse.json({ error: 'episodeId is required' }, { status: 400 });
+    }
+    if (!codec || !['h264', 'h265'].includes(codec)) {
+      return NextResponse.json({ error: 'codec must be "h264" or "h265"' }, { status: 400 });
     }
 
     const gcpSfnArn = process.env.GCP_SFN_ARN;
@@ -37,9 +40,10 @@ export async function POST(request) {
 
     const resolutions = goldenRecipes.resolutions;
     for (const res of ['1080p', '720p', '480p']) {
-      if (!resolutions[res]?.h264 || !resolutions[res]?.h265) {
+      const recipe = resolutions[res]?.[codec];
+      if (!recipe) {
         return NextResponse.json(
-          { error: `Incomplete lab results for ${res} — both H.264 and H.265 winners required` },
+          { error: `Missing ${codec.toUpperCase()} golden recipe for ${res} — run the lab first` },
           { status: 400 },
         );
       }
@@ -54,6 +58,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'No s3_url found for this episode' }, { status: 400 });
     }
 
+    const urlKey = codec === 'h264' ? 'h264_master_m3u8_url' : 'h265_master_m3u8_url';
     await labDb.collection('video_episodes').updateOne(
       { episode_id: episodeId },
       {
@@ -64,10 +69,7 @@ export async function POST(request) {
           gcp_finished_at: null,
           gcp_job_name: null,
         },
-        $unset: {
-          h264_master_m3u8_url: '',
-          h265_master_m3u8_url: '',
-        },
+        $unset: { [urlKey]: '' },
       },
     );
 
@@ -75,6 +77,7 @@ export async function POST(request) {
       episode_id: episodeId,
       s3_url: s3Url,
       golden_recipes: goldenRecipes,
+      codec,
     });
 
     const cmd = new StartExecutionCommand({ stateMachineArn: gcpSfnArn, input });
