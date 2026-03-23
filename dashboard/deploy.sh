@@ -13,8 +13,9 @@ aws ecr get-login-password --region us-east-1 | \
   docker login --username AWS --password-stdin "$ECR_URL"
 
 echo "==> Building dashboard image (linux/amd64)..."
-cd "$SCRIPT_DIR"
-docker build --platform linux/amd64 -t chai-q-dashboard .
+# Dockerfile uses COPY dashboard/... — build context must be repo root (bitrater/), not dashboard/
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+docker build --platform linux/amd64 -f "$SCRIPT_DIR/Dockerfile" -t chai-q-dashboard "$REPO_ROOT"
 
 echo "==> Pushing to ECR..."
 docker tag chai-q-dashboard:latest "$ECR_URL:latest"

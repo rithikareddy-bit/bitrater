@@ -2,6 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { resolveShowPosterUrl } from '@/lib/posterUrl';
+import {
+  getCachedShow,
+  setCachedShow,
+  getCachedEpisodeStatus,
+  fetchEpisodeStatus,
+} from '@/lib/catalogSessionCache';
 
 const STATUS_COLORS = {
   DONE: '#22c55e',
@@ -10,18 +17,96 @@ const STATUS_COLORS = {
   'NOT RUN': '#555',
 };
 
+const PAGE_SIZE = 24;
+
+function formatShowTimestamp(show) {
+  const updated = show.updatedAt ?? show.updated_at;
+  const created = show.createdAt ?? show.created_at;
+  const raw = updated ?? created;
+  if (!raw) return null;
+  const label = updated ? 'Updated' : 'Added';
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return `${label} ${raw}`;
+  return `${label} ${d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+}
+
+function mergeListShowWithDetail(full, prev) {
+  return {
+    ...full,
+    episodeCount: full.episodes?.length ?? prev.episodeCount,
+    posterUrl: full.posterUrl ?? prev.posterUrl,
+    updatedAt: full.updatedAt ?? prev.updatedAt,
+    createdAt: full.createdAt ?? prev.createdAt,
+  };
+}
+
 export default function ShowsPage() {
   const [shows, setShows] = useState([]);
   const [expanded, setExpanded] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch('/api/shows')
+    fetch(`/api/shows?limit=${PAGE_SIZE}&skip=0`)
       .then((r) => r.json())
-      .then((data) => { setShows(data); setLoading(false); })
+      .then((data) => {
+        if (data.error) {
+          setError(data.error);
+          return;
+        }
+        setShows(data.shows || []);
+        setHasMore(Boolean(data.hasMore));
+        setLoading(false);
+      })
       .catch(() => { setError('Failed to load shows'); setLoading(false); });
   }, []);
+
+  function loadMore() {
+    setLoadingMore(true);
+    fetch(`/api/shows?limit=${PAGE_SIZE}&skip=${shows.length}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) return;
+        setShows((prev) => [...prev, ...(data.shows || [])]);
+        setHasMore(Boolean(data.hasMore));
+      })
+      .finally(() => setLoadingMore(false));
+  }
+
+  async function toggleExpand(show) {
+    const id = show._id;
+    const idStr = String(id);
+    const closing = expanded === id;
+    setExpanded(closing ? null : id);
+    if (closing) return;
+
+    const count =
+      show.episodeCount ?? show.episode_count ?? (show.episodes || []).length;
+    const hasEpisodesLoaded = Array.isArray(show.episodes) && show.episodes.length > 0;
+    if (count === 0 || hasEpisodesLoaded) return;
+
+    const cached = getCachedShow(idStr);
+    if (cached) {
+      setShows((prev) =>
+        prev.map((s) => (String(s._id) === idStr ? mergeListShowWithDetail(cached, s) : s))
+      );
+      return;
+    }
+
+    try {
+      const r = await fetch(`/api/shows/${idStr}`);
+      const full = await r.json();
+      if (full.error) return;
+      setCachedShow(idStr, full);
+      setShows((prev) =>
+        prev.map((s) => (String(s._id) === idStr ? mergeListShowWithDetail(full, s) : s))
+      );
+    } catch {
+      /* keep card without episodes */
+    }
+  }
 
   if (loading) return <p style={{ color: '#888' }}>Loading shows...</p>;
   if (error) return <p style={{ color: '#f87171' }}>{error}</p>;
@@ -30,8 +115,18 @@ export default function ShowsPage() {
   return (
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 20 }}>Show Catalog</h1>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16 }}>
-        {shows.map((show) => (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 16 }}>
+        {shows.map((show) => {
+          const cardImage = show.posterUrl || resolveShowPosterUrl(show) || show.thumbnail;
+          const dateLine = formatShowTimestamp(show);
+          const posterFrame = {
+            width: '100%',
+            aspectRatio: '9 / 16',
+            background: '#1e1e1e',
+            overflow: 'hidden',
+            position: 'relative',
+          };
+          return (
           <div key={show._id} style={{
             background: '#161616',
             border: expanded === show._id ? '1px solid #4da6ff' : '1px solid #2a2a2a',
@@ -40,31 +135,53 @@ export default function ShowsPage() {
             cursor: 'pointer',
             transition: 'border-color 0.2s',
           }}>
-            {show.thumbnail && (
-              <img
-                src={show.thumbnail}
-                alt={show.title}
-                style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block' }}
-              />
-            )}
-            {!show.thumbnail && (
-              <div style={{
-                width: '100%', height: 130,
-                background: '#1e1e1e',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: '#444', fontSize: 13,
-              }}>
-                No thumbnail
-              </div>
-            )}
+            <div style={posterFrame}>
+              {cardImage ? (
+                <img
+                  src={cardImage}
+                  alt={show.title}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    display: 'block',
+                  }}
+                />
+              ) : (
+                <div style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#444',
+                  fontSize: 13,
+                }}>
+                  No thumbnail
+                </div>
+              )}
+            </div>
             <div
               style={{ padding: '12px 14px' }}
-              onClick={() => setExpanded(expanded === show._id ? null : show._id)}
+              onClick={() => toggleExpand(show)}
             >
               <div style={{ fontWeight: 600, fontSize: 15 }}>{show.title || 'Untitled Show'}</div>
               <div style={{ color: '#888', fontSize: 12, marginTop: 4 }}>
-                {(show.episodes || []).length} episode{(show.episodes || []).length !== 1 ? 's' : ''}
+                {(() => {
+                  const n =
+                    show.episodeCount ??
+                    show.episode_count ??
+                    (show.episodes || []).length;
+                  return `${n} episode${n !== 1 ? 's' : ''}`;
+                })()}
               </div>
+              {dateLine && (
+                <div style={{ color: '#666', fontSize: 11, marginTop: 6 }}>
+                  {dateLine}
+                </div>
+              )}
             </div>
 
             {expanded === show._id && (
@@ -78,8 +195,29 @@ export default function ShowsPage() {
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
+      {hasMore && (
+        <div style={{ marginTop: 24, textAlign: 'center' }}>
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            style={{
+              padding: '10px 20px',
+              borderRadius: 8,
+              border: '1px solid #333',
+              background: '#1a1a1a',
+              color: '#e8e8e8',
+              cursor: loadingMore ? 'wait' : 'pointer',
+              fontSize: 14,
+            }}
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -90,16 +228,19 @@ function EpisodeRow({ episode }) {
 
   useEffect(() => {
     if (!epId) return;
-    fetch(`/api/status/${epId}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.labStatus === 'FAILED') setStatus('FAILED');
-        else if (d.succeeded >= d.total) setStatus('DONE');
-        else if (d.failed > 0 && d.succeeded + d.failed >= d.total) setStatus('FAILED');
-        else if (d.succeeded > 0 || d.running > 0 || d.labStatus === 'RUNNING') setStatus('PENDING');
-        else setStatus('NOT RUN');
-      })
-      .catch(() => setStatus('NOT RUN'));
+    const cached = getCachedEpisodeStatus(epId);
+    if (cached !== undefined) {
+      setStatus(cached);
+      return;
+    }
+    setStatus(null);
+    let cancelled = false;
+    fetchEpisodeStatus(epId).then((s) => {
+      if (!cancelled) setStatus(s);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [epId]);
 
   const label = status || '...';
