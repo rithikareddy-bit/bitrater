@@ -22,7 +22,7 @@ PORTRAIT_DIMS = {
     "480p":  (480, 854),
 }
 
-RESOLUTIONS = ["1080p", "720p", "480p"]
+RESOLUTIONS = ["720p", "480p", "1080p"]
 
 
 def _get_gcp_credentials():

@@ -14,6 +14,9 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [status, setStatus] = useState(null);
   const [pushing, setPushing] = useState(null);
   const [pushError, setPushError] = useState(null);
+  const [combining, setCombining] = useState(false);
+  const [combineError, setCombineError] = useState(null);
+  const [combinedUrl, setCombinedUrl] = useState(null);
   const pollingRef = useRef(null);
 
   const resolutions = goldenRecipes?.resolutions;
@@ -63,6 +66,25 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
     } catch (err) {
       setPushError(err.message);
       setPushing(null);
+    }
+  };
+
+  const handleCreateCombined = async () => {
+    setCombining(true);
+    setCombineError(null);
+    try {
+      const res = await fetch('/api/create-combined-master', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodeId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create combined URL');
+      setCombinedUrl(data.combined_master_m3u8_url);
+    } catch (err) {
+      setCombineError(err.message);
+    } finally {
+      setCombining(false);
     }
   };
 
@@ -167,11 +189,54 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         >
           {pushing === 'h265' ? <><Spinner /> Running…</> : '▶ Run GCP H.265'}
         </button>
+
+        {/* Combined master URL button — enabled only when both codec URLs are ready */}
+        {(() => {
+          const canCombine =
+            !!status?.h264_master_m3u8_url &&
+            !!status?.h265_master_m3u8_url &&
+            !combining;
+          return (
+            <button
+              onClick={handleCreateCombined}
+              disabled={!canCombine}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                background: canCombine ? '#0e7490' : '#1e1e1e',
+                color: canCombine ? '#fff' : '#555',
+                border: 'none', borderRadius: 8, padding: '10px 20px',
+                fontSize: 14, fontWeight: 600,
+                cursor: canCombine ? 'pointer' : 'not-allowed',
+                transition: 'background 0.2s', width: '100%', justifyContent: 'center',
+                marginTop: 4,
+              }}
+            >
+              {combining ? <><Spinner /> Creating…</> : '⊕ Create Combined Master URL'}
+            </button>
+          );
+        })()}
       </div>
 
       {pushError && (
         <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
           Error: {pushError}
+        </div>
+      )}
+
+      {combineError && (
+        <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
+          Combined URL error: {combineError}
+        </div>
+      )}
+
+      {combinedUrl && (
+        <div style={{
+          marginTop: 10, padding: '8px 12px',
+          background: '#0c2233', border: '1px solid #0e7490',
+          borderRadius: 6, fontSize: 12, wordBreak: 'break-all',
+        }}>
+          <strong style={{ color: '#22d3ee' }}>Combined (H264 + H265):</strong>{' '}
+          <span style={{ color: '#e2e8f0' }}>{combinedUrl}</span>
         </div>
       )}
     </div>

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-batch": "^3.614.0",
+    "@aws-sdk/client-lambda": "^3.614.0",
     "@aws-sdk/client-sfn": "^3.614.0",
     "chart.js": "^4.4.3",
     "mongodb": "^6.8.0",
@@ -20,6 +21,10 @@
   },
   "devDependencies": {
     "eslint": "^8",
-    "eslint-config-next": "14.2.5"
+    "eslint-config-next": "14.2.35"
+  },
+  "overrides": {
+    "minimatch": "^9.0.8",
+    "glob": "^10.5.0"
   }
 }

@@ -224,6 +224,60 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id):
     print(f"[COPY] Copied {len(blobs)} objects to gs://{CDN_BUCKET}/{prefix}")
 
 
+_RESOLUTION_ORDER = {"720p": 0, "480p": 1, "1080p": 2}
+
+def _resolution_rank(stream_inf_line):
+    """Return sort key for a #EXT-X-STREAM-INF line based on RESOLUTION= attribute."""
+    import re
+    m = re.search(r'RESOLUTION=(\d+)x(\d+)', stream_inf_line)
+    if not m:
+        return 99
+    width = int(m.group(1))
+    if width <= 480:
+        tag = "480p"
+    elif width <= 720:
+        tag = "720p"
+    else:
+        tag = "1080p"
+    return _RESOLUTION_ORDER.get(tag, 99)
+
+
+def _reorder_streams_in_manifest(creds, episode_id, manifest_name):
+    """Download manifest, reorder #EXT-X-STREAM-INF blocks to 720p→480p→1080p, re-upload."""
+    client = gcs.Client(credentials=creds)
+    bucket = client.bucket(CDN_BUCKET)
+    blob = bucket.blob(f"{episode_id}/{manifest_name}")
+    if not blob.exists():
+        print(f"[REORDER] {manifest_name} not found, skipping")
+        return
+
+    text = blob.download_as_text()
+    lines = text.strip().split("\n")
+
+    header = []
+    stream_blocks = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("#EXT-X-STREAM-INF"):
+            uri = lines[i + 1] if i + 1 < len(lines) else ""
+            stream_blocks.append((line, uri))
+            i += 2
+        else:
+            header.append(line)
+            i += 1
+
+    stream_blocks.sort(key=lambda b: _resolution_rank(b[0]))
+
+    reordered = list(header)
+    for inf_line, uri_line in stream_blocks:
+        reordered.append(inf_line)
+        reordered.append(uri_line)
+
+    blob.upload_from_string("\n".join(reordered) + "\n", content_type="application/x-mpegURL")
+    print(f"[REORDER] Reordered streams in {manifest_name} to 720p→480p→1080p")
+
+
 def _fix_audio_name(creds, episode_id, slug, codec):
     """Replace placeholder audio NAME in the codec's master manifest."""
     manifest_name = f"{codec}_master.m3u8"
@@ -259,6 +313,7 @@ def handler(event, context):
     _clear_cdn_bucket_codec(creds, episode_id, codec)
     _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id)
     _fix_audio_name(creds, episode_id, episode_slug, codec)
+    _reorder_streams_in_manifest(creds, episode_id, f"{codec}_master.m3u8")
 
     # --- Subtitle pipeline (only for this codec's manifest) ---
     vtt_urls = _get_subtitle_vtt_urls(episode_id)

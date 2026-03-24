@@ -114,7 +114,8 @@ terraform apply -auto-approve \
   -var="gcp_location=${GCP_LOCATION}" \
   -var="gcs_input_bucket=${GCS_INPUT_BUCKET}" \
   -var="gcs_output_bucket=${GCS_OUTPUT_BUCKET}" \
-  -var="gcp_credentials_secret_arn=${SECRET_ARN}"
+  -var="gcp_credentials_secret_arn=${SECRET_ARN}" \
+  -var="subtitle_mongo_uri=${SUBTITLE_MONGO_URI:-}"
 
 echo ""
 echo "========================================"

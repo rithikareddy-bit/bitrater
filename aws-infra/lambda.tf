@@ -301,6 +301,29 @@ resource "aws_lambda_function" "gcp_finalize" {
   }
 }
 
+# --- CreateCombinedMaster Lambda ---
+data "archive_file" "gcp_create_combined_master_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/gcp_create_combined_master.py"
+  output_path = "/tmp/chai-q-gcp-create-combined-master.zip"
+}
+
+resource "aws_lambda_function" "gcp_create_combined_master" {
+  filename         = data.archive_file.gcp_create_combined_master_zip.output_path
+  source_code_hash = data.archive_file.gcp_create_combined_master_zip.output_base64sha256
+  function_name    = "chai-q-gcp-create-combined-master"
+  role             = aws_iam_role.gcp_lambda_role.arn
+  handler          = "gcp_create_combined_master.handler"
+  runtime          = "python3.11"
+  timeout          = 120
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.gcp_deps.arn]
+
+  environment {
+    variables = local.gcp_lambda_env
+  }
+}
+
 # --- GCP-Orchestrator Step Function ---
 resource "aws_sfn_state_machine" "gcp_orchestrator" {
   name     = "GCP-Orchestrator"
