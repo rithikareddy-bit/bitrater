@@ -1,394 +1,413 @@
-# Bitrater / Chai-Q Lab — Full Process Guide
+# Bitrater Orchestrator - Current End-to-End Flow
 
-This document explains the **entire video pipeline** from raw upload to final HLS URLs. It is written so that even a beginner can follow the flow, find the important code, and understand how each piece fits together.
+This README explains the current working flow from source video to final CDN HLS URL, including:
 
----
-
-## Table of Contents
-
-1. [What This Project Does](#what-this-project-does)
-2. [End-to-End Flowchart](#end-to-end-flowchart)
-3. [Prerequisites](#prerequisites)
-4. [High-Level Architecture](#high-level-architecture)
-5. [Pipeline 1: Research (VMAF Lab)](#pipeline-1-research-vmaf-lab)
-6. [Pipeline 2: GCP Transcoder (Production HLS)](#pipeline-2-gcp-transcoder-production-hls)
-7. [Important Code Reference](#important-code-reference)
-8. [Environment Variables & Secrets](#environment-variables--secrets)
-9. [Deployment](#deployment)
-10. [How to Verify Everything Works](#how-to-verify-everything-works)
+- what VMAF means in this project,
+- which files are responsible for each stage,
+- which code points are important to read first,
+- how to run locally,
+- how to deploy based on what changed.
 
 ---
 
-## What This Project Does
+## 1) What this system does
 
-- **Input:** A source video file (e.g. MP4) uploaded to an S3 bucket (or an episode chosen from the dashboard).
-- **Research pipeline (VMAF lab):** Runs **21 encoding jobs in parallel** (different codecs, bitrates, resolutions). Each job computes VMAF quality scores. An **aggregator** picks the best bitrate per resolution/codec that meets quality thresholds and saves **golden recipes** to MongoDB.
-- **GCP pipeline:** Uses those **golden recipes** to run **Google Cloud Transcoder** and produce HLS (`.m3u8` + segments). Output is copied to a CDN bucket, subtitles are injected, and final manifest URLs are written to MongoDB.
+Bitrater has two connected pipelines:
 
-So: **Research finds the best encoding settings; GCP turns the same source into production-ready HLS using those settings.**
+1. **Research pipeline (AWS)**  
+   Runs many encode jobs, measures quality with VMAF, and writes "golden recipes" (best bitrate choice per resolution/codec) to MongoDB.
+
+2. **Production pipeline (AWS -> GCP -> CDN)**  
+   Uses those golden recipes to run GCP Transcoder, generates HLS, copies output to CDN storage, injects subtitles, and saves final `.m3u8` URLs in MongoDB.
+
+The dashboard controls both and shows per-codec status (`h264`, `h265`) for each episode.
 
 ---
 
-## End-to-End Flowchart
+## Full end-to-end flowchart
 
-The diagram below shows the full journey — from a raw video upload all the way to a player streaming HLS from the CDN.
+The diagram below is in the same box-and-branch style you shared, with explicit **H264** and **H265** paths from Lab complete to GCP final URL.
 
 ```mermaid
 flowchart TD
-    A([Source video in S3\n+ episode in MongoDB master.showcache])
+    START[Episode in dashboard<br/>from master.showcache] --> LABDECIDE{Run Lab for which codec?}
 
-    %% ── Trigger ──────────────────────────────────────────
-    A --> TR{How pipeline starts}
-    TR -->|S3 upload event| TL[lambda_trigger.py\nS3 Event Lambda]
-    TR -->|Dashboard "Run Lab" button| DA[Dashboard\nPOST /api/push]
-    TL --> SFR
-    DA --> SFR
+    LABDECIDE -->|H264| LABH264[POST /api/push<br/>codec=h264]
+    LABDECIDE -->|H265| LABH265[POST /api/push<br/>codec=h265]
 
-    %% ── Research Step Function ────────────────────────────
-    subgraph RESEARCH ["Pipeline 1 — Research / VMAF Lab  (AWS)"]
-        SFR[Chai-Q-Orchestrator\nStep Function]
-        SFR --> GL[GenerateLadder\nPass state\n→ 21 items\ncodec × bitrate × resolution]
-        GL --> PR[ParallelResearch\nMap state  MaxConcurrency: 0\n21 Batch jobs launch simultaneously]
+    LABH264 --> SFNH264[Step Function from SFN_ARN_H264]
+    LABH265 --> SFNH265[Step Function from SFN_ARN_H265]
 
-        PR --> B1[Batch Job 1\nlibx265 · 480p · 500 kbps]
-        PR --> B2[Batch Job 2\nlibx265 · 480p · 800 kbps]
-        PR --> BN[··· 19 more jobs ···]
+    SFNH264 --> BATCH264[AWS Batch research jobs<br/>libx264 ladder]
+    SFNH265 --> BATCH265[AWS Batch research jobs<br/>libx265 ladder]
 
-        B1 & B2 & BN --> RW[research-worker container\nFFmpeg 2-pass encode\n+ libvmaf quality score]
-        RW -->|VMAF score + timeline| MV[(MongoDB: chai_q_lab\nvideo_vmaf_research)]
+    BATCH264 --> VMAF[(chai_q_lab.video_vmaf_research)]
+    BATCH265 --> VMAF
 
-        MV --> AGG[aggregator.py Lambda\nCalculateGoldenRecipe\nThresholds: 1080p ≥ 88 · 720p ≥ 75 · 480p ≥ 48\nLowest bitrate that meets threshold wins]
-        AGG -->|golden_recipes\nlab_status: COMPLETE| ME[(MongoDB: chai_q_lab\nvideo_episodes)]
+    VMAF --> AGG[aggregator.py<br/>writes golden_recipes + lab_status_*]
+    AGG --> EPDB[(chai_q_lab.video_episodes)]
 
-        PR & AGG -->|on any error| MF[mark_lab_failed.py Lambda\nlab_status: FAILED]
+    SFNH264 -->|error| LABFAIL[mark_lab_failed.py<br/>lab_status_h264=FAILED]
+    SFNH265 -->|error| LABFAIL2[mark_lab_failed.py<br/>lab_status_h265=FAILED]
+    LABFAIL --> EPDB
+    LABFAIL2 --> EPDB
+
+    EPDB --> GCPBTN[User clicks Run GCP]
+    GCPBTN --> GCPSEL{Codec selected in UI}
+
+    GCPSEL -->|H264| APIGCP264[/api/gcp route.js<br/>validates h264 recipes]
+    GCPSEL -->|H265| APIGCP265[/api/gcp route.js<br/>validates h265 recipes]
+
+    APIGCP264 -->|missing selected codec recipe| ERR264[400: missing h264 golden recipe]
+    APIGCP265 -->|missing selected codec recipe| ERR265[400: missing h265 golden recipe]
+
+    APIGCP264 --> GCPSFN264[GCP-Orchestrator SFN<br/>codec=h264]
+    APIGCP265 --> GCPSFN265[GCP-Orchestrator SFN<br/>codec=h265]
+
+    subgraph GCP_H264["GCP path (H264 run)"]
+      direction TB
+      C264[gcp_copy_s3_to_gcs.py] --> T264[gcp_transcoder.py<br/>build h264-only job]
+      T264 --> P264[gcp_check_status.py loop]
+      P264 --> D264{state}
+      D264 -->|FAILED| F264[JobFailed + gcp_error_h264]
+      D264 -->|SUCCEEDED| Z264[gcp_finalize_hls.py<br/>writes h264_master_m3u8_url]
     end
 
-    %% ── Dashboard ─────────────────────────────────────────
-    subgraph DASH ["Dashboard  (AWS App Runner — Next.js 14)"]
-        DB[Dashboard UI\nRD Curve · VMAF Heatmap\nFrame Comparison · Lab Status · GCP Status]
-        MC[(MongoDB: master\nshowcache — catalog)]
-        DB <-->|show & episode list| MC
-        DB <-->|research data, golden recipes\nGCP status, HLS URLs| ME
+    subgraph GCP_H265["GCP path (H265 run)"]
+      direction TB
+      C265[gcp_copy_s3_to_gcs.py] --> T265[gcp_transcoder.py<br/>build h265-only job]
+      T265 --> P265[gcp_check_status.py loop]
+      P265 --> D265{state}
+      D265 -->|FAILED| F265[JobFailed + gcp_error_h265]
+      D265 -->|SUCCEEDED| Z265[gcp_finalize_hls.py<br/>writes h265_master_m3u8_url]
     end
 
-    ME --> DB
+    GCPSFN264 --> C264
+    GCPSFN265 --> C265
 
-    %% ── GCP Trigger ───────────────────────────────────────
-    DB -->|"Run GCP" button\nPOST /api/gcp| SFG
+    Z264 --> CDN[(cdn.chaishots.in<br/>h264 master + segments + subtitles)]
+    Z265 --> CDN2[(cdn.chaishots.in<br/>h265 master + segments + subtitles)]
 
-    %% ── GCP Step Function ─────────────────────────────────
-    subgraph GCP_SF ["Pipeline 2 — Production HLS  (AWS + GCP)"]
-        SFG[GCP-Orchestrator\nStep Function]
-
-        SFG --> CP[gcp_copy_s3_to_gcs.py Lambda\nStream S3 source → GCS input bucket\nno /tmp buffering]
-
-        CP --> TR2[gcp_transcoder.py Lambda\nBuild JobConfig from golden_recipes\n6 video streams · 1 AAC audio · 2 HLS manifests]
-
-        TR2 -->|create_job API call| GT[GCP Transcoder\nH.264 TS × 3 resolutions\nH.265 fMP4 × 3 resolutions\nAAC 128 kbps]
-
-        GT --> WT[WaitForJob\n60 s]
-        WT --> CS[gcp_check_status.py Lambda\nget_job → gcp_job_state]
-        CS -->|RUNNING| WT
-        CS -->|FAILED| JF([JobFailed\nFail state])
-
-        CS -->|SUCCEEDED| FH[gcp_finalize_hls.py Lambda\n1 Copy GCS output → CDN bucket\n2 Fetch subtitle VTTs from gld2sqs MongoDB\n3 Upload VTTs to GCS + generate subtitle playlists\n4 Patch h264_master.m3u8 + h265_master.m3u8\n5 Write CDN URLs to MongoDB]
-
-        SUB[(MongoDB: gld2sqs\nsubtitle VTT URLs)]
-        FH <-->|fetch subtitles| SUB
-
-        FH -->|h264_master_m3u8_url\nh265_master_m3u8_url\ngcp_job_status: SUCCEEDED| ME
-        FH --> CDN[GCS CDN bucket\nchai-shots-manifests\nh264_master.m3u8\nh265_master.m3u8\n+ subtitle .vtt + .m3u8]
-    end
-
-    %% ── Player ────────────────────────────────────────────
-    CDN --> PL([Player streams HLS\nhttps://cdn.chaishots.in])
+    CDN --> DONE[Playback ready]
+    CDN2 --> DONE
 ```
+
+### Legend (quick read)
+
+- Lab and GCP are both **codec-specific runs**.
+- `/api/gcp` checks only the **selected codec** recipe (`h264` or `h265`), then starts one GCP execution.
+- `gcp_finalize_hls.py` updates only that codec URL field in `video_episodes`.
 
 ---
 
-## Prerequisites
+## 2) VMAF in simple words
 
-- **AWS:** Account, CLI configured, Terraform.
-- **GCP:** Project, `gcloud` CLI, Transcoder API enabled, GCS buckets.
-- **Docker:** For building Lambda layers (Linux x86_64) and worker/dashboard images.
-- **MongoDB:** Three databases used:
-  - `master` — show/episode catalog (`showcache` collection with `s3_url`, slugs, metadata). Read by the dashboard.
-  - `chai_q_lab` — episode state, golden recipes, VMAF results, final HLS URLs (`video_vmaf_research` + `video_episodes` collections).
-  - `gld2sqs` (subtitle DB) — VTT file URLs for subtitles (optional).
+**VMAF** (Video Multi-Method Assessment Fusion) is a quality score used to compare encoded output to source quality.
 
----
+- Score range is usually interpreted like: higher = closer to source quality.
+- This project computes VMAF for each test encode in research.
+- Aggregation logic picks the **lowest bitrate that still meets threshold quality**.
+- Thresholds currently used in `orchestrator/aggregator.py`:
+  - `1080p`: `88`
+  - `720p`: `75`
+  - `480p`: `48`
 
-## High-Level Architecture
-
-```
-                    ┌─────────────────────────────────────────────────────────────────┐
-                    │                         AWS                                       │
-                    │  ┌──────────────┐     ┌──────────────────────────────────────┐   │
-                    │  │ S3 Raw Input │     │ Step Function: Chai-Q-Orchestrator   │   │
-                    │  │ (upload)    │────▶│ (Research pipeline)                  │   │
-                    │  └──────┬───────┘     │  • GenerateLadder → 21 items         │   │
-                    │         │             │  • ParallelResearch → Map → Batch    │   │
-                    │         │             │  • CalculateGoldenRecipe → Lambda    │   │
-                    │         ▼             └──────────────────┬───────────────────┘   │
-                    │  ┌──────────────┐                         │                      │
-                    │  │ Lambda       │ StartExecution           │                      │
-                    │  │ (S3 trigger) │─────────────────────────┘                      │
-                    │  └──────────────┘                                                │
-                    │         │                                                        │
-                    │         │  Golden recipes in MongoDB (chai_q_lab.video_episodes)│
-                    │         │                                                        │
-                    │  ┌──────▼───────────────────────────────────────────────────┐  │
-                    │  │ Dashboard (App Runner)                                     │  │
-                    │  │ • Start Research SFN  • Start GCP SFN  • List Batch jobs  │  │
-                    │  └──────┬───────────────────────────────────────────────────┘  │
-                    │         │ StartExecution(GCP-Orchestrator)                      │
-                    │         ▼                                                      │
-                    │  ┌──────────────────────────────────────────────────────────┐  │
-                    │  │ Step Function: GCP-Orchestrator                          │  │
-                    │  │  1. CopySourceToGCS (Lambda)  S3 → GCS                   │  │
-                    │  │  2. SubmitGCPJob (Lambda)     Create Transcoder job       │  │
-                    │  │  3. Wait 60s → CheckJobStatus (Lambda) → Choice           │  │
-                    │  │  4. SUCCEEDED → FinalizeHLS (Lambda) → CDN + subtitles    │  │
-                    │  └──────────────────────────────────────────────────────────┘  │
-                    └─────────────────────────────────────────────────────────────────┘
-                                         │
-                                         │  GCP Transcoder API
-                                         ▼
-                    ┌─────────────────────────────────────────────────────────────────┐
-                    │  GCP                                                             │
-                    │  • Transcoder job: 6 video streams (H.264 + H.265 × 3 res)     │
-                    │  • Output: gs://GCS_OUTPUT_BUCKET/{episode_id}/                  │  │
-                    │  • FinalizeHLS copies to CDN bucket, patches m3u8, writes URLs  │  │
-                    └─────────────────────────────────────────────────────────────────┘
-```
+If no bitrate crosses threshold, the fallback is: choose the candidate with highest VMAF.
 
 ---
 
-## Pipeline 1: Research (VMAF Lab)
+## 3) Current flow (seamless step-by-step)
 
-**Purpose:** Find the best bitrate per resolution and codec (H.264 / H.265) that meets VMAF quality thresholds.
+### A. Lab / Research flow
 
-**Trigger:**  
-- **Option A:** Upload a video to the S3 raw-input bucket → S3 event invokes the trigger Lambda → Lambda starts the Research Step Function.  
-- **Option B:** From the dashboard, start the Research pipeline for an episode (same Step Function, different input source).
+Trigger options:
 
-**Definition file:** `orchestrator/step_function_def.json`
+- S3 upload trigger via `orchestrator/lambda_trigger.py` (legacy entry path), or
+- dashboard API `dashboard/app/api/push/route.js` (main operational path now, per codec).
 
-### Flow (step by step)
+Main sequence:
 
-| Step | State name           | What happens |
-|------|----------------------|--------------|
-| 1    | **GenerateLadder**   | Pass state that outputs a fixed array of **21 items**. Each item has `codec`, `bitrate`, `resolution` (e.g. `libx265`, `1000`, `1080`). |
-| 2    | **ParallelResearch** | **Map** state over that array. Each iteration runs one **AWS Batch** job via `batch:submitJob.sync` (so Step Functions waits for the job to finish). |
-| 3    | (Map) **RunBatchJob** | Submits one Batch job with env vars: `BITRATE`, `CODEC`, `RESOLUTION`, `S3_URL`, `EPISODE_ID`. The Batch job runs the research worker container (FFmpeg + VMAF), writes results to MongoDB. |
-| 4    | **CalculateGoldenRecipe** | After all 21 jobs complete, a **Lambda** (aggregator) runs. It reads VMAF results from MongoDB, applies thresholds (e.g. 1080p ≥ 88, 720p ≥ 75, 480p ≥ 48), picks the lowest bitrate that meets the threshold per resolution/codec, and writes **golden_recipes** to `video_episodes`. |
-| 5    | On error              | **MarkLabFailed** Lambda updates `video_episodes` with `lab_status: FAILED`, then **LabExecutionFailed** (Fail state). |
+1. Dashboard calls `/api/push` with `episodeId`, `s3Url`, and `codec` (`h264` or `h265`).
+2. `/api/push` starts codec-specific Step Function ARN (`SFN_ARN_H264` or `SFN_ARN_H265`).
+3. Step Function runs map/batch encoding jobs.
+4. Batch worker writes VMAF rows into `chai_q_lab.video_vmaf_research`.
+5. `orchestrator/aggregator.py` selects winners and updates `chai_q_lab.video_episodes.golden_recipes`.
+6. If failed, `orchestrator/mark_lab_failed.py` updates failure fields (codec-specific when codec exists).
 
-**Concurrency:** The Map state has `MaxConcurrency: 0` (unlimited). So **all 21 jobs run in parallel**. The Batch compute environment has `max_vcpus = 84` and each job uses 4 vCPUs, so 21 jobs can run at once. Total pipeline time is roughly the duration of the **slowest** job (~1–2 hours), not 21 × that.
+Step Function files:
 
-### Important code (Research)
+- `orchestrator/step_function_def.json`
+- `orchestrator/step_function_def_h264.json`
+- `orchestrator/step_function_def_h265.json`
 
-**1. S3 trigger — start Research execution**
+### B. GCP production flow
 
-- File: `orchestrator/lambda_trigger.py`
-- On S3 upload, build `s3_url` and `episode_id`, then start the Research Step Function:
+Trigger:
 
-```python
-response = sfn.start_execution(
-    stateMachineArn=os.environ['STATE_MACHINE_ARN'],
-    input=json.dumps({
-        "s3_url": s3_url,
-        "episode_id": episode_id,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
-)
-```
+- dashboard API `dashboard/app/api/gcp/route.js` with `episodeId` and `codec`.
 
-**2. Ladder definition (21 jobs)**
+Main sequence (`orchestrator/gcp_step_function_def.json`):
 
-- File: `orchestrator/step_function_def.json` — `GenerateLadder` state `Result` array. Example entries:
+1. `gcp_copy_s3_to_gcs.py` - streams source from S3 to `gs://{GCS_INPUT_BUCKET}/{episode_id}/source.mp4`.
+2. `gcp_transcoder.py` - builds codec-specific job config and submits GCP Transcoder job.
+3. `gcp_check_status.py` - polls status until terminal.
+4. `gcp_finalize_hls.py` - clears old codec files, copies output to CDN bucket, injects subtitles, patches master manifest, saves final URL in Mongo.
 
-```json
-{"codec": "libx265", "bitrate": "1000", "resolution": "1080"},
-{"codec": "libx264", "bitrate": "2000", "resolution": "1080"},
-…
-```
+Output URLs stored in `chai_q_lab.video_episodes`:
 
-**3. Aggregator — golden recipe calculation**
-
-- File: `orchestrator/aggregator.py`
-- Reads from `db.video_vmaf_research` for the episode, applies thresholds, picks winner per resolution/codec:
-
-```python
-VMAF_THRESHOLDS = { "1080p": 88, "720p": 75, "480p": 48 }
-RESOLUTIONS = ["1080p", "720p", "480p"]
-CODECS = ["libx265", "libx264"]
-
-# For each resolution/codec: lowest bitrate >= threshold, or highest VMAF below threshold
-def find_winner(subset, threshold): ...
-# Then: db.video_episodes.update_one(..., { "$set": { "golden_recipes": { "resolutions": resolutions_data }, ... } })
-```
-
-**4. Mark lab failed (on Map or aggregator error)**
-
-- File: `orchestrator/mark_lab_failed.py`
-- Updates `video_episodes` with `lab_status: "FAILED"` and `lab_error: cause` so the API/dashboard can show failure and allow retries.
+- `h264_master_m3u8_url`
+- `h265_master_m3u8_url`
 
 ---
 
-## Pipeline 2: GCP Transcoder (Production HLS)
+## 4) Files you should know first
 
-**Purpose:** Take the source video and **golden recipes** from the research pipeline, run GCP Transcoder to produce HLS (H.264 and H.265 master playlists), then copy to CDN, inject subtitles, and write final URLs to MongoDB.
+### Orchestrator core
 
-**Trigger:** Started from the dashboard (or any client that can call `states:StartExecution` on the GCP-Orchestrator). Input must include `episode_id`, `s3_url`, and `golden_recipes` (from research).
+- `orchestrator/aggregator.py`  
+  Golden recipe logic and VMAF threshold decision.
 
-**Definition file:** `orchestrator/gcp_step_function_def.json`
+- `orchestrator/mark_lab_failed.py`  
+  Failure state writing (`lab_status_h264` / `lab_status_h265` or generic fallback).
 
-### Flow (step by step)
+- `orchestrator/gcp_transcoder.py`  
+  Codec-specific GCP job config (`h264` only or `h265` only).
 
-| Step | State name         | What happens |
-|------|--------------------|--------------|
-| 1    | **CopySourceToGCS**| Lambda streams the source from S3 to GCS: `gs://GCS_INPUT_BUCKET/{episode_id}/source.mp4`. Avoids Lambda /tmp 512MB limit by streaming. |
-| 2    | **SubmitGCPJob**  | Lambda builds a Transcoder JobConfig from `golden_recipes` (6 video streams: 3 resolutions × 2 codecs, 1 audio stream, 2 HLS manifests), creates the job, writes `gcp_job_name` and `RUNNING` to MongoDB. |
-| 3    | **WaitForJob**    | Wait 60 seconds. |
-| 4    | **CheckJobStatus**| Lambda calls GCP Transcoder `get_job`, returns `gcp_job_state` (e.g. `SUCCEEDED`, `RUNNING`, `FAILED`). On `FAILED`, updates MongoDB with error and goes to JobFailed. |
-| 5    | **IsComplete**    | Choice: if `SUCCEEDED` → **FinalizeHLS**; if `FAILED` → **JobFailed**; else → **WaitForJob** (loop). |
-| 6    | **FinalizeHLS**   | Lambda: (1) Copy transcoder output from GCS output bucket to CDN bucket, (2) Fetch subtitle VTT URLs from subtitle MongoDB, download, upload to GCS, (3) Generate subtitle `.m3u8` playlists, (4) Patch `h264_master.m3u8` and `h265_master.m3u8` with subtitle tracks, (5) Write `h264_master_m3u8_url`, `h265_master_m3u8_url` and status to MongoDB. |
-| 7    | **JobFailed**     | Fail state (GCP Transcoder job failed). |
+- `orchestrator/gcp_finalize_hls.py`  
+  CDN copy + subtitle upload + manifest patch + final URL updates.
 
-### Important code (GCP pipeline)
+- `orchestrator/step_function_def*.json` and `orchestrator/gcp_step_function_def.json`  
+  The workflow structure itself.
 
-**1. Copy S3 → GCS**
+### Dashboard APIs that drive orchestration
 
-- File: `orchestrator/gcp_copy_s3_to_gcs.py`
-- Parse S3 URL, get object stream, upload to GCS (no full file in /tmp):
+- `dashboard/app/api/push/route.js`  
+  Starts lab by codec, sets `lab_status_*`, stores execution ARN.
 
-```python
-obj = s3.get_object(Bucket=s3_bucket, Key=s3_key)
-# ...
-blob.upload_from_file(obj["Body"], content_type="video/mp4")
-# Returns: gcs_input_uri, episode_id, golden_recipes
-```
+- `dashboard/app/api/status/[id]/route.js`  
+  Computes progress from VMAF documents + status fields.
 
-GCP credentials come from AWS Secrets Manager: `GCP_CREDENTIALS_SECRET_ARN`.
+- `dashboard/app/api/gcp/route.js`  
+  Starts GCP pipeline by codec, validates golden recipes exist.
 
-**2. Submit GCP Transcoder job**
-
-- File: `orchestrator/gcp_transcoder.py`
-- Builds `JobConfig` from `golden_recipes["resolutions"]`: for each of 1080p/720p/480p, adds H.264 and H.265 elementary streams and mux streams, one shared AAC audio stream, and two manifests (`h264_master.m3u8`, `h265_master.m3u8`):
-
-```python
-output_uri = f"gs://{gcs_output_bucket}/{episode_id}/"
-job_config = _build_job_config(gcs_input_uri, golden_recipes, output_uri)
-response = client.create_job(parent=parent, job=job)
-# DB: gcp_job_status=RUNNING, gcp_job_name=...
-```
-
-**3. Check job status**
-
-- File: `orchestrator/gcp_check_status.py`
-- Gets job from GCP, returns `gcp_job_state`. On `FAILED`, updates MongoDB with `gcp_job_status`, `gcp_error`, `gcp_finished_at`.
-
-**4. Finalize HLS (copy to CDN, subtitles, patch manifests)**
-
-- File: `orchestrator/gcp_finalize_hls.py`
-- Copy: list blobs under `{episode_id}/` in output bucket, copy each to CDN bucket.
-- Subtitles: read VTT URLs from subtitle MongoDB → download → upload to GCS CDN bucket as `subtitle_{lang}.vtt` and create `subtitle_{lang}.m3u8` playlists.
-- Patch: for `h264_master.m3u8` and `h265_master.m3u8`, inject `#EXT-X-MEDIA:TYPE=SUBTITLES,...` and add `SUBTITLES="subtitles"` to `#EXT-X-STREAM-INF` lines.
-- MongoDB update: `gcp_job_status: SUCCEEDED`, `h264_master_m3u8_url`, `h265_master_m3u8_url`, `subtitles_injected`, `gcp_finished_at`.
-
-```python
-# CDN URLs
-h264_url = f"{CDN_BASE}/{gcs_prefix}/h264_master.m3u8"
-h265_url = f"{CDN_BASE}/{gcs_prefix}/h265_master.m3u8"
-db.video_episodes.update_one({"episode_id": episode_id}, {"$set": { ... }})
-```
+- `dashboard/app/api/gcp-status/[id]/route.js`  
+  Reads and normalizes GCP execution/job status.
 
 ---
 
-## Important Code Reference
+## 5) Important code points (quick navigation)
 
-| What | File | Entry / key lines |
-|------|------|--------------------|
-| S3 → start Research | `orchestrator/lambda_trigger.py` | `handler`: `sfn.start_execution(..., input=json.dumps({s3_url, episode_id}))` |
-| Research state machine | `orchestrator/step_function_def.json` | GenerateLadder → ParallelResearch (Map) → CalculateGoldenRecipe |
-| Batch job submission | `orchestrator/step_function_def.json` | `RunBatchJob`: `arn:aws:states:::batch:submitJob.sync` with `ContainerOverrides` for BITRATE, CODEC, RESOLUTION, S3_URL, EPISODE_ID |
-| Golden recipe aggregation | `orchestrator/aggregator.py` | `handler`: read `video_vmaf_research`, `find_winner`, write `video_episodes.golden_recipes` |
-| Mark lab failed | `orchestrator/mark_lab_failed.py` | `handler`: `video_episodes` update `lab_status: FAILED`, `lab_error` |
-| GCP state machine | `orchestrator/gcp_step_function_def.json` | CopySourceToGCS → SubmitGCPJob → WaitForJob → CheckJobStatus → IsComplete (Choice) → FinalizeHLS or JobFailed or loop |
-| S3 → GCS copy | `orchestrator/gcp_copy_s3_to_gcs.py` | `handler`: parse S3 URL, `get_object`, `blob.upload_from_file(obj["Body"])` |
-| GCP job config & submit | `orchestrator/gcp_transcoder.py` | `_build_job_config`, `client.create_job`, update DB with `gcp_job_name`, RUNNING |
-| Poll GCP job | `orchestrator/gcp_check_status.py` | `client.get_job(name=gcp_job_name)`, return `gcp_job_state`; on FAILED update DB |
-| Finalize HLS | `orchestrator/gcp_finalize_hls.py` | Copy to CDN bucket, subtitle pipeline, patch master m3u8, set CDN URLs in MongoDB |
-| GCP credentials | All GCP Lambdas | `GCP_CREDENTIALS_SECRET_ARN` → Secrets Manager → `service_account.Credentials.from_service_account_info(info)` |
+These are the first lines/areas to inspect when debugging.
+
+### Lab start and state machine selection
+
+- `dashboard/app/api/push/route.js`
+  - codec validation (`h264`/`h265`)
+  - Step Function ARN pick:
+    - `SFN_ARN_H264`
+    - `SFN_ARN_H265`
+  - writes:
+    - `lab_status_${codec} = RUNNING`
+    - `lab_execution_arn_${codec}`
+
+### Golden recipe selection logic
+
+- `orchestrator/aggregator.py`
+  - `VMAF_THRESHOLDS`
+  - `find_winner(subset, threshold)`
+  - update keys:
+    - `golden_recipes.resolutions.<res>.<codec>`
+    - `lab_status_<codec> = COMPLETE`
+    - `efficiency_gain`
+
+### Lab fail path
+
+- `orchestrator/mark_lab_failed.py`
+  - if codec present:
+    - `lab_status_h264` / `lab_status_h265`
+    - `lab_error_h264` / `lab_error_h265`
+  - else fallback:
+    - `lab_status`
+    - `lab_error`
+
+### GCP job submission
+
+- `orchestrator/gcp_transcoder.py`
+  - `_build_job_config(..., codec)` chooses only one codec branch.
+  - updates:
+    - `gcp_job_status_${codec} = RUNNING`
+    - `gcp_job_name_${codec}`
+
+### GCP completion + URLs
+
+- `orchestrator/gcp_finalize_hls.py`
+  - codec-specific cleanup in CDN bucket
+  - manifest patch for `${codec}_master.m3u8`
+  - updates:
+    - `${codec}_master_m3u8_url`
+    - `gcp_job_status_${codec} = SUCCEEDED`
+    - `gcp_finished_at_${codec}`
 
 ---
 
-## Environment Variables & Secrets
+## 6) Data model essentials (MongoDB)
 
-**Lambda / App Runner (set in Terraform or deploy):**
+### `master.showcache`
 
-| Variable | Used by | Meaning |
-|----------|--------|---------|
-| `STATE_MACHINE_ARN` | S3 trigger Lambda | Research Step Function ARN |
-| `MONGO_URI` | Aggregator, mark_lab_failed, all GCP Lambdas | MongoDB connection string (chai_q_lab) |
-| `GCP_PROJECT` | GCP Lambdas | GCP project ID |
-| `GCP_LOCATION` | GCP Transcoder Lambda | e.g. `us-central1`, `asia-south1` |
-| `GCS_INPUT_BUCKET` | Copy Lambda | GCS bucket for source video |
-| `GCS_OUTPUT_BUCKET` | Transcoder, CheckStatus, Finalize | GCS bucket for Transcoder output |
-| `GCP_CREDENTIALS_SECRET_ARN` | All GCP Lambdas | AWS Secrets Manager ARN for GCP service account JSON |
-| `SUBTITLE_MONGO_URI` | FinalizeHLS | MongoDB for subtitle VTT URLs (optional) |
+- show catalog + episode metadata
+- contains episode `s3_url`
+- consumed by dashboard APIs
 
-**Terraform variables (e.g. `terraform.tfvars`):**  
-`mongo_uri`, `gcp_project`, `gcp_location`, `gcs_input_bucket`, `gcs_output_bucket`, `gcp_credentials_secret_arn`, `subtitle_mongo_uri`.
+### `chai_q_lab.video_vmaf_research`
+
+- each research encode output row
+- used by aggregator for winner selection
+
+### `chai_q_lab.video_episodes`
+
+Main state document per episode:
+
+- lab states: `lab_status_h264`, `lab_status_h265`, `lab_error_*`, `lab_execution_arn_*`
+- recipe: `golden_recipes.resolutions`
+- gcp states: `gcp_job_status_*`, `gcp_job_name_*`, `gcp_error_*`
+- outputs: `h264_master_m3u8_url`, `h265_master_m3u8_url`
+
+### `gld2sqs.subtitles` (optional)
+
+- subtitle VTT source URLs used during finalize stage.
 
 ---
 
-## Deployment
+## 7) Run locally
 
-From project root (`bitrater/`):
+### A. Dashboard local run
 
-1. **Secrets:** Set `MONGO_URI` (and optionally other vars). Either copy `deploy.env.example` to `.env.deploy` or `export MONGO_URI='...'`.
-2. **One-time GCP:** Run the GCP section of `deploy.sh` (or equivalent): enable Transcoder API, create GCS buckets, create service account, create key and store it in AWS Secrets Manager as `chai-q-gcp-credentials`, note the Secret ARN.
-3. **Terraform:**  
-   `cd aws-infra`  
-   `terraform init -upgrade`  
-   `terraform apply -auto-approve -var="mongo_uri=..." -var="gcp_project=..." ... -var="gcp_credentials_secret_arn=..."`
-4. **Images:** Build and push research worker and dashboard to ECR (see `deploy.sh` steps 3 and 4).
-
-Full script:
+From `dashboard/`:
 
 ```bash
-# From bitrater/
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+Required environment for dashboard APIs (in local env file):
+
+- Mongo + AWS credentials + SFN ARNs for lab/GCP
+- keys commonly used by code:
+  - `AWS_REGION`
+  - `SFN_ARN_H264`
+  - `SFN_ARN_H265`
+  - `GCP_SFN_ARN`
+
+### B. Orchestrator local function testing (optional)
+
+You can invoke Python handlers directly with test events, but they require:
+
+- AWS credentials (Step Functions, Secrets Manager, S3 access),
+- Mongo URI access,
+- GCP credentials secret configured in AWS.
+
+For real end-to-end behavior, use deployed infra and trigger from dashboard.
+
+---
+
+## 8) Deployment guide by change type
+
+Use this section to decide the fastest safe deploy path.
+
+### If you changed dashboard UI/API only
+
+Use:
+
+```bash
+./dashboard/deploy.sh
+```
+
+What it does:
+
+- gets dashboard ECR repo from Terraform output,
+- builds dashboard image,
+- pushes image to ECR,
+- App Runner redeploys automatically.
+
+### If you changed orchestrator Python, Step Functions, infra vars, or worker
+
+Use full deploy:
+
+```bash
 ./deploy.sh
 ```
 
-`deploy.sh` sources `.env.deploy` for `MONGO_URI`, does GCP setup, Terraform apply, then pushes worker and dashboard images.
+What it does:
+
+1. One-time/managed GCP setup steps
+2. Terraform apply in `aws-infra`
+3. Push research worker image
+4. Push dashboard image
+
+### If you changed only Terraform (`aws-infra/*`)
+
+You may run only infra apply:
+
+```bash
+cd aws-infra
+terraform init -upgrade
+terraform apply -auto-approve -var="mongo_uri=..."
+```
+
+But if image tags or runtime behavior also changed, follow with relevant image deploy.
+
+### If you changed only `research-worker/*`
+
+Rebuild and push worker image (or run full `./deploy.sh` to keep everything consistent).
 
 ---
 
-## How to Verify Everything Works
+## 9) Required env/secrets (runtime)
 
-**Research pipeline (21 jobs in parallel):**
+Core runtime variables used across orchestrator/dashboard:
 
-- **Total time:** Should be ~1–2 hours (duration of slowest job). If it were sequential, it would be ~21× longer.
-- **Step Functions:** Open an execution of **Chai-Q-Orchestrator**. The Map state should show 21 branches with start times close together.
-- **AWS Batch:** In the Batch console, the run should show 21 jobs with similar start times and overlapping run times.
-- **MongoDB:** After success, `chai_q_lab.video_episodes` for that `episode_id` should have `lab_status: COMPLETE` and `golden_recipes.resolutions` populated.
+- `MONGO_URI`
+- `GCP_PROJECT`
+- `GCP_LOCATION`
+- `GCS_INPUT_BUCKET`
+- `GCS_OUTPUT_BUCKET`
+- `GCP_CREDENTIALS_SECRET_ARN`
+- `SUBTITLE_MONGO_URI` (optional for subtitles)
+- `AWS_REGION`
+- `SFN_ARN_H264`, `SFN_ARN_H265` (dashboard -> lab)
+- `GCP_SFN_ARN` (dashboard -> GCP)
 
-**GCP pipeline:**
-
-- **Step Functions:** Start **GCP-Orchestrator** with input `{ "episode_id": "...", "s3_url": "s3://...", "golden_recipes": { "resolutions": { ... } } }`. Execution should go CopySourceToGCS → SubmitGCPJob → WaitForJob → CheckJobStatus (possibly multiple times) → FinalizeHLS.
-- **MongoDB:** `video_episodes` should get `gcp_job_status: SUCCEEDED`, `h264_master_m3u8_url`, `h265_master_m3u8_url`.
-- **CDN:** The returned URLs should serve the master playlists and segments (and subtitles if configured).
-
-**End-to-end (beginner path):**
-
-1. Upload a test video to the S3 raw-input bucket (or use the dashboard to start Research for an episode).
-2. Wait for Research to complete; confirm `golden_recipes` in MongoDB.
-3. From the dashboard, start the GCP pipeline for that episode.
-4. When GCP-Orchestrator finishes, open the HLS URLs from MongoDB or the dashboard and play in an HLS-capable player.
+Do not commit real secrets to repo files.
 
 ---
 
-*This README covers the full process: flow, important code lines, environment variables, deployment, and verification, so even a beginner can follow and run the pipeline.*
+## 10) Quick verification checklist
+
+### After lab run
+
+- In dashboard, codec status moves `RUNNING -> COMPLETE` (or `FAILED`).
+- `video_vmaf_research` has rows for that episode+codec.
+- `video_episodes.golden_recipes.resolutions` contains expected codec entries.
+
+### After GCP run
+
+- `gcp_job_status_<codec>` ends `SUCCEEDED`.
+- `${codec}_master_m3u8_url` exists in `video_episodes`.
+- URL opens and playlist/segments load from CDN.
+- Subtitles appear if subtitle records were available.
+
+---
+
+## 11) Practical debugging order
+
+When something breaks, check in this order:
+
+1. Dashboard trigger API (`/api/push` or `/api/gcp`) response.
+2. Step Function execution history.
+3. Lambda logs for failing state.
+4. Mongo `video_episodes` status/error fields.
+5. GCS/CDN output objects for missing manifests/segments.
+
+This sequence usually finds root cause fastest.
