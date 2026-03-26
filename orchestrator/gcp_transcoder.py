@@ -91,7 +91,8 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec):
     codec_lower = (codec or "h265").lower()
 
     if codec_lower == "h264":
-        h264_mux_keys = []
+        h264_video_mux_keys = []
+        h264_audio_mux_key = "mux_h264_audio"
         for res_tag in RESOLUTIONS:
             width, height = PORTRAIT_DIMS[res_tag]
             res_recipes = resolutions_data.get(res_tag, {})
@@ -100,21 +101,29 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec):
                 elementary_streams.append(
                     _build_h264_video_stream(res_tag, h264_recipe["bitrate_kbps"], width, height)
                 )
-                mux_key = f"mux_{res_tag}_h264"
+                video_mux_key = f"mux_{res_tag}_h264_video"
                 mux_streams.append(types.MuxStream(
-                    key=mux_key,
-                    container="ts",
-                    elementary_streams=[f"{res_tag}_h264", "audio_aac"],
+                    key=video_mux_key,
+                    container="fmp4",
+                    elementary_streams=[f"{res_tag}_h264"],
                     segment_settings=types.SegmentSettings(
                         segment_duration=duration_pb2.Duration(seconds=2),
                     ),
                 ))
-                h264_mux_keys.append(mux_key)
+                h264_video_mux_keys.append(video_mux_key)
+        mux_streams.append(types.MuxStream(
+            key=h264_audio_mux_key,
+            container="fmp4",
+            elementary_streams=["audio_aac"],
+            segment_settings=types.SegmentSettings(
+                segment_duration=duration_pb2.Duration(seconds=2),
+            ),
+        ))
         manifests = [
             types.Manifest(
                 file_name="h264_master.m3u8",
                 type_=types.Manifest.ManifestType.HLS,
-                mux_streams=h264_mux_keys,
+                mux_streams=h264_video_mux_keys + [h264_audio_mux_key],
             ),
         ]
 

@@ -60,8 +60,9 @@ def _get_episode_meta(db, episode_id):
     ep = show["episodes"][0]
     episode_slug = ep.get("slug", episode_id)
     show_slug = show.get("slug", "unknown")
+    episode_number = ep.get("episode_number", 0)
     episode_output_key = f"{show_slug}/{episode_slug}"
-    return episode_slug, episode_output_key
+    return episode_slug, episode_output_key, show_slug, episode_number
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +308,7 @@ def handler(event, context):
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
     gcs_prefix = output_uri.replace(f"gs://{gcs_output_bucket}/", "").rstrip("/")
 
-    episode_slug, _ = _get_episode_meta(db, episode_id)
+    episode_slug, _, show_slug, episode_number = _get_episode_meta(db, episode_id)
 
     creds = _get_gcp_credentials()
     _clear_cdn_bucket_codec(creds, episode_id, codec)
@@ -334,8 +335,18 @@ def handler(event, context):
                 }},
             )
 
-    url_value = f"{CDN_BASE}/{gcs_prefix}/{codec}_master.m3u8"
     now_iso = datetime.now(timezone.utc).isoformat()
+    date_str = datetime.now(timezone.utc).strftime("%d%m%Y")
+    versioned_name = f"{show_slug}_ep_{episode_number}_{date_str}_{codec}.m3u8"
+
+    # Copy final patched master to versioned filename for CDN cache busting
+    cdn_client = gcs.Client(credentials=creds)
+    cdn_bucket = cdn_client.bucket(CDN_BUCKET)
+    src_blob = cdn_bucket.blob(f"{episode_id}/{codec}_master.m3u8")
+    cdn_bucket.copy_blob(src_blob, cdn_bucket, new_name=f"{episode_id}/{versioned_name}")
+    print(f"[VERSION] Copied to {versioned_name}")
+
+    url_value = f"{CDN_BASE}/{episode_id}/{versioned_name}"
 
     url_key = f"{codec}_master_m3u8_url"
     status_key = f"gcp_job_status_{codec}"

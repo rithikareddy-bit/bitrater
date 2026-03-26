@@ -4,7 +4,7 @@ Standalone Lambda: Build combined_master.m3u8 from h264 + h265 master manifests.
 Steps:
 1. Download h264_master.m3u8 and h265_master.m3u8 from CDN GCS bucket
 2. Strip per-codec headers and collect EXT-X-MEDIA + stream blocks
-3. Reorder all stream blocks to 720p → 480p → 1080p
+3. Sort all stream blocks by ascending BANDWIDTH
 4. Merge into one combined_master.m3u8
 5. Upload to CDN bucket under {episode_id}/combined_master.m3u8
 6. Save combined_master_m3u8_url to chai_q_lab.video_episodes
@@ -23,9 +23,6 @@ from google.oauth2 import service_account
 CDN_BASE = "https://cdn.chaishots.in"
 CDN_BUCKET = "chai-shots-manifests"
 
-_RESOLUTION_ORDER = {"720p": 0, "480p": 1, "1080p": 2}
-
-
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
     sm = boto3.client("secretsmanager")
@@ -34,19 +31,27 @@ def _get_gcp_credentials():
     return service_account.Credentials.from_service_account_info(info)
 
 
-def _resolution_rank(stream_inf_line):
-    """Return sort key for a #EXT-X-STREAM-INF line based on RESOLUTION= attribute."""
+def _bandwidth(stream_inf_line):
+    m = re.search(r'BANDWIDTH=(\d+)', stream_inf_line)
+    return int(m.group(1)) if m else 0
+
+
+_RESOLUTION_ORDER = {"720p": 0, "1080p": 1, "480p": 2}
+
+def _sort_key(stream_inf_line):
+    """Sort by resolution order (720p→1080p→480p), then descending bandwidth within each group."""
     m = re.search(r'RESOLUTION=(\d+)x(\d+)', stream_inf_line)
-    if not m:
-        return 99
-    width = int(m.group(1))
-    if width <= 480:
-        tag = "480p"
-    elif width <= 720:
-        tag = "720p"
+    if m:
+        width = int(m.group(1))
+        if width <= 480:
+            tag = "480p"
+        elif width <= 720:
+            tag = "720p"
+        else:
+            tag = "1080p"
     else:
-        tag = "1080p"
-    return _RESOLUTION_ORDER.get(tag, 99)
+        tag = "720p"
+    return (_RESOLUTION_ORDER.get(tag, 99), -_bandwidth(stream_inf_line))
 
 
 def _parse_manifest(text):
@@ -95,39 +100,78 @@ def handler(event, context):
     h264_media, h264_streams = _parse_manifest(h264_text)
     h265_media, h265_streams = _parse_manifest(h265_text)
 
-    # Deduplicate subtitle EXT-X-MEDIA lines (take from h264 if present, else h265)
-    seen_media = {}
-    for line in h264_media + h265_media:
+    # Separate audio and subtitle lines for each codec
+    h265_audio_lines = [l for l in h265_media if 'TYPE=AUDIO' in l]
+    h264_audio_lines = [l for l in h264_media if 'TYPE=AUDIO' in l]
+
+    # Deduplicate subtitle lines only
+    seen_subtitles = {}
+    for line in h265_media + h264_media:
+        if 'TYPE=SUBTITLES' not in line:
+            continue
         m = re.search(r'GROUP-ID="([^"]+)".*?LANGUAGE="([^"]+)"', line)
         key = m.group(0) if m else line
-        if key not in seen_media:
-            seen_media[key] = line
-    unique_media_lines = list(seen_media.values())
+        if key not in seen_subtitles:
+            seen_subtitles[key] = line
+    subtitle_lines = list(seen_subtitles.values())
 
-    # Sort all streams from both codecs: 720p → 480p → 1080p
+    # Give each codec its own audio group ID so timestamps stay aligned
+    h265_audio_group = "audio-h265"
+    h264_audio_group = "audio-h264"
+
+    h265_audio_lines = [re.sub(r'GROUP-ID="[^"]+"', f'GROUP-ID="{h265_audio_group}"', l) for l in h265_audio_lines]
+    h264_audio_lines = [re.sub(r'GROUP-ID="[^"]+"', f'GROUP-ID="{h264_audio_group}"', l) for l in h264_audio_lines]
+
+    # Sort all streams by ascending bandwidth
     all_streams = h264_streams + h265_streams
-    all_streams.sort(key=lambda b: _resolution_rank(b[0]))
+    all_streams.sort(key=lambda b: _sort_key(b[0]))
 
     # Build combined manifest
     output_lines = ["#EXTM3U", "#EXT-X-VERSION:3"]
-    output_lines.extend(unique_media_lines)
+    output_lines.extend(h265_audio_lines)
+    output_lines.extend(h264_audio_lines)
+    output_lines.extend(subtitle_lines)
+
     for inf_line, uri_line in all_streams:
+        if "h265" in uri_line:
+            inf_line = re.sub(r'AUDIO="[^"]+"', f'AUDIO="{h265_audio_group}"', inf_line)
+            if 'AUDIO=' not in inf_line:
+                inf_line = inf_line + f',AUDIO="{h265_audio_group}"'
+        else:
+            inf_line = re.sub(r'AUDIO="[^"]+"', f'AUDIO="{h264_audio_group}"', inf_line)
+            if 'AUDIO=' not in inf_line:
+                inf_line = inf_line + f',AUDIO="{h264_audio_group}"'
+        if subtitle_lines and 'SUBTITLES=' not in inf_line:
+            inf_line = inf_line + ',SUBTITLES="subtitles"'
         output_lines.append(inf_line)
         output_lines.append(uri_line)
-    output_lines.append("#EXT-X-ENDLIST")
 
     combined_text = "\n".join(output_lines) + "\n"
 
-    # Upload to CDN bucket
-    combined_blob = bucket.blob(f"{episode_id}/combined_master.m3u8")
-    combined_blob.upload_from_string(combined_text, content_type="application/x-mpegURL")
-    print(f"[COMBINED] Uploaded combined_master.m3u8 for {episode_id}")
+    # Fetch show metadata for versioned filename
+    mongo_client = pymongo.MongoClient(mongo_uri)
+    show = mongo_client["master"]["showcache"].find_one(
+        {"episodes.id": episode_id},
+        {"episodes.$": 1, "slug": 1},
+    )
+    show_slug = "unknown"
+    episode_number = 0
+    if show and show.get("episodes"):
+        show_slug = show.get("slug", "unknown")
+        episode_number = show["episodes"][0].get("episode_number", 0)
 
-    combined_url = f"{CDN_BASE}/{episode_id}/combined_master.m3u8"
     now_iso = datetime.now(timezone.utc).isoformat()
+    date_str = datetime.now(timezone.utc).strftime("%d%m%Y")
+    versioned_name = f"{show_slug}_ep_{episode_number}_{date_str}_combined.m3u8"
 
-    db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
-    db.video_episodes.update_one(
+    # Upload to CDN bucket under a versioned filename so CDN always fetches fresh
+    combined_blob = bucket.blob(f"{episode_id}/{versioned_name}")
+    combined_blob.upload_from_string(combined_text, content_type="application/x-mpegURL")
+    print(f"[COMBINED] Uploaded {versioned_name} for {episode_id}")
+
+    combined_url = f"{CDN_BASE}/{episode_id}/{versioned_name}"
+
+    mongo_client["chai_q_lab"].video_episodes.update_one(
         {"episode_id": episode_id},
         {"$set": {
             "combined_master_m3u8_url": combined_url,
