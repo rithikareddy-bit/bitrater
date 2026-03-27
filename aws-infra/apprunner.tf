@@ -94,9 +94,9 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
         Resource = "*"
       },
       {
-        Sid      = "ListBatchJobs"
+        Sid      = "ManageBatchJobs"
         Effect   = "Allow"
-        Action   = "batch:ListJobs"
+        Action   = ["batch:ListJobs", "batch:TerminateJob"]
         Resource = "*"
       },
       {

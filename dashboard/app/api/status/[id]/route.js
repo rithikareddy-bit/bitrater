@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
-import { TOTAL_JOBS_H264, TOTAL_JOBS_H265 } from '@/lib/constants';
+import { LEGACY_TOTAL_JOBS_H264, LEGACY_TOTAL_JOBS_H265 } from '@/lib/constants';
 
 export async function GET(request, { params }) {
   const { id } = params;
@@ -19,29 +19,69 @@ export async function GET(request, { params }) {
           lab_status_h265: 1,
           lab_run_started_at_h264: 1,
           lab_run_started_at_h265: 1,
+          search_progress_h264: 1,
+          search_progress_h265: 1,
         },
       }
     );
 
     const buildCodecStatus = async (codec) => {
       const libCodec = codec === 'h264' ? 'libx264' : 'libx265';
-      const total = codec === 'h264' ? TOTAL_JOBS_H264 : TOTAL_JOBS_H265;
+      const legacyTotal = codec === 'h264' ? LEGACY_TOTAL_JOBS_H264 : LEGACY_TOTAL_JOBS_H265;
       const labStatus = episode?.[`lab_status_${codec}`] ?? null;
+      const searchProgress = episode?.[`search_progress_${codec}`] ?? null;
 
       const succeeded = await db.collection('video_vmaf_research').countDocuments({
         episode_id: id,
         codec: libCodec,
       });
 
+      let total = legacyTotal;
       let failed = 0;
       let running = 0;
-      if (labStatus === 'FAILED') {
-        failed = total - succeeded;
+      let resolutionPhases = null;
+
+      if (searchProgress?.resolutions && labStatus !== 'FAILED') {
+        const resolutionEntries = Object.entries(searchProgress.resolutions);
+        resolutionPhases = {};
+
+        let testedFromProgress = 0;
+        let pendingFromProgress = 0;
+        for (const [resolution, detail] of resolutionEntries) {
+          const tested = Number(detail?.tested || 0);
+          const pending = Number(detail?.pending || 0);
+          testedFromProgress += tested;
+          pendingFromProgress += pending;
+          resolutionPhases[resolution] = {
+            phase: detail?.phase || 'PROBING',
+            rawPhase: detail?.raw_phase || null,
+            tested,
+            pending,
+            winner: detail?.winner ?? null,
+            bracketDisplay: detail?.bracket_display ?? null,
+            message: detail?.message ?? null,
+          };
+        }
+
+        total = Math.max(0, testedFromProgress + pendingFromProgress);
+        running = pendingFromProgress;
+        failed = Math.max(0, total - running - testedFromProgress);
+      } else if (labStatus === 'FAILED') {
+        failed = Math.max(0, total - succeeded);
       } else if (labStatus === 'RUNNING') {
-        running = total - succeeded;
+        running = Math.max(0, total - succeeded);
       }
 
-      return { total, succeeded, failed, running, labStatus };
+      return {
+        total,
+        succeeded,
+        failed,
+        running,
+        labStatus,
+        pollCount: searchProgress?.poll_count ?? null,
+        allDone: searchProgress?.all_done ?? null,
+        resolutionPhases,
+      };
     };
 
     if (codecParam === 'h264' || codecParam === 'h265') {

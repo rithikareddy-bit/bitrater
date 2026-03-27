@@ -1,0 +1,128 @@
+{
+  "StartAt": "InitSearch",
+  "States": {
+    "InitSearch": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${search_orchestrator_lambda_arn}",
+        "Payload.$": "$"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.labError",
+          "Next": "MarkLabFailed"
+        }
+      ],
+      "Next": "ChooseWait"
+    },
+    "ChooseWait": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.next_wait",
+          "StringEquals": "SHORT",
+          "Next": "Wait15s"
+        }
+      ],
+      "Default": "Wait25s"
+    },
+    "Wait15s": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "CheckAndDecide"
+    },
+    "Wait25s": {
+      "Type": "Wait",
+      "Seconds": 25,
+      "Next": "CheckAndDecide"
+    },
+    "CheckAndDecide": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${search_orchestrator_lambda_arn}",
+        "Payload.$": "$"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.labError",
+          "Next": "MarkLabFailed"
+        }
+      ],
+      "Next": "IsSearchDone"
+    },
+    "IsSearchDone": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.all_done",
+          "BooleanEquals": true,
+          "Next": "CalculateGoldenRecipe"
+        }
+      ],
+      "Default": "CheckMaxCycles"
+    },
+    "CheckMaxCycles": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.poll_count",
+          "NumericGreaterThanEquals": 150,
+          "Next": "SetTimeoutError"
+        }
+      ],
+      "Default": "ChooseWait"
+    },
+    "SetTimeoutError": {
+      "Type": "Pass",
+      "Result": {
+        "Cause": "Search polling exceeded maximum cycles"
+      },
+      "ResultPath": "$.labError",
+      "Next": "MarkLabFailed"
+    },
+    "CalculateGoldenRecipe": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${aggregator_lambda_arn}",
+        "Payload": {
+          "episode_id.$": "$.episode_id",
+          "codec.$": "$.codec"
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.labError",
+          "Next": "MarkLabFailed"
+        }
+      ],
+      "End": true
+    },
+    "MarkLabFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${mark_lab_failed_lambda_arn}",
+        "Payload": {
+          "episode_id.$": "$$.Execution.Input.episode_id",
+          "codec.$": "$$.Execution.Input.codec",
+          "cause.$": "$.labError.Cause"
+        }
+      },
+      "ResultPath": "$.markLabFailedResult",
+      "Next": "LabExecutionFailed"
+    },
+    "LabExecutionFailed": {
+      "Type": "Fail",
+      "Error": "ChaiQLabFailed",
+      "Cause": "Search orchestrator failed; see video_episodes.lab_error_h264/lab_error_h265"
+    }
+  }
+}

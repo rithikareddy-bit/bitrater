@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { TOTAL_JOBS_H264, TOTAL_JOBS_H265 } from '@/lib/constants';
+import { LEGACY_TOTAL_JOBS_H264, LEGACY_TOTAL_JOBS_H265 } from '@/lib/constants';
 
 const CODEC_CONFIG = {
-  h264: { total: TOTAL_JOBS_H264, label: 'H.264' },
-  h265: { total: TOTAL_JOBS_H265, label: 'H.265' },
+  h264: { total: LEGACY_TOTAL_JOBS_H264, label: 'H.264' },
+  h265: { total: LEGACY_TOTAL_JOBS_H265, label: 'H.265' },
 };
 
 function hasGoldenForCodec(golden, codec) {
@@ -132,14 +132,15 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
       {(['h264', 'h265']).map((codec) => {
         const cfg = CODEC_CONFIG[codec];
         const s = status?.[codec] ?? status ?? {};
-        const total = cfg.total;
+        const total = s.total ?? cfg.total;
         const succeeded = s.succeeded ?? 0;
         const failed = s.failed ?? 0;
         const running = s.running ?? 0;
-        const pct = Math.round((succeeded / total) * 100);
+        const pct = total > 0 ? Math.round((succeeded / total) * 100) : 0;
         const isDone = succeeded + failed >= total && total > 0;
         const batchAllSucceeded = isDone && failed === 0 && succeeded >= total;
         const serverRunning = s.labStatus === 'RUNNING';
+        const resolutionPhases = s.resolutionPhases || null;
         const labStatusKey = `lab_status_${codec}`;
         const labErrorKey = `lab_error_${codec}`;
         const labFinishedKey = `lab_finished_at_${codec}`;
@@ -186,6 +187,7 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
             hasGolden={hasGolden}
             serverFailed={serverFailed}
             labError={golden?.[labErrorKey]}
+            resolutionPhases={resolutionPhases}
             executionArn={executionArns[codec]}
             pushing={pushing === codec}
             stopping={stopping === codec}
@@ -225,6 +227,7 @@ function LabSection({
   hasGolden,
   serverFailed,
   labError,
+  resolutionPhases,
   executionArn,
   pushing,
   stopping,
@@ -317,6 +320,34 @@ function LabSection({
         </div>
       )}
 
+      {resolutionPhases && (
+        <div style={{ marginBottom: 14, display: 'grid', gap: 6 }}>
+          {['1080p', '720p', '480p'].map((res) => {
+            const info = resolutionPhases?.[res];
+            if (!info) return null;
+            return (
+              <div
+                key={res}
+                style={{
+                  border: '1px solid #2a2a2a',
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  fontSize: 12,
+                  color: '#94a3b8',
+                  background: '#111827',
+                }}
+              >
+                <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{res}</span>
+                {' · '}
+                <span>{info.phase}</span>
+                {' · '}
+                <span>{info.message || `${info.tested} tested, ${info.pending} pending`}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {batchAllSucceeded && !hasGolden && !serverFailed && !serverComplete && (
         <div style={{
           background: '#1a1a0c',
@@ -386,7 +417,7 @@ function LabSection({
               <><Spinner /> Starting…</>
             ) : showLabSpinner ? (
               <><Spinner /> {label} Lab Running…</>
-            ) : batchAllSucceeded && !hasGolden ? (
+            ) : batchAllSucceeded && !hasGolden && !serverFailed ? (
               <><Spinner /> Finalizing…</>
             ) : (
               `▶ Run lab ${label}`

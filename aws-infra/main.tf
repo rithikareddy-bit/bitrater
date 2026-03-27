@@ -66,18 +66,18 @@ resource "aws_s3_bucket" "raw_input" {
 resource "aws_batch_compute_environment" "spot_env" {
   # In v6.x, this is often just 'compute_environment_name' 
   # but ensure it is NOT inside 'compute_resources'
-  name = "chai-q-spot-env"
+  name_prefix = "chai-q-spot-env-"
   
   compute_resources {
     instance_role       = aws_iam_instance_profile.batch_instance_profile.arn
-    instance_type       = ["c5.xlarge", "c5.2xlarge", "c5.4xlarge"]
-    max_vcpus           = 84
+    instance_type       = ["c5.large", "c5.xlarge", "c5.2xlarge", "c5.4xlarge", "c6i.large", "c6i.xlarge", "c6i.2xlarge", "m5.large", "m5.xlarge", "m5.2xlarge", "m6i.large", "m6i.xlarge", "m6i.2xlarge"]
+    max_vcpus           = 128
     min_vcpus           = 0
     security_group_ids  = [aws_security_group.batch_sg.id]
     subnets             = [aws_subnet.chai_q_subnet_a.id]
     type                = "SPOT"
     spot_iam_fleet_role = aws_iam_role.amazon_ec2_spot_fleet_role.arn
-    allocation_strategy = "BEST_FIT_PROGRESSIVE"
+    allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"
   }
   service_role = aws_iam_role.batch_service_role.arn
   type         = "MANAGED"
@@ -123,38 +123,26 @@ resource "aws_sfn_state_machine" "research_orchestrator" {
   })
 }
 
-# --- H.264 Research Orchestrator (9 jobs) ---
+# --- H.264 Research Orchestrator (decision-driven search) ---
 resource "aws_sfn_state_machine" "research_orchestrator_h264" {
   name     = "Chai-Q-Orchestrator-H264"
   role_arn = aws_iam_role.step_function_role.arn
 
-  definition = templatefile("../orchestrator/step_function_def_h264.json", {
-    batch_job_queue_arn        = aws_batch_job_queue.chai_q_queue.arn
-    batch_job_definition_arn   = aws_batch_job_definition.chai_q_worker_def.arn
-    aggregator_lambda_arn      = aws_lambda_function.aggregator.arn
-    mark_lab_failed_lambda_arn = aws_lambda_function.mark_lab_failed.arn
-    ctx_bitrate               = "$.bitrate"
-    ctx_codec                 = "$.codec"
-    ctx_resolution            = "$.resolution"
-    ctx_s3_url                = "$$.Execution.Input.s3_url"
-    ctx_episode_id            = "$$.Execution.Input.episode_id"
+  definition = templatefile("../orchestrator/step_function_def_search.json", {
+    search_orchestrator_lambda_arn = aws_lambda_function.search_orchestrator.arn
+    aggregator_lambda_arn          = aws_lambda_function.aggregator.arn
+    mark_lab_failed_lambda_arn     = aws_lambda_function.mark_lab_failed.arn
   })
 }
 
-# --- H.265 Research Orchestrator (12 jobs) ---
+# --- H.265 Research Orchestrator (decision-driven search) ---
 resource "aws_sfn_state_machine" "research_orchestrator_h265" {
   name     = "Chai-Q-Orchestrator-H265"
   role_arn = aws_iam_role.step_function_role.arn
 
-  definition = templatefile("../orchestrator/step_function_def_h265.json", {
-    batch_job_queue_arn        = aws_batch_job_queue.chai_q_queue.arn
-    batch_job_definition_arn   = aws_batch_job_definition.chai_q_worker_def.arn
-    aggregator_lambda_arn      = aws_lambda_function.aggregator.arn
-    mark_lab_failed_lambda_arn = aws_lambda_function.mark_lab_failed.arn
-    ctx_bitrate               = "$.bitrate"
-    ctx_codec                 = "$.codec"
-    ctx_resolution            = "$.resolution"
-    ctx_s3_url                = "$$.Execution.Input.s3_url"
-    ctx_episode_id            = "$$.Execution.Input.episode_id"
+  definition = templatefile("../orchestrator/step_function_def_search.json", {
+    search_orchestrator_lambda_arn = aws_lambda_function.search_orchestrator.arn
+    aggregator_lambda_arn          = aws_lambda_function.aggregator.arn
+    mark_lab_failed_lambda_arn     = aws_lambda_function.mark_lab_failed.arn
   })
 }

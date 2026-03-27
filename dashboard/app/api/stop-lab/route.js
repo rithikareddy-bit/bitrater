@@ -1,8 +1,46 @@
 import { NextResponse } from 'next/server';
 import { SFNClient, StopExecutionCommand } from '@aws-sdk/client-sfn';
+import { BatchClient, ListJobsCommand, TerminateJobCommand } from '@aws-sdk/client-batch';
 import clientPromise from '@/lib/mongodb';
 
-const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const region = process.env.AWS_REGION || 'us-east-1';
+const sfn = new SFNClient({ region });
+const batch = new BatchClient({ region });
+
+const BATCH_STATUSES = ['SUBMITTED', 'PENDING', 'RUNNABLE', 'STARTING', 'RUNNING'];
+
+async function terminateOrphanedBatchJobs(episodeId) {
+  const prefix = `ChaiQSearch-${episodeId.slice(0, 24)}-`;
+  const queue = process.env.BATCH_JOB_QUEUE;
+  if (!queue) return 0;
+
+  let terminated = 0;
+  for (const status of BATCH_STATUSES) {
+    try {
+      const resp = await batch.send(
+        new ListJobsCommand({ jobQueue: queue, jobStatus: status }),
+      );
+      for (const job of resp.jobSummaryList || []) {
+        if (job.jobName?.startsWith(prefix)) {
+          try {
+            await batch.send(
+              new TerminateJobCommand({
+                jobId: job.jobId,
+                reason: 'Stopped by user from dashboard',
+              }),
+            );
+            terminated++;
+          } catch {
+            // job may have already finished
+          }
+        }
+      }
+    } catch {
+      // list may fail for a status, continue with others
+    }
+  }
+  return terminated;
+}
 
 export async function POST(request) {
   try {
@@ -36,6 +74,8 @@ export async function POST(request) {
       }),
     );
 
+    const terminated = await terminateOrphanedBatchJobs(episodeId);
+
     const statusKey = `lab_status_${codec}`;
     const errorKey = `lab_error_${codec}`;
     await db.collection('video_episodes').updateOne(
@@ -48,7 +88,7 @@ export async function POST(request) {
       },
     );
 
-    return NextResponse.json({ stopped: true });
+    return NextResponse.json({ stopped: true, batchJobsTerminated: terminated });
   } catch (err) {
     console.error('[POST /api/stop-lab]', err);
     return NextResponse.json({ error: 'Failed to stop lab execution' }, { status: 500 });

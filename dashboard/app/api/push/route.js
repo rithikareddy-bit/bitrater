@@ -90,6 +90,7 @@ export async function POST(request) {
         },
         $unset: {
           [errorKey]: '',
+          [`search_progress_${codec}`]: '',
         },
       },
       { upsert: true },

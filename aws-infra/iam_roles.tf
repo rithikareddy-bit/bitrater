@@ -124,6 +124,25 @@ resource "aws_iam_role_policy_attachment" "gcp_lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_iam_role_policy" "lambda_exec_batch_policy" {
+  name = "chai-q-lambda-exec-batch-policy"
+  role = aws_iam_role.lambda_exec_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "batch:SubmitJob",
+          "batch:DescribeJobs",
+          "batch:TerminateJob"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role_policy" "gcp_lambda_policy" {
   name = "chai-q-gcp-lambda-policy"
   role = aws_iam_role.gcp_lambda_role.id

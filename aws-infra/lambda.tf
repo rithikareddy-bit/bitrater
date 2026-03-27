@@ -82,6 +82,12 @@ data "archive_file" "mark_lab_failed_zip" {
   output_path = "/tmp/chai-q-mark-lab-failed.zip"
 }
 
+data "archive_file" "search_orchestrator_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/search_orchestrator.py"
+  output_path = "/tmp/chai-q-search-orchestrator.zip"
+}
+
 # --- S3 Trigger Lambda ---
 resource "aws_lambda_function" "s3_trigger" {
   filename         = data.archive_file.trigger_zip.output_path
@@ -152,6 +158,27 @@ resource "aws_lambda_function" "mark_lab_failed" {
   environment {
     variables = {
       MONGO_URI = var.mongo_uri
+    }
+  }
+}
+
+# --- Decision-driven search orchestrator ---
+resource "aws_lambda_function" "search_orchestrator" {
+  filename         = data.archive_file.search_orchestrator_zip.output_path
+  source_code_hash = data.archive_file.search_orchestrator_zip.output_base64sha256
+  function_name    = "chai-q-search-orchestrator"
+  role             = aws_iam_role.lambda_exec_role.arn
+  handler          = "search_orchestrator.handler"
+  runtime          = "python3.11"
+  timeout          = 120
+  memory_size      = 256
+  layers           = [aws_lambda_layer_version.pymongo.arn]
+
+  environment {
+    variables = {
+      MONGO_URI                 = var.mongo_uri
+      BATCH_JOB_QUEUE_ARN       = aws_batch_job_queue.chai_q_queue.arn
+      BATCH_JOB_DEFINITION_ARN  = aws_batch_job_definition.chai_q_worker_def.arn
     }
   }
 }

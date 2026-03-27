@@ -21,9 +21,13 @@ def handler(event, context):
     if codec in ("h264", "h265"):
         status_key = f"lab_status_{codec}"
         error_key = f"lab_error_{codec}"
+        progress_key = f"search_progress_{codec}"
         db.video_episodes.update_one(
             {"episode_id": episode_id},
-            {"$set": {status_key: "FAILED", error_key: str(cause)}},
+            {
+                "$set": {status_key: "FAILED", error_key: str(cause)},
+                "$unset": {progress_key: ""},
+            },
             upsert=True,
         )
     else:
