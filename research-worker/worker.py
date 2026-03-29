@@ -149,20 +149,32 @@ def run_research():
     vmaf_timeline = []
     for i in range(0, len(frames), source_fps):
         chunk = frames[i:i + source_fps]
-        vmaf_timeline.append(round(sum(f["metrics"]["vmaf"] for f in chunk) / len(chunk), 2))
+        if chunk:  # guard against empty trailing chunk
+            vmaf_timeline.append(round(sum(f["metrics"]["vmaf"] for f in chunk) / len(chunk), 2))
 
-    db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
-    db["video_vmaf_research"].insert_one({
-        "episode_id":    episode_id,
-        "codec":         codec,
-        "bitrate_kbps":  int(bitrate),
-        "resolution":    resolution_tag,
-        "vmaf_score":    vmaf_score,
-        "vmaf_timeline": vmaf_timeline,
-        "preset":        preset,
-        "params":        params,
-        "timestamp":     datetime.now(timezone.utc).isoformat(),
-    })
+    mongo_client = pymongo.MongoClient(mongo_uri)
+    try:
+        db = mongo_client["chai_q_lab"]
+        lab_run_id = os.getenv("LAB_RUN_ID")
+        doc = {
+            "episode_id":    episode_id,
+            "codec":         codec,
+            "bitrate_kbps":  int(bitrate),
+            "resolution":    resolution_tag,
+            "vmaf_score":    vmaf_score,
+            "vmaf_timeline": vmaf_timeline,
+            "preset":        preset,
+            "params":        params,
+            "timestamp":     datetime.now(timezone.utc).isoformat(),
+        }
+        if lab_run_id:
+            doc["lab_run_id"] = lab_run_id
+        try:
+            db["video_vmaf_research"].insert_one(doc)
+        except Exception as e:
+            raise RuntimeError(f"Failed to write VMAF result to MongoDB: {e}") from e
+    finally:
+        mongo_client.close()
     print(f"[OK] episode={episode_id} codec={codec} res={resolution_tag} bitrate={bitrate}k vmaf={vmaf_score:.2f}")
 
 def main():

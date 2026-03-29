@@ -26,7 +26,7 @@ variable "gcs_output_bucket" {
 }
 
 variable "gcp_credentials_secret_arn" {
-  description = "ARN of the AWS Secrets Manager secret containing the GCP service account JSON key"
+  description = "Secrets Manager secret ARN (plain string). If you paste full describe-secret JSON by mistake, Terraform will extract .ARN."
   type        = string
   sensitive   = true
 }

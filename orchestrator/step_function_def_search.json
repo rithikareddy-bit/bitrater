@@ -72,7 +72,7 @@
       "Choices": [
         {
           "Variable": "$.poll_count",
-          "NumericGreaterThanEquals": 150,
+          "NumericGreaterThanEquals": 300,
           "Next": "SetTimeoutError"
         }
       ],
@@ -81,7 +81,7 @@
     "SetTimeoutError": {
       "Type": "Pass",
       "Result": {
-        "Cause": "Search polling exceeded maximum cycles"
+        "Cause": "Search polling exceeded maximum cycles (orchestration cap timeout — not a search logic failure)"
       },
       "ResultPath": "$.labError",
       "Next": "MarkLabFailed"

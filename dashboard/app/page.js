@@ -50,7 +50,7 @@ export default function ShowsPage() {
 
   useEffect(() => {
     fetch(`/api/shows?limit=${PAGE_SIZE}&skip=0`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((data) => {
         if (data.error) {
           setError(data.error);
@@ -66,12 +66,13 @@ export default function ShowsPage() {
   function loadMore() {
     setLoadingMore(true);
     fetch(`/api/shows?limit=${PAGE_SIZE}&skip=${shows.length}`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((data) => {
         if (data.error) return;
         setShows((prev) => [...prev, ...(data.shows || [])]);
         setHasMore(Boolean(data.hasMore));
       })
+      .catch(() => { /* keep existing list on load-more failure */ })
       .finally(() => setLoadingMore(false));
   }
 
@@ -97,6 +98,7 @@ export default function ShowsPage() {
 
     try {
       const r = await fetch(`/api/shows/${idStr}`);
+      if (!r.ok) return;
       const full = await r.json();
       if (full.error) return;
       setCachedShow(idStr, full);

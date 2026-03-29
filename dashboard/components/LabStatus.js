@@ -20,14 +20,20 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
   const [pushing, setPushing] = useState(null);
   const [stopping, setStopping] = useState(null);
   const [pushError, setPushError] = useState(null);
+  const [pollError, setPollError] = useState(null);
   const [executionArns, setExecutionArns] = useState({});
   const pollingRef = useRef(null);
   const goldenPollRef = useRef(null);
+  const consecutiveErrorsRef = useRef(0);
+  const MAX_CONSECUTIVE_ERRORS = 5;
 
   const fetchStatus = async () => {
     try {
       const res = await fetch(`/api/status/${episodeId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      consecutiveErrorsRef.current = 0;
+      setPollError(null);
       setStatus(data);
 
       const h264 = data.h264 ?? data;
@@ -40,7 +46,12 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
         startGoldenPoll();
       }
     } catch {
-      // transient
+      consecutiveErrorsRef.current += 1;
+      if (consecutiveErrorsRef.current >= MAX_CONSECUTIVE_ERRORS) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+        setPollError('Status polling failed — refresh the page to retry.');
+      }
     }
   };
 
@@ -74,6 +85,8 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
 
   const startPolling = () => {
     if (pollingRef.current) return;
+    consecutiveErrorsRef.current = 0;
+    setPollError(null);
     pollingRef.current = setInterval(fetchStatus, 5000);
   };
 
@@ -151,7 +164,6 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
         const showLabSpinner = pushing === codec || (!isDone && (running > 0 || serverRunning));
         const isPartialFailure = (isDone && failed > 0 && !hasGolden) || (serverFailed && !hasGolden);
         const labComplete = isDone && !isPartialFailure && (hasGolden || serverComplete);
-        const otherRunning = (codec === 'h264' ? status?.h265?.labStatus : status?.h264?.labStatus) === 'RUNNING';
 
         const labDuration = (() => {
           const start = golden?.[labStartedKey];
@@ -191,7 +203,6 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
             executionArn={executionArns[codec]}
             pushing={pushing === codec}
             stopping={stopping === codec}
-            disabledByOther={otherRunning}
             onPush={() => handlePush(codec)}
             onRerun={() => handleRerun(codec)}
             onStop={() => handleStop(codec)}
@@ -202,6 +213,11 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
       {pushError && (
         <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
           Error: {pushError}
+        </div>
+      )}
+      {pollError && (
+        <div style={{ color: '#f59e0b', fontSize: 12, marginTop: 8 }}>
+          {pollError}
         </div>
       )}
     </div>
@@ -231,7 +247,6 @@ function LabSection({
   executionArn,
   pushing,
   stopping,
-  disabledByOther,
   onPush,
   onRerun,
   onStop,
@@ -341,7 +356,7 @@ function LabSection({
                 {' · '}
                 <span>{info.phase}</span>
                 {' · '}
-                <span>{info.message || `${info.tested} tested, ${info.pending} pending`}</span>
+                <span>{info.message || `${info.tested ?? 0} tested, ${info.pending ?? 0} pending`}</span>
               </div>
             );
           })}
@@ -371,19 +386,19 @@ function LabSection({
       {labComplete ? (
         <button
           onClick={onRerun}
-          disabled={pushing || disabledByOther}
+          disabled={pushing}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            background: (pushing || disabledByOther) ? '#1e1e1e' : '#334155',
-            color: (pushing || disabledByOther) ? '#555' : '#e2e8f0',
+            background: pushing ? '#1e1e1e' : '#334155',
+            color: pushing ? '#555' : '#e2e8f0',
             border: '1px solid #475569',
             borderRadius: 8,
             padding: '10px 20px',
             fontSize: 14,
             fontWeight: 600,
-            cursor: (pushing || disabledByOther) ? 'not-allowed' : 'pointer',
+            cursor: pushing ? 'not-allowed' : 'pointer',
             transition: 'background 0.2s',
             width: '100%',
             justifyContent: 'center',
@@ -395,19 +410,19 @@ function LabSection({
         <div style={{ display: 'flex', gap: 8 }}>
           <button
             onClick={onPush}
-            disabled={pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed) || disabledByOther}
+            disabled={pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)}
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: 8,
-              background: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed) || disabledByOther) ? '#1e1e1e' : '#4da6ff',
-              color: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed) || disabledByOther) ? '#555' : '#000',
+              background: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#1e1e1e' : '#4da6ff',
+              color: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#555' : '#000',
               border: 'none',
               borderRadius: 8,
               padding: '10px 20px',
               fontSize: 14,
               fontWeight: 600,
-              cursor: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed) || disabledByOther) ? 'not-allowed' : 'pointer',
+              cursor: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? 'not-allowed' : 'pointer',
               transition: 'background 0.2s',
               flex: 1,
               justifyContent: 'center',

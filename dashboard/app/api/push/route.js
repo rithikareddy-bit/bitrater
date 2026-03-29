@@ -4,6 +4,7 @@ import {
   StartExecutionCommand,
   DescribeExecutionCommand,
 } from '@aws-sdk/client-sfn';
+import { randomUUID } from 'crypto';
 import clientPromise from '@/lib/mongodb';
 
 const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -78,7 +79,9 @@ export async function POST(request) {
     });
 
     const runStartedAt = new Date().toISOString();
+    const labRunId = randomUUID();
     const startedAtKey = `lab_run_started_at_${codec}`;
+    const runIdKey = `lab_run_id_${codec}`;
     const errorKey = `lab_error_${codec}`;
 
     await db.collection('video_episodes').updateOne(
@@ -87,10 +90,17 @@ export async function POST(request) {
         $set: {
           [statusKey]: 'RUNNING',
           [startedAtKey]: runStartedAt,
+          [runIdKey]: labRunId,
         },
         $unset: {
           [errorKey]: '',
           [`search_progress_${codec}`]: '',
+          // Clear stale golden_recipes for this codec so the UI doesn't show old winners
+          [`golden_recipes.resolutions.1080p.${codec}`]: '',
+          [`golden_recipes.resolutions.720p.${codec}`]: '',
+          [`golden_recipes.resolutions.480p.${codec}`]: '',
+          // Efficiency gain depends on both codecs — will be recomputed by aggregator
+          'efficiency_gain': '',
         },
       },
       { upsert: true },
@@ -100,6 +110,7 @@ export async function POST(request) {
       s3_url: s3Url,
       episode_id: episodeId,
       codec,
+      run_id: labRunId,
     });
     const cmd = new StartExecutionCommand({ stateMachineArn: sfnArn, input });
     const result = await sfn.send(cmd);

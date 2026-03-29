@@ -159,7 +159,7 @@ resource "aws_iam_role_policy" "gcp_lambda_policy" {
         Sid      = "SecretsManagerGCP"
         Action   = ["secretsmanager:GetSecretValue"]
         Effect   = "Allow"
-        Resource = var.gcp_credentials_secret_arn
+        Resource = local.gcp_credentials_secret_arn_effective
       }
     ]
   })

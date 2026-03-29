@@ -20,21 +20,21 @@ SEARCH_CONFIG = {
             "1080p": {
                 "threshold": 88,
                 "dip_floor": 80,
-                "job_timeout_seconds": 1500,
+                "job_timeout_seconds": 3000,
                 "candidates": [1800, 2000, 2300, 2500, 2700, 3000, 3300, 3600, 3900, 4200],
                 "initial_probes": [2300, 3000, 3900],
             },
             "720p": {
                 "threshold": 75,
                 "dip_floor": 67,
-                "job_timeout_seconds": 900,
+                "job_timeout_seconds": 1800,
                 "candidates": [700, 900, 1100, 1300, 1500, 1700, 1900],
                 "initial_probes": [1100, 1700],
             },
             "480p": {
                 "threshold": 48,
                 "dip_floor": 40,
-                "job_timeout_seconds": 600,
+                "job_timeout_seconds": 1200,
                 "candidates": [200, 300, 400, 500, 600],
                 "initial_probes": [400],
             },
@@ -46,21 +46,21 @@ SEARCH_CONFIG = {
             "1080p": {
                 "threshold": 88,
                 "dip_floor": 80,
-                "job_timeout_seconds": 1500,
+                "job_timeout_seconds": 3000,
                 "candidates": [800, 1000, 1200, 1500, 1800, 2100, 2300, 2600, 2900, 3200],
                 "initial_probes": [1200, 2100, 2900],
             },
             "720p": {
                 "threshold": 75,
                 "dip_floor": 67,
-                "job_timeout_seconds": 900,
+                "job_timeout_seconds": 1800,
                 "candidates": [500, 700, 900, 1200, 1350, 1500, 1650],
                 "initial_probes": [900, 1500],
             },
             "480p": {
                 "threshold": 48,
                 "dip_floor": 40,
-                "job_timeout_seconds": 600,
+                "job_timeout_seconds": 1200,
                 "candidates": [100, 200, 300, 400, 500],
                 "initial_probes": [300],
             },
@@ -154,13 +154,17 @@ def _pending_bitrates(tested):
     return sorted(out)
 
 
+def _any_pending_strictly_below(tested, space_bitrates, cap_bitrate):
+    """True if any candidate in space with bitrate < cap is still PENDING (parallel-wave ordering)."""
+    return any(
+        b < cap_bitrate and _get_status(tested, b) == "PENDING"
+        for b in space_bitrates
+    )
+
+
 def _is_pass(vmaf_score, timeline, threshold, dip_floor):
     if vmaf_score is None or vmaf_score < threshold:
         return False
-    for point in timeline or []:
-        metric = _safe_float(point)
-        if metric is not None and metric < dip_floor:
-            return False
     return True
 
 
@@ -181,15 +185,18 @@ def _describe_jobs(batch_client, job_ids):
     return out
 
 
-def _find_latest_vmaf_doc(db, episode_id, codec_lib, resolution_tag, bitrate):
+def _find_latest_vmaf_doc(db, episode_id, codec_lib, resolution_tag, bitrate, run_id=None):
+    query = {
+        "episode_id": episode_id,
+        "codec": codec_lib,
+        "resolution": resolution_tag,
+        "bitrate_kbps": int(bitrate),
+    }
+    if run_id:
+        query["lab_run_id"] = run_id
     doc = db.video_vmaf_research.find_one(
-        {
-            "episode_id": episode_id,
-            "codec": codec_lib,
-            "resolution": resolution_tag,
-            "bitrate_kbps": int(bitrate),
-        },
-        sort=[("timestamp", -1)],
+        query,
+        sort=[("timestamp", -1), ("_id", -1)],
     )
     if not doc:
         return None
@@ -197,6 +204,9 @@ def _find_latest_vmaf_doc(db, episode_id, codec_lib, resolution_tag, bitrate):
     if score is None:
         return None
     return doc
+
+
+_BATCH_ACTIVE_STATES = {"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"}
 
 
 def _resolve_pending_for_resolution(
@@ -208,6 +218,7 @@ def _resolve_pending_for_resolution(
     resolution_tag,
     res_cfg,
     res_state,
+    run_id=None,
 ):
     tested = res_state["tested"]
     pending_items = [(k, v) for k, v in tested.items() if v.get("status") == "PENDING"]
@@ -223,13 +234,14 @@ def _resolve_pending_for_resolution(
 
     for bitrate_key, entry in pending_items:
         bitrate = _to_int(bitrate_key)
-        doc = _find_latest_vmaf_doc(db, episode_id, codec_lib, resolution_tag, bitrate)
+        doc = _find_latest_vmaf_doc(db, episode_id, codec_lib, resolution_tag, bitrate, run_id=run_id)
         if doc:
             score = _safe_float(doc.get("vmaf_score"))
             timeline = doc.get("vmaf_timeline") or []
             passed = _is_pass(score, timeline, threshold, dip_floor)
             tested[bitrate_key] = {
                 "status": "PASS" if passed else "FAIL",
+                "reason": "PASS" if passed else "FAIL_THRESHOLD",
                 "vmaf": score,
                 "vmaf_delta": round(score - threshold, 3),
             }
@@ -238,15 +250,6 @@ def _resolve_pending_for_resolution(
         job_id = entry.get("job_id")
         job = described.get(job_id) if job_id else None
         job_status = (job or {}).get("status")
-
-        submitted_at = entry.get("submitted_at")
-        age_s = 0
-        if submitted_at:
-            try:
-                submitted_dt = datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
-                age_s = int((now_dt - submitted_dt).total_seconds())
-            except Exception:
-                age_s = 0
 
         retry_count = _to_int(entry.get("retry_count"), 0)
 
@@ -260,12 +263,43 @@ def _resolve_pending_for_resolution(
                 }
             continue
 
+        if job_status in _BATCH_ACTIVE_STATES:
+            continue
+
+        if job_status == "SUCCEEDED":
+            submitted_at = entry.get("submitted_at")
+            age_s = 0
+            if submitted_at:
+                try:
+                    submitted_dt = datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
+                    age_s = int((now_dt - submitted_dt).total_seconds())
+                except Exception:
+                    age_s = 0
+            if age_s > timeout_s:
+                if retry_count < 1:
+                    resubmit.append((bitrate_key, bitrate, retry_count + 1))
+                else:
+                    tested[bitrate_key] = {
+                        "status": "FAIL",
+                        "reason": "SUCCEEDED_NO_DOC",
+                    }
+            continue
+
+        submitted_at = entry.get("submitted_at")
+        age_s = 0
+        if submitted_at:
+            try:
+                submitted_dt = datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
+                age_s = int((now_dt - submitted_dt).total_seconds())
+            except Exception:
+                age_s = 0
+
         if age_s > timeout_s:
             if job_id:
                 try:
                     batch_client.terminate_job(
                         jobId=job_id,
-                        reason="Hard timeout exceeded",
+                        reason="Hard timeout exceeded — job not found in Batch",
                     )
                 except Exception:
                     pass
@@ -282,7 +316,7 @@ def _resolve_pending_for_resolution(
         tested.pop(bitrate_key, None)
         _resubmit_job(
             batch_client, episode_id, s3_url, codec_lib, resolution_tag,
-            res_state, bitrate, new_retry_count,
+            res_state, bitrate, new_retry_count, run_id=run_id,
         )
 
     res_state["test_count"] = _count_non_discarded(tested)
@@ -423,6 +457,10 @@ def _decide_resolution(res_state, res_cfg):
         pass_lower = sorted([b for b in lower_space if _get_status(tested, b) == "PASS"])
         if pass_lower:
             best = pass_lower[0]
+            # Wait until every strictly lower rung has resolved before committing to
+            # best, so e.g. 2000 kbps cannot win while 1800 kbps is still PENDING.
+            if _any_pending_strictly_below(tested, lower_space, best):
+                return actions
             pending_above_best = [b for b in _pending_bitrates(tested) if b > best]
             if pending_above_best:
                 actions["discard"] = pending_above_best
@@ -526,7 +564,7 @@ def _decide_resolution(res_state, res_cfg):
     return actions
 
 
-def _submit_jobs(batch_client, episode_id, s3_url, codec_lib, resolution_tag, res_state, bitrates):
+def _submit_jobs(batch_client, episode_id, s3_url, codec_lib, resolution_tag, res_state, bitrates, run_id=None):
     queue_arn = os.environ.get("BATCH_JOB_QUEUE_ARN")
     definition_arn = os.environ.get("BATCH_JOB_DEFINITION_ARN")
     if not queue_arn or not definition_arn:
@@ -540,19 +578,20 @@ def _submit_jobs(batch_client, episode_id, s3_url, codec_lib, resolution_tag, re
         if key in tested:
             continue
         job_name = f"ChaiQSearch-{episode_id[:24]}-{resolution_env}-{bitrate}-{uuid.uuid4().hex[:6]}"
+        env_vars = [
+            {"name": "BITRATE", "value": str(bitrate)},
+            {"name": "CODEC", "value": codec_lib},
+            {"name": "RESOLUTION", "value": resolution_env},
+            {"name": "S3_URL", "value": s3_url},
+            {"name": "EPISODE_ID", "value": episode_id},
+        ]
+        if run_id:
+            env_vars.append({"name": "LAB_RUN_ID", "value": run_id})
         resp = batch_client.submit_job(
             jobName=job_name[:128],
             jobQueue=queue_arn,
             jobDefinition=definition_arn,
-            containerOverrides={
-                "environment": [
-                    {"name": "BITRATE", "value": str(bitrate)},
-                    {"name": "CODEC", "value": codec_lib},
-                    {"name": "RESOLUTION", "value": resolution_env},
-                    {"name": "S3_URL", "value": s3_url},
-                    {"name": "EPISODE_ID", "value": episode_id},
-                ]
-            },
+            containerOverrides={"environment": env_vars},
         )
         tested[key] = {
             "status": "PENDING",
@@ -563,7 +602,7 @@ def _submit_jobs(batch_client, episode_id, s3_url, codec_lib, resolution_tag, re
     res_state["test_count"] = _count_non_discarded(tested)
 
 
-def _resubmit_job(batch_client, episode_id, s3_url, codec_lib, resolution_tag, res_state, bitrate, retry_count):
+def _resubmit_job(batch_client, episode_id, s3_url, codec_lib, resolution_tag, res_state, bitrate, retry_count, run_id=None):
     queue_arn = os.environ.get("BATCH_JOB_QUEUE_ARN")
     definition_arn = os.environ.get("BATCH_JOB_DEFINITION_ARN")
     if not queue_arn or not definition_arn:
@@ -573,20 +612,21 @@ def _resubmit_job(batch_client, episode_id, s3_url, codec_lib, resolution_tag, r
     resolution_env = _resolution_env_value(resolution_tag)
     key = str(bitrate)
     job_name = f"ChaiQSearch-{episode_id[:24]}-{resolution_env}-{bitrate}-r{retry_count}-{uuid.uuid4().hex[:6]}"
+    env_vars = [
+        {"name": "BITRATE", "value": str(bitrate)},
+        {"name": "CODEC", "value": codec_lib},
+        {"name": "RESOLUTION", "value": resolution_env},
+        {"name": "S3_URL", "value": s3_url},
+        {"name": "EPISODE_ID", "value": episode_id},
+    ]
+    if run_id:
+        env_vars.append({"name": "LAB_RUN_ID", "value": run_id})
     try:
         resp = batch_client.submit_job(
             jobName=job_name[:128],
             jobQueue=queue_arn,
             jobDefinition=definition_arn,
-            containerOverrides={
-                "environment": [
-                    {"name": "BITRATE", "value": str(bitrate)},
-                    {"name": "CODEC", "value": codec_lib},
-                    {"name": "RESOLUTION", "value": resolution_env},
-                    {"name": "S3_URL", "value": s3_url},
-                    {"name": "EPISODE_ID", "value": episode_id},
-                ]
-            },
+            containerOverrides={"environment": env_vars},
         )
         tested[key] = {
             "status": "PENDING",
@@ -691,8 +731,8 @@ def _write_progress(db, episode_id, codec, poll_count, all_done, search_state):
     )
 
 
-def _build_response(episode_id, codec, s3_url, search_state, poll_count, all_done):
-    return {
+def _build_response(episode_id, codec, s3_url, search_state, poll_count, all_done, run_id=None):
+    resp = {
         "episode_id": episode_id,
         "codec": codec,
         "s3_url": s3_url,
@@ -701,12 +741,16 @@ def _build_response(episode_id, codec, s3_url, search_state, poll_count, all_don
         "all_done": all_done,
         "next_wait": "SHORT" if poll_count <= 3 else "LONG",
     }
+    if run_id:
+        resp["run_id"] = run_id
+    return resp
 
 
 def handler(event, context):
     episode_id = event.get("episode_id")
     codec = event.get("codec")
     s3_url = event.get("s3_url")
+    run_id = event.get("run_id")
     poll_count = _to_int(event.get("poll_count"), 0)
 
     if not episode_id:
@@ -723,60 +767,67 @@ def handler(event, context):
     codec_lib = SEARCH_CONFIG[codec]["ffmpeg_codec"]
     cfg_by_res = SEARCH_CONFIG[codec]["resolutions"]
 
-    db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
-    batch_client = boto3.client("batch")
+    mongo_client = pymongo.MongoClient(mongo_uri)
+    try:
+        db = mongo_client["chai_q_lab"]
+        batch_client = boto3.client("batch")
 
-    search_state = event.get("search_state")
-    if not search_state:
-        search_state = _build_initial_state(codec)
+        search_state = event.get("search_state")
+        if not search_state:
+            search_state = _build_initial_state(codec)
+            for res in RESOLUTION_ORDER:
+                rs = search_state["resolutions"][res]
+                _submit_jobs(
+                    batch_client=batch_client,
+                    episode_id=episode_id,
+                    s3_url=s3_url,
+                    codec_lib=codec_lib,
+                    resolution_tag=res,
+                    res_state=rs,
+                    bitrates=cfg_by_res[res]["initial_probes"],
+                    run_id=run_id,
+                )
+            all_done = False
+            _write_progress(db, episode_id, codec, poll_count, all_done, search_state)
+            return _build_response(episode_id, codec, s3_url, search_state, poll_count, all_done, run_id=run_id)
+
+        poll_count += 1
+        search_state = _normalize_state(search_state, codec)
+
         for res in RESOLUTION_ORDER:
             rs = search_state["resolutions"][res]
-            _submit_jobs(
+            if rs.get("phase") == "FINAL":
+                continue
+
+            _resolve_pending_for_resolution(
+                db=db,
                 batch_client=batch_client,
                 episode_id=episode_id,
                 s3_url=s3_url,
                 codec_lib=codec_lib,
                 resolution_tag=res,
+                res_cfg=cfg_by_res[res],
                 res_state=rs,
-                bitrates=cfg_by_res[res]["initial_probes"],
+                run_id=run_id,
             )
-        all_done = False
+
+            actions = _decide_resolution(rs, cfg_by_res[res])
+            if actions.get("discard"):
+                _discard_jobs(batch_client, rs, actions["discard"])
+            if actions.get("submit"):
+                _submit_jobs(
+                    batch_client=batch_client,
+                    episode_id=episode_id,
+                    s3_url=s3_url,
+                    codec_lib=codec_lib,
+                    resolution_tag=res,
+                    res_state=rs,
+                    bitrates=actions["submit"],
+                    run_id=run_id,
+                )
+
+        all_done = all(search_state["resolutions"][res]["phase"] == "FINAL" for res in RESOLUTION_ORDER)
         _write_progress(db, episode_id, codec, poll_count, all_done, search_state)
-        return _build_response(episode_id, codec, s3_url, search_state, poll_count, all_done)
-
-    poll_count += 1
-    search_state = _normalize_state(search_state, codec)
-
-    for res in RESOLUTION_ORDER:
-        rs = search_state["resolutions"][res]
-        if rs.get("phase") == "FINAL":
-            continue
-
-        _resolve_pending_for_resolution(
-            db=db,
-            batch_client=batch_client,
-            episode_id=episode_id,
-            s3_url=s3_url,
-            codec_lib=codec_lib,
-            resolution_tag=res,
-            res_cfg=cfg_by_res[res],
-            res_state=rs,
-        )
-
-        actions = _decide_resolution(rs, cfg_by_res[res])
-        if actions.get("discard"):
-            _discard_jobs(batch_client, rs, actions["discard"])
-        if actions.get("submit"):
-            _submit_jobs(
-                batch_client=batch_client,
-                episode_id=episode_id,
-                s3_url=s3_url,
-                codec_lib=codec_lib,
-                resolution_tag=res,
-                res_state=rs,
-                bitrates=actions["submit"],
-            )
-
-    all_done = all(search_state["resolutions"][res]["phase"] == "FINAL" for res in RESOLUTION_ORDER)
-    _write_progress(db, episode_id, codec, poll_count, all_done, search_state)
-    return _build_response(episode_id, codec, s3_url, search_state, poll_count, all_done)
+        return _build_response(episode_id, codec, s3_url, search_state, poll_count, all_done, run_id=run_id)
+    finally:
+        mongo_client.close()

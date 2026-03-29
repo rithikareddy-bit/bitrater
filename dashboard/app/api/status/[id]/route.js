@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import { LEGACY_TOTAL_JOBS_H264, LEGACY_TOTAL_JOBS_H265 } from '@/lib/constants';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(request, { params }) {
   const { id } = params;
   const { searchParams } = new URL(request.url);
@@ -84,16 +87,18 @@ export async function GET(request, { params }) {
       };
     };
 
+    const noStoreHeaders = { 'Cache-Control': 'no-store, max-age=0' };
+
     if (codecParam === 'h264' || codecParam === 'h265') {
       const data = await buildCodecStatus(codecParam);
-      return NextResponse.json(data);
+      return NextResponse.json(data, { headers: noStoreHeaders });
     }
 
     const [h264, h265] = await Promise.all([
       buildCodecStatus('h264'),
       buildCodecStatus('h265'),
     ]);
-    return NextResponse.json({ h264, h265 });
+    return NextResponse.json({ h264, h265 }, { headers: noStoreHeaders });
   } catch (err) {
     console.error('[GET /api/status/[id]]', err);
     return NextResponse.json({ error: 'Failed to fetch job status' }, { status: 500 });

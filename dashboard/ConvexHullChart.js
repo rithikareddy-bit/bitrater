@@ -37,7 +37,7 @@ const ConvexHullChart = ({ researchData, vmafThreshold = 88 }) => {
 
   const options = {
     scales: {
-      x: { type: 'linear', title: { display: true, text: 'Bitrate (Kbps)' } },
+      x: { type: 'linear', min: 100, max: 4200, title: { display: true, text: 'Bitrate (Kbps)' } },
       y: { type: 'linear', title: { display: true, text: 'VMAF Score' }, min: yMin, max: 100 }
     },
     plugins: {

@@ -8,6 +8,7 @@ import VMAFHeatmap from '@/components/VMAFHeatmap';
 import FrameComparison from '@/components/FrameComparison';
 import LabStatus from '@/components/LabStatus';
 import GCPStatus from '@/components/GCPStatus';
+import { VMAF_THRESHOLDS } from '@/lib/constants';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -47,7 +48,6 @@ const PANEL_TITLE = {
 };
 
 const RESOLUTIONS = ['1080p', '720p', '480p'];
-const VMAF_THRESHOLDS = { '1080p': 88, '720p': 75, '480p': 48 };
 
 export default function EpisodePage() {
   const { id } = useParams();
@@ -65,6 +65,29 @@ export default function EpisodePage() {
 
   useEffect(() => {
     fetchData();
+  }, [id]);
+
+  useEffect(() => {
+    let timer = null;
+    let active = true;
+
+    const pollWhileRunning = async () => {
+      try {
+        const res = await fetch(`/api/status/${id}`);
+        if (!res.ok || !active) return;
+        const s = await res.json();
+        const h264 = s.h264 ?? s;
+        const h265 = s.h265 ?? s;
+        const anyRunning = h264?.labStatus === 'RUNNING' || h265?.labStatus === 'RUNNING';
+        if (anyRunning && active) {
+          fetchData();
+          timer = setTimeout(pollWhileRunning, 15000);
+        }
+      } catch { /* ignore polling errors */ }
+    };
+
+    timer = setTimeout(pollWhileRunning, 15000);
+    return () => { active = false; clearTimeout(timer); };
   }, [id]);
 
   if (loading) return <p style={{ color: '#888' }}>Loading episode data...</p>;
@@ -109,6 +132,14 @@ export default function EpisodePage() {
 
   const vmafTimeline = goldenRow?.vmaf_timeline || [];
 
+  const durationSeconds = research.reduce((max, r) => Math.max(max, r.vmaf_timeline?.length || 0), 0);
+
+  const calcSizeMB = (res, codec) => {
+    const bitrate = golden?.golden_recipes?.resolutions?.[res]?.[codec]?.bitrate_kbps;
+    if (!bitrate || !durationSeconds) return '--';
+    return ((bitrate * durationSeconds) / 8 / 1024).toFixed(1) + ' MB';
+  };
+
   return (
     <div>
       <a href="/" style={{ fontSize: 13, color: '#4da6ff', display: 'inline-block', marginBottom: 16 }}>
@@ -152,6 +183,38 @@ export default function EpisodePage() {
             vmafThreshold={vmafThreshold}
           />
         </ErrorBoundary>
+      </div>
+
+      {/* Data Consumption Table */}
+      <div style={{ ...PANEL_STYLE, marginBottom: 16 }}>
+        <div style={PANEL_TITLE}>Data Consumption (Golden Bitrates)</div>
+        {durationSeconds > 0 ? (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', color: '#888', padding: '6px 12px', borderBottom: '1px solid #2a2a2a' }}>Resolution</th>
+                <th style={{ textAlign: 'center', color: '#3380FF', padding: '6px 12px', borderBottom: '1px solid #2a2a2a' }}>H.264</th>
+                <th style={{ textAlign: 'center', color: '#FF5733', padding: '6px 12px', borderBottom: '1px solid #2a2a2a' }}>H.265</th>
+              </tr>
+            </thead>
+            <tbody>
+              {RESOLUTIONS.map((res) => (
+                <tr key={res} style={{ borderBottom: '1px solid #1e1e1e' }}>
+                  <td style={{ padding: '8px 12px', color: '#e2e8f0', fontWeight: 600 }}>{res}</td>
+                  <td style={{ padding: '8px 12px', color: '#94a3b8', textAlign: 'center' }}>{calcSizeMB(res, 'h264')}</td>
+                  <td style={{ padding: '8px 12px', color: '#94a3b8', textAlign: 'center' }}>{calcSizeMB(res, 'h265')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ color: '#555', fontSize: 12 }}>No research data available yet.</div>
+        )}
+        {durationSeconds > 0 && (
+          <div style={{ fontSize: 11, color: '#555', marginTop: 8 }}>
+            Source duration: {durationSeconds}s · Formula: (bitrate_kbps × duration) / 8 / 1024
+          </div>
+        )}
       </div>
 
       {/* 2×2 grid */}

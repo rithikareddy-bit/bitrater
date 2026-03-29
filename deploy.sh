@@ -25,6 +25,14 @@ if [[ -z "${MONGO_URI:-}" ]]; then
   exit 1
 fi
 
+# Terraform var is gcp_credentials_secret_arn. Prefer .env.deploy export GCP_CREDENTIALS_SECRET_ARN
+# so it matches deploy secrets; otherwise Step 1d creates/updates the secret and we use its ARN.
+if [[ -n "${GCP_CREDENTIALS_SECRET_ARN:-}" ]]; then
+  GCP_SECRET_ARN_FOR_TF="${GCP_CREDENTIALS_SECRET_ARN}"
+else
+  GCP_SECRET_ARN_FOR_TF=""
+fi
+
 GCP_PROJECT="media-cdn-poc-466009"
 GCP_LOCATION="asia-south1"
 GCS_INPUT_BUCKET="chai-q-transcoder-input"
@@ -61,27 +69,33 @@ gcloud projects add-iam-policy-binding "${GCP_PROJECT}" \
   --member="serviceAccount:${GCP_SA_EMAIL}" \
   --role="roles/storage.admin" --quiet
 
-echo "[1d] Creating service account key and storing in AWS Secrets Manager..."
-KEY_FILE="/tmp/gcp-key-$$.json"
-gcloud iam service-accounts keys create "${KEY_FILE}" \
-  --iam-account="${GCP_SA_EMAIL}"
+if [[ -n "${GCP_SECRET_ARN_FOR_TF}" ]]; then
+  echo "[1d] Using existing GCP secret from .env.deploy (GCP_CREDENTIALS_SECRET_ARN); skipping new key upload."
+  echo "  Secret ARN: ${GCP_SECRET_ARN_FOR_TF}"
+else
+  echo "[1d] Creating service account key and storing in AWS Secrets Manager..."
+  KEY_FILE="/tmp/gcp-key-$$.json"
+  gcloud iam service-accounts keys create "${KEY_FILE}" \
+    --iam-account="${GCP_SA_EMAIL}"
 
-SECRET_ARN=$(aws secretsmanager create-secret \
-  --name "chai-q-gcp-credentials" \
-  --secret-string "file://${KEY_FILE}" \
-  --region "${AWS_REGION}" \
-  --query 'ARN' --output text 2>/dev/null || \
-  aws secretsmanager put-secret-value \
-  --secret-id "chai-q-gcp-credentials" \
-  --secret-string "file://${KEY_FILE}" \
-  --region "${AWS_REGION}" && \
-  aws secretsmanager describe-secret \
-  --secret-id "chai-q-gcp-credentials" \
-  --region "${AWS_REGION}" \
-  --query 'ARN' --output text)
+  SECRET_ARN=$(aws secretsmanager create-secret \
+    --name "chai-q-gcp-credentials" \
+    --secret-string "file://${KEY_FILE}" \
+    --region "${AWS_REGION}" \
+    --query 'ARN' --output text 2>/dev/null || \
+    aws secretsmanager put-secret-value \
+    --secret-id "chai-q-gcp-credentials" \
+    --secret-string "file://${KEY_FILE}" \
+    --region "${AWS_REGION}" && \
+    aws secretsmanager describe-secret \
+    --secret-id "chai-q-gcp-credentials" \
+    --region "${AWS_REGION}" \
+    --query 'ARN' --output text)
 
-rm -f "${KEY_FILE}"
-echo "  Secret ARN: ${SECRET_ARN}"
+  rm -f "${KEY_FILE}"
+  GCP_SECRET_ARN_FOR_TF="${SECRET_ARN}"
+  echo "  Secret ARN: ${GCP_SECRET_ARN_FOR_TF}"
+fi
 
 echo ""
 echo "========================================"
@@ -114,7 +128,7 @@ terraform apply -auto-approve \
   -var="gcp_location=${GCP_LOCATION}" \
   -var="gcs_input_bucket=${GCS_INPUT_BUCKET}" \
   -var="gcs_output_bucket=${GCS_OUTPUT_BUCKET}" \
-  -var="gcp_credentials_secret_arn=${SECRET_ARN}" \
+  -var="gcp_credentials_secret_arn=${GCP_SECRET_ARN_FOR_TF}" \
   -var="subtitle_mongo_uri=${SUBTITLE_MONGO_URI:-}"
 
 echo ""
