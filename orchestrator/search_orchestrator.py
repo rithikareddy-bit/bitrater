@@ -198,6 +198,18 @@ def _find_latest_vmaf_doc(db, episode_id, codec_lib, resolution_tag, bitrate, ru
         query,
         sort=[("timestamp", -1), ("_id", -1)],
     )
+    if not doc and run_id:
+        # Fallback: worker image may not have written lab_run_id (older build).
+        # Safe to query without it because push API deletes all prior docs before each run.
+        doc = db.video_vmaf_research.find_one(
+            {
+                "episode_id": episode_id,
+                "codec": codec_lib,
+                "resolution": resolution_tag,
+                "bitrate_kbps": int(bitrate),
+            },
+            sort=[("timestamp", -1), ("_id", -1)],
+        )
     if not doc:
         return None
     score = _safe_float(doc.get("vmaf_score"))

@@ -34,17 +34,13 @@ export async function GET(request, { params }) {
       const labStatus = episode?.[`lab_status_${codec}`] ?? null;
       const searchProgress = episode?.[`search_progress_${codec}`] ?? null;
 
-      const succeeded = await db.collection('video_vmaf_research').countDocuments({
-        episode_id: id,
-        codec: libCodec,
-      });
-
       let total = legacyTotal;
+      let succeeded = 0;
       let failed = 0;
       let running = 0;
       let resolutionPhases = null;
 
-      if (searchProgress?.resolutions && labStatus !== 'FAILED') {
+      if (searchProgress?.resolutions) {
         const resolutionEntries = Object.entries(searchProgress.resolutions);
         resolutionPhases = {};
 
@@ -66,13 +62,20 @@ export async function GET(request, { params }) {
           };
         }
 
-        total = Math.max(0, testedFromProgress + pendingFromProgress);
-        running = pendingFromProgress;
-        failed = Math.max(0, total - running - testedFromProgress);
-      } else if (labStatus === 'FAILED') {
-        failed = Math.max(0, total - succeeded);
-      } else if (labStatus === 'RUNNING') {
-        running = Math.max(0, total - succeeded);
+        total = Math.max(legacyTotal, testedFromProgress + pendingFromProgress);
+        succeeded = testedFromProgress;
+        running = labStatus === 'FAILED' ? 0 : pendingFromProgress;
+        failed = labStatus === 'FAILED' ? Math.max(0, total - succeeded) : 0;
+      } else {
+        succeeded = await db.collection('video_vmaf_research').countDocuments({
+          episode_id: id,
+          codec: libCodec,
+        });
+        if (labStatus === 'FAILED') {
+          failed = Math.max(0, total - succeeded);
+        } else if (labStatus === 'RUNNING') {
+          running = Math.max(0, total - succeeded);
+        }
       }
 
       return {
