@@ -63,6 +63,7 @@ export async function GET(request, { params }) {
     const projection = {
       h264_master_m3u8_url: 1,
       h265_master_m3u8_url: 1,
+      combined_master_m3u8_url: 1,
     };
     for (const codec of ['h264', 'h265']) {
       projection[`gcp_job_status_${codec}`] = 1;
@@ -92,6 +93,7 @@ export async function GET(request, { params }) {
       h265,
       h264_master_m3u8_url: episode.h264_master_m3u8_url || null,
       h265_master_m3u8_url: episode.h265_master_m3u8_url || null,
+      combined_master_m3u8_url: episode.combined_master_m3u8_url || null,
     });
   } catch (err) {
     console.error('[GET /api/gcp-status/[id]]', err);

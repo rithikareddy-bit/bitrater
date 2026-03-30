@@ -28,6 +28,9 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       const res = await fetch(`/api/gcp-status/${episodeId}`);
       const data = await res.json();
       setStatus(data);
+      if (data.combined_master_m3u8_url) {
+        setCombinedUrl(data.combined_master_m3u8_url);
+      }
 
       const h264Done = !data.h264?.gcp_job_status || !['PENDING', 'RUNNING'].includes(data.h264.gcp_job_status);
       const h265Done = !data.h265?.gcp_job_status || !['PENDING', 'RUNNING'].includes(data.h265.gcp_job_status);
