@@ -51,7 +51,7 @@ def _build_h264_video_stream(res_tag, bitrate_kbps, width, height):
                 vbv_size_bits=bitrate_kbps * 1000 * 4,
                 vbv_fullness_bits=bitrate_kbps * 1000 * 4 * 9 // 10,
                 aq_strength=1.0,
-                b_frame_count=3,
+                b_frame_count=0,
             ),
         ),
     )
@@ -74,7 +74,7 @@ def _build_h265_video_stream(res_tag, bitrate_kbps, width, height):
                 vbv_size_bits=bitrate_kbps * 1000 * 4,
                 vbv_fullness_bits=bitrate_kbps * 1000 * 4 * 9 // 10,
                 aq_strength=1.0,
-                b_frame_count=4,
+                b_frame_count=0,
             ),
         ),
     )

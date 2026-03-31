@@ -2,12 +2,11 @@
 State 6 of GCP-Orchestrator: FinalizeHLS
 
 After the GCP Transcoder job succeeds:
-1. Clear only this codec's files from CDN bucket
-2. Copy transcoder output (codec-specific) from GCS to CDN
-3. Fetch subtitle VTT URLs, upload to GCS, generate subtitle playlists
-4. Patch only this codec's master m3u8 with subtitle track entries
-5. Write only this codec's CDN URL to MongoDB
-6. Return both URL keys (null for codec not produced)
+1. Copy codec-specific transcoder output into a versioned CDN folder (no delete, no overwrite)
+2. Fetch subtitle VTT URLs, upload to GCS, generate subtitle playlists
+3. Patch only this codec's master m3u8 with subtitle track entries
+4. Write only this codec's CDN URL to MongoDB
+5. Return both URL keys (null for codec not produced)
 """
 
 import os
@@ -108,7 +107,7 @@ def _download_vtt(url):
     return resp.text
 
 
-def _upload_subtitles_to_gcs(creds, episode_id, vtt_urls):
+def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls):
     """Download VTTs, upload to GCS, and create subtitle .m3u8 playlists.
     Returns list of (lang_code, display_name, playlist_filename) for uploaded languages."""
     client = gcs.Client(credentials=creds)
@@ -124,11 +123,11 @@ def _upload_subtitles_to_gcs(creds, episode_id, vtt_urls):
             vtt_content = _download_vtt(url)
             print(f"[SUBS] Downloaded {lang_key}: {len(vtt_content)} bytes")
 
-            vtt_blob = bucket.blob(f"{episode_id}/{vtt_filename}")
+            vtt_blob = bucket.blob(f"{cdn_prefix}/{vtt_filename}")
             vtt_blob.upload_from_string(vtt_content, content_type="text/vtt")
 
             playlist_content = SUBTITLE_PLAYLIST_TEMPLATE.format(vtt_filename=vtt_filename)
-            playlist_blob = bucket.blob(f"{episode_id}/{playlist_filename}")
+            playlist_blob = bucket.blob(f"{cdn_prefix}/{playlist_filename}")
             playlist_blob.upload_from_string(playlist_content, content_type="application/x-mpegURL")
 
             uploaded.append((lang_code, display_name, playlist_filename))
@@ -139,14 +138,14 @@ def _upload_subtitles_to_gcs(creds, episode_id, vtt_urls):
     return uploaded
 
 
-def _patch_master_manifest(creds, episode_id, manifest_name, subtitle_tracks):
+def _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks):
     """Download master .m3u8, inject subtitle entries, re-upload."""
     if not subtitle_tracks:
         return
 
     client = gcs.Client(credentials=creds)
     bucket = client.bucket(CDN_BUCKET)
-    blob = bucket.blob(f"{episode_id}/{manifest_name}")
+    blob = bucket.blob(f"{cdn_prefix}/{manifest_name}")
 
     if not blob.exists():
         print(f"[PATCH] Skipping {manifest_name} — does not exist")
@@ -209,20 +208,29 @@ def _clear_cdn_bucket_codec(creds, episode_id, codec):
         print(f"[CLEAR] No existing {codec} objects in gs://{CDN_BUCKET}/{prefix}")
 
 
-def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id):
-    """Copy all transcoder output from the source bucket to the CDN bucket."""
+def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec):
+    """Copy codec-specific transcoder output into a versioned CDN folder with size validation."""
     client = gcs.Client(credentials=creds)
     src_bucket = client.bucket(source_bucket_name)
     dst_bucket = client.bucket(CDN_BUCKET)
 
     prefix = f"{episode_id}/"
-    blobs = list(src_bucket.list_blobs(prefix=prefix))
-    print(f"[COPY] Found {len(blobs)} objects in gs://{source_bucket_name}/{prefix}")
+    print(f"[COPY] Listing objects in gs://{source_bucket_name}/{prefix}")
 
-    for blob in blobs:
-        src_bucket.copy_blob(blob, dst_bucket, new_name=blob.name)
+    copied = 0
+    for blob in src_bucket.list_blobs(prefix=prefix):
+        if codec not in blob.name:
+            continue
+        dst_name = f"{cdn_prefix}/{os.path.basename(blob.name)}"
+        dst_blob = src_bucket.copy_blob(blob, dst_bucket, new_name=dst_name)
+        dst_blob.reload()
+        if dst_blob.size != blob.size:
+            raise RuntimeError(
+                f"Partial copy: {blob.name} expected {blob.size} bytes, got {dst_blob.size}"
+            )
+        copied += 1
 
-    print(f"[COPY] Copied {len(blobs)} objects to gs://{CDN_BUCKET}/{prefix}")
+    print(f"[COPY] Copied {copied} {codec} objects to gs://{CDN_BUCKET}/{cdn_prefix}/")
 
 
 _RESOLUTION_ORDER = {"720p": 0, "480p": 1, "1080p": 2}
@@ -243,11 +251,11 @@ def _resolution_rank(stream_inf_line):
     return _RESOLUTION_ORDER.get(tag, 99)
 
 
-def _reorder_streams_in_manifest(creds, episode_id, manifest_name):
+def _reorder_streams_in_manifest(creds, cdn_prefix, manifest_name):
     """Download manifest, reorder #EXT-X-STREAM-INF blocks to 720p→480p→1080p, re-upload."""
     client = gcs.Client(credentials=creds)
     bucket = client.bucket(CDN_BUCKET)
-    blob = bucket.blob(f"{episode_id}/{manifest_name}")
+    blob = bucket.blob(f"{cdn_prefix}/{manifest_name}")
     if not blob.exists():
         print(f"[REORDER] {manifest_name} not found, skipping")
         return
@@ -279,12 +287,12 @@ def _reorder_streams_in_manifest(creds, episode_id, manifest_name):
     print(f"[REORDER] Reordered streams in {manifest_name} to 720p→480p→1080p")
 
 
-def _fix_audio_name(creds, episode_id, slug, codec):
+def _fix_audio_name(creds, cdn_prefix, slug, codec):
     """Replace placeholder audio NAME in the codec's master manifest."""
     manifest_name = f"{codec}_master.m3u8"
     client = gcs.Client(credentials=creds)
     bucket = client.bucket(CDN_BUCKET)
-    blob = bucket.blob(f"{episode_id}/{manifest_name}")
+    blob = bucket.blob(f"{cdn_prefix}/{manifest_name}")
     if not blob.exists():
         return
     text = blob.download_as_text()
@@ -308,22 +316,26 @@ def handler(event, context):
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
     gcs_prefix = output_uri.replace(f"gs://{gcs_output_bucket}/", "").rstrip("/")
 
+    _now = datetime.now(timezone.utc)
+    folder_ts = _now.strftime("%d%m%Y_%H%M%S")
+    cdn_prefix = f"{episode_id}/{folder_ts}"
+    now_iso = _now.isoformat()
+
     episode_slug, _, show_slug, episode_number = _get_episode_meta(db, episode_id)
 
     creds = _get_gcp_credentials()
-    _clear_cdn_bucket_codec(creds, episode_id, codec)
-    _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id)
-    _fix_audio_name(creds, episode_id, episode_slug, codec)
-    _reorder_streams_in_manifest(creds, episode_id, f"{codec}_master.m3u8")
+    _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id, cdn_prefix, codec)
+    _fix_audio_name(creds, cdn_prefix, episode_slug, codec)
+    _reorder_streams_in_manifest(creds, cdn_prefix, f"{codec}_master.m3u8")
 
     # --- Subtitle pipeline (only for this codec's manifest) ---
     vtt_urls = _get_subtitle_vtt_urls(episode_id)
     subtitle_tracks = []
     if vtt_urls:
         try:
-            subtitle_tracks = _upload_subtitles_to_gcs(creds, episode_id, vtt_urls)
+            subtitle_tracks = _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls)
             manifest_name = f"{codec}_master.m3u8"
-            _patch_master_manifest(creds, episode_id, manifest_name, subtitle_tracks)
+            _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks)
         except Exception as e:
             print(f"[SUBS] Subtitle injection failed (non-fatal): {e}")
             finished_key = f"gcp_finished_at_{codec}"
@@ -335,18 +347,7 @@ def handler(event, context):
                 }},
             )
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-    date_str = datetime.now(timezone.utc).strftime("%d%m%Y")
-    versioned_name = f"{show_slug}_ep_{episode_number}_{date_str}_{codec}.m3u8"
-
-    # Copy final patched master to versioned filename for CDN cache busting
-    cdn_client = gcs.Client(credentials=creds)
-    cdn_bucket = cdn_client.bucket(CDN_BUCKET)
-    src_blob = cdn_bucket.blob(f"{episode_id}/{codec}_master.m3u8")
-    cdn_bucket.copy_blob(src_blob, cdn_bucket, new_name=f"{episode_id}/{versioned_name}")
-    print(f"[VERSION] Copied to {versioned_name}")
-
-    url_value = f"{CDN_BASE}/{episode_id}/{versioned_name}"
+    url_value = f"{CDN_BASE}/{cdn_prefix}/{codec}_master.m3u8"
 
     url_key = f"{codec}_master_m3u8_url"
     status_key = f"gcp_job_status_{codec}"

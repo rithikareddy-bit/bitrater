@@ -161,8 +161,10 @@ def handler(event, context):
         episode_number = show["episodes"][0].get("episode_number", 0)
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    date_str = datetime.now(timezone.utc).strftime("%d%m%Y")
-    versioned_name = f"{show_slug}_ep_{episode_number}_{date_str}_combined.m3u8"
+    _now = datetime.now(timezone.utc)
+    date_str = _now.strftime("%d%m%Y")
+    time_str = _now.strftime("%H%M%S")
+    versioned_name = f"{show_slug}_ep_{episode_number}_{date_str}_{time_str}_combined.m3u8"
 
     # Upload to CDN bucket under a versioned filename so CDN always fetches fresh
     combined_blob = bucket.blob(f"{episode_id}/{versioned_name}")
