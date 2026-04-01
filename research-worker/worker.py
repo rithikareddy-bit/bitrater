@@ -41,7 +41,7 @@ def load_heavy_params(codec):
             return json.load(f)
     return {}
 
-def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h):
+def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, frame_rate, gop, bframes):
     """Run two-pass FFmpeg encode. x264 and x265 use different two-pass mechanisms."""
     maxrate = f"{int(bitrate)*2}k"
     bufsize = f"{int(bitrate)*4}k"
@@ -52,6 +52,7 @@ def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h):
         base = [
             "ffmpeg", "-y", "-i", "source.mp4",
             "-c:v", codec, "-preset", preset, "-tune", "film",
+            "-r", str(frame_rate), "-g", str(gop), "-bf", str(bframes),
             "-b:v", f"{bitrate}k",
             "-maxrate", maxrate, "-bufsize", bufsize,
             "-pix_fmt", pix_fmt,
@@ -65,7 +66,9 @@ def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h):
         stats_file = "/tmp/x265_pass.log"
         base = [
             "ffmpeg", "-y", "-i", "source.mp4",
-            "-c:v", codec, "-preset", preset, "-b:v", f"{bitrate}k",
+            "-c:v", codec, "-preset", preset,
+            "-r", str(frame_rate),
+            "-b:v", f"{bitrate}k",
             "-maxrate", maxrate, "-bufsize", bufsize,
             "-pix_fmt", pix_fmt, "-vf", vf,
         ]
@@ -116,12 +119,15 @@ def run_research():
     s3 = boto3.client('s3', region_name=region) if region else get_s3_client()
     s3.download_file(bucket, key, 'source.mp4')
 
-    config   = load_heavy_params(codec)
-    preset   = config.get("preset", "slower")
-    pix_fmt  = config.get("pix_fmt", "yuv420p")
-    params   = config.get("params", "")
+    config     = load_heavy_params(codec)
+    preset     = config.get("preset", "slower")
+    pix_fmt    = config.get("pix_fmt", "yuv420p")
+    params     = config.get("params", "")
+    frame_rate = config.get("frame_rate", 24)
+    gop        = config.get("gop", 48)
+    bframes    = config.get("bframes", 3)
 
-    _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h)
+    _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, frame_rate, gop, bframes)
 
     info = _get_video_info("source.mp4")
     w, h = info["width"], info["height"]
