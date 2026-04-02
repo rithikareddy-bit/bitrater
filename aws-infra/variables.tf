@@ -36,3 +36,8 @@ variable "subtitle_mongo_uri" {
   type        = string
   sensitive   = true
 }
+
+variable "cdn_base" {
+  description = "CDN base URL for GCS manifests — no trailing slash (e.g. https://cdn.chaishots.in). Must exactly match the prefix written into h264/h265_master_m3u8_url in MongoDB."
+  type        = string
+}

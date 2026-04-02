@@ -72,7 +72,7 @@
       "Choices": [
         {
           "Variable": "$.poll_count",
-          "NumericGreaterThanEquals": 600,
+          "NumericGreaterThanEquals": 1440,
           "Next": "SetTimeoutError"
         }
       ],

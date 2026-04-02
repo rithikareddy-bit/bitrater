@@ -115,6 +115,7 @@
       },
       "ResultSelector": {
         "episode_id.$": "$.Payload.episode_id",
+        "folder_ts.$": "$.Payload.folder_ts",
         "h264_master_m3u8_url.$": "$.Payload.h264_master_m3u8_url",
         "h265_master_m3u8_url.$": "$.Payload.h265_master_m3u8_url"
       },

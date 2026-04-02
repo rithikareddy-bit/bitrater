@@ -20,7 +20,7 @@ from google.cloud import storage as gcs
 from google.oauth2 import service_account
 
 
-CDN_BASE = "https://cdn.chaishots.in"
+CDN_BASE = os.environ["CDN_BASE"]
 CDN_BUCKET = "chai-shots-manifests"
 
 def _get_gcp_credentials():
@@ -78,10 +78,12 @@ def _parse_manifest(text):
     return media_lines, stream_blocks
 
 
-def _download_manifest(bucket, episode_id, manifest_name):
-    blob = bucket.blob(f"{episode_id}/{manifest_name}")
+def _download_manifest_from_url(bucket, cdn_base, url):
+    """Download a manifest blob using its full CDN URL to derive the GCS path."""
+    gcs_path = url[len(cdn_base) + 1:]  # strip "https://cdn.chaishots.in/"
+    blob = bucket.blob(gcs_path)
     if not blob.exists():
-        raise FileNotFoundError(f"{manifest_name} not found in CDN bucket for episode {episode_id}")
+        raise FileNotFoundError(f"Manifest not found at gs path: {gcs_path}")
     return blob.download_as_text()
 
 
@@ -89,13 +91,23 @@ def handler(event, context):
     episode_id = event["episode_id"]
     mongo_uri = os.environ["MONGO_URI"]
 
+    mongo_client = pymongo.MongoClient(mongo_uri)
+    episode = mongo_client["chai_q_lab"].video_episodes.find_one(
+        {"episode_id": episode_id},
+        {"h264_master_m3u8_url": 1, "h265_master_m3u8_url": 1},
+    )
+    h264_url = episode.get("h264_master_m3u8_url") if episode else None
+    h265_url = episode.get("h265_master_m3u8_url") if episode else None
+    if not h264_url or not h265_url:
+        raise ValueError(f"Missing h264/h265 URLs for episode {episode_id}")
+
     creds = _get_gcp_credentials()
     gcs_client = gcs.Client(credentials=creds)
     bucket = gcs_client.bucket(CDN_BUCKET)
 
     print(f"[COMBINED] Downloading codec manifests for {episode_id}")
-    h264_text = _download_manifest(bucket, episode_id, "h264_master.m3u8")
-    h265_text = _download_manifest(bucket, episode_id, "h265_master.m3u8")
+    h264_text = _download_manifest_from_url(bucket, CDN_BASE, h264_url)
+    h265_text = _download_manifest_from_url(bucket, CDN_BASE, h265_url)
 
     h264_media, h264_streams = _parse_manifest(h264_text)
     h265_media, h265_streams = _parse_manifest(h265_text)
@@ -122,6 +134,10 @@ def handler(event, context):
     h265_audio_lines = [re.sub(r'GROUP-ID="[^"]+"', f'GROUP-ID="{h265_audio_group}"', l) for l in h265_audio_lines]
     h264_audio_lines = [re.sub(r'GROUP-ID="[^"]+"', f'GROUP-ID="{h264_audio_group}"', l) for l in h264_audio_lines]
 
+    # Base URLs for absolute URI resolution (each codec may be in a different versioned folder)
+    h264_base = h264_url.rsplit("/", 1)[0] + "/"
+    h265_base = h265_url.rsplit("/", 1)[0] + "/"
+
     # Sort all streams by ascending bandwidth
     all_streams = h264_streams + h265_streams
     all_streams.sort(key=lambda b: _sort_key(b[0]))
@@ -137,10 +153,14 @@ def handler(event, context):
             inf_line = re.sub(r'AUDIO="[^"]+"', f'AUDIO="{h265_audio_group}"', inf_line)
             if 'AUDIO=' not in inf_line:
                 inf_line = inf_line + f',AUDIO="{h265_audio_group}"'
+            if not uri_line.startswith("http"):
+                uri_line = h265_base + uri_line
         else:
             inf_line = re.sub(r'AUDIO="[^"]+"', f'AUDIO="{h264_audio_group}"', inf_line)
             if 'AUDIO=' not in inf_line:
                 inf_line = inf_line + f',AUDIO="{h264_audio_group}"'
+            if not uri_line.startswith("http"):
+                uri_line = h264_base + uri_line
         if subtitle_lines and 'SUBTITLES=' not in inf_line:
             inf_line = inf_line + ',SUBTITLES="subtitles"'
         output_lines.append(inf_line)
@@ -148,30 +168,17 @@ def handler(event, context):
 
     combined_text = "\n".join(output_lines) + "\n"
 
-    # Fetch show metadata for versioned filename
-    mongo_client = pymongo.MongoClient(mongo_uri)
-    show = mongo_client["master"]["showcache"].find_one(
-        {"episodes.id": episode_id},
-        {"episodes.$": 1, "slug": 1},
-    )
-    show_slug = "unknown"
-    episode_number = 0
-    if show and show.get("episodes"):
-        show_slug = show.get("slug", "unknown")
-        episode_number = show["episodes"][0].get("episode_number", 0)
-
-    now_iso = datetime.now(timezone.utc).isoformat()
     _now = datetime.now(timezone.utc)
-    date_str = _now.strftime("%d%m%Y")
-    time_str = _now.strftime("%H%M%S")
-    versioned_name = f"{show_slug}_ep_{episode_number}_{date_str}_{time_str}_combined.m3u8"
+    folder_ts = _now.strftime("%d%m%Y_%H%M%S")
+    now_iso = _now.isoformat()
+    cdn_prefix = f"{episode_id}/{folder_ts}"
 
-    # Upload to CDN bucket under a versioned filename so CDN always fetches fresh
-    combined_blob = bucket.blob(f"{episode_id}/{versioned_name}")
-    combined_blob.upload_from_string(combined_text, content_type="application/x-mpegURL")
-    print(f"[COMBINED] Uploaded {versioned_name} for {episode_id}")
+    combined_blob = bucket.blob(f"{cdn_prefix}/combined_master.m3u8")
+    combined_blob.cache_control = "no-store"
+    combined_blob.upload_from_string(combined_text, content_type="application/vnd.apple.mpegurl")
+    print(f"[COMBINED] Uploaded combined_master.m3u8 to {cdn_prefix}/")
 
-    combined_url = f"{CDN_BASE}/{episode_id}/{versioned_name}"
+    combined_url = f"{CDN_BASE}/{cdn_prefix}/combined_master.m3u8"
 
     mongo_client["chai_q_lab"].video_episodes.update_one(
         {"episode_id": episode_id},

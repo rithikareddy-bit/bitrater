@@ -41,14 +41,14 @@ def load_heavy_params(codec):
             return json.load(f)
     return {}
 
-def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, frame_rate, gop, bframes):
+def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, frame_rate, gop, bframes, episode_id):
     """Run two-pass FFmpeg encode. x264 and x265 use different two-pass mechanisms."""
     maxrate = f"{int(bitrate)*2}k"
-    bufsize = f"{int(bitrate)*4}k"
+    bufsize = f"{int(bitrate)*2}k"
     vf = f"scale={scale_w}:{scale_h}:flags=lanczos"
 
     if codec == "libx264":
-        passlogfile = "/tmp/x264_pass"
+        passlogfile = f"/tmp/x264_pass_{episode_id}"
         base = [
             "ffmpeg", "-y", "-i", "source.mp4",
             "-c:v", codec, "-preset", preset, "-tune", "film",
@@ -63,7 +63,7 @@ def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, 
         subprocess.run(base + ["-pass", "1", "-an", "-f", "null", "/dev/null"], check=True)
         subprocess.run(base + ["-pass", "2", "variant.mp4"], check=True)
     else:
-        stats_file = "/tmp/x265_pass.log"
+        stats_file = f"/tmp/x265_pass_{episode_id}.log"
         base = [
             "ffmpeg", "-y", "-i", "source.mp4",
             "-c:v", codec, "-preset", preset,
@@ -127,7 +127,7 @@ def run_research():
     gop        = config.get("gop", 48)
     bframes    = config.get("bframes", 3)
 
-    _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, frame_rate, gop, bframes)
+    _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, frame_rate, gop, bframes, episode_id)
 
     info = _get_video_info("source.mp4")
     w, h = info["width"], info["height"]

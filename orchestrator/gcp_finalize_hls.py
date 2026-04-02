@@ -19,7 +19,7 @@ from google.cloud import storage as gcs
 from google.oauth2 import service_account
 
 
-CDN_BASE = "https://cdn.chaishots.in"
+CDN_BASE = os.environ["CDN_BASE"]
 CDN_BUCKET = "chai-shots-manifests"
 
 SUBTITLE_LANGS = {
@@ -124,11 +124,13 @@ def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls):
             print(f"[SUBS] Downloaded {lang_key}: {len(vtt_content)} bytes")
 
             vtt_blob = bucket.blob(f"{cdn_prefix}/{vtt_filename}")
+            vtt_blob.cache_control = "no-store"
             vtt_blob.upload_from_string(vtt_content, content_type="text/vtt")
 
             playlist_content = SUBTITLE_PLAYLIST_TEMPLATE.format(vtt_filename=vtt_filename)
             playlist_blob = bucket.blob(f"{cdn_prefix}/{playlist_filename}")
-            playlist_blob.upload_from_string(playlist_content, content_type="application/x-mpegURL")
+            playlist_blob.cache_control = "no-store"
+            playlist_blob.upload_from_string(playlist_content, content_type="application/vnd.apple.mpegurl")
 
             uploaded.append((lang_code, display_name, playlist_filename))
             print(f"[SUBS] Uploaded {vtt_filename} + {playlist_filename}")
@@ -178,7 +180,8 @@ def _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks):
             patched.append(line)
 
     patched_text = "\n".join(patched) + "\n"
-    blob.upload_from_string(patched_text, content_type="application/x-mpegURL")
+    blob.cache_control = "no-store"
+    blob.upload_from_string(patched_text, content_type="application/vnd.apple.mpegurl")
     print(f"[PATCH] Patched {manifest_name} with {len(subtitle_tracks)} subtitle tracks")
 
 
@@ -228,6 +231,11 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec
             raise RuntimeError(
                 f"Partial copy: {blob.name} expected {blob.size} bytes, got {dst_blob.size}"
             )
+        if dst_name.endswith(".m3u8"):
+            dst_blob.cache_control = "no-store"
+        else:
+            dst_blob.cache_control = "public, max-age=31536000"
+        dst_blob.patch()
         copied += 1
 
     print(f"[COPY] Copied {copied} {codec} objects to gs://{CDN_BUCKET}/{cdn_prefix}/")
@@ -283,7 +291,8 @@ def _reorder_streams_in_manifest(creds, cdn_prefix, manifest_name):
         reordered.append(inf_line)
         reordered.append(uri_line)
 
-    blob.upload_from_string("\n".join(reordered) + "\n", content_type="application/x-mpegURL")
+    blob.cache_control = "no-store"
+    blob.upload_from_string("\n".join(reordered) + "\n", content_type="application/vnd.apple.mpegurl")
     print(f"[REORDER] Reordered streams in {manifest_name} to 720p→480p→1080p")
 
 
@@ -298,7 +307,8 @@ def _fix_audio_name(creds, cdn_prefix, slug, codec):
     text = blob.download_as_text()
     patched = text.replace('NAME="Test Language"', f'NAME="{slug}"')
     if patched != text:
-        blob.upload_from_string(patched, content_type="application/x-mpegURL")
+        blob.cache_control = "no-store"
+        blob.upload_from_string(patched, content_type="application/vnd.apple.mpegurl")
         print(f"[PATCH] Fixed audio NAME to '{slug}' in {manifest_name}")
 
 
@@ -382,6 +392,7 @@ def handler(event, context):
 
     return {
         "episode_id": episode_id,
+        "folder_ts": folder_ts,
         "h264_master_m3u8_url": h264_url,
         "h265_master_m3u8_url": h265_url,
     }

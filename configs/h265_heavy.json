@@ -2,7 +2,7 @@
     "codec": "libx265",
     "preset": "slower",
     "pix_fmt": "yuv420p",
-    "params": "aq-strength=1:keyint=48:bframes=3",
+    "params": "aq-strength=1:keyint=48:bframes=3:vbv-init=0.6",
     "vmaf_target": 88,
     "frame_rate": 24,
     "gop": 48,
