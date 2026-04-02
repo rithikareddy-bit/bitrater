@@ -196,23 +196,20 @@ def _codec_filename_pattern(codec):
     return "h265"
 
 
-def _clear_cdn_bucket_codec(creds, episode_id, codec):
-    """Delete only this codec's objects for this episode in the CDN bucket."""
-    pattern = _codec_filename_pattern(codec)
-    client = gcs.Client(credentials=creds)
-    bucket = client.bucket(CDN_BUCKET)
-    prefix = f"{episode_id}/"
-    blobs = list(bucket.list_blobs(prefix=prefix))
-    to_delete = [b for b in blobs if pattern in b.name]
-    if to_delete:
-        bucket.delete_blobs(to_delete)
-        print(f"[CLEAR] Deleted {len(to_delete)} {codec} objects from gs://{CDN_BUCKET}/{prefix}")
-    else:
-        print(f"[CLEAR] No existing {codec} objects in gs://{CDN_BUCKET}/{prefix}")
+
+def _build_name_map(slug_prefix, codec):
+    """Map original GCP Transcoder output filenames to slug-prefixed names."""
+    name_map = {
+        f"{codec}_master.m3u8": f"{slug_prefix}_{codec}.m3u8",
+        f"mux_{codec}_audio.m3u8": f"{slug_prefix}_{codec}_audio.m3u8",
+    }
+    for res in ["720p", "480p", "1080p"]:
+        name_map[f"mux_{res}_{codec}_video.m3u8"] = f"{slug_prefix}_{res}_{codec}_video.m3u8"
+    return name_map
 
 
-def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec):
-    """Copy codec-specific transcoder output into a versioned CDN folder with size validation."""
+def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec, name_map):
+    """Copy codec-specific transcoder output into CDN folder, renaming manifests."""
     client = gcs.Client(credentials=creds)
     src_bucket = client.bucket(source_bucket_name)
     dst_bucket = client.bucket(CDN_BUCKET)
@@ -224,7 +221,9 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec
     for blob in src_bucket.list_blobs(prefix=prefix):
         if codec not in blob.name:
             continue
-        dst_name = f"{cdn_prefix}/{os.path.basename(blob.name)}"
+        basename = os.path.basename(blob.name)
+        dst_basename = name_map.get(basename, basename)
+        dst_name = f"{cdn_prefix}/{dst_basename}"
         dst_blob = src_bucket.copy_blob(blob, dst_bucket, new_name=dst_name)
         dst_blob.reload()
         if dst_blob.size != blob.size:
@@ -239,6 +238,22 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec
         copied += 1
 
     print(f"[COPY] Copied {copied} {codec} objects to gs://{CDN_BUCKET}/{cdn_prefix}/")
+
+
+def _rename_manifest_refs(creds, cdn_prefix, master_name, name_map):
+    """Replace old sub-manifest filenames inside the master with new slug-prefixed names."""
+    client = gcs.Client(credentials=creds)
+    bucket = client.bucket(CDN_BUCKET)
+    blob = bucket.blob(f"{cdn_prefix}/{master_name}")
+    if not blob.exists():
+        return
+    text = blob.download_as_text()
+    for old_name, new_name in name_map.items():
+        if old_name != master_name:
+            text = text.replace(old_name, new_name)
+    blob.cache_control = "no-store"
+    blob.upload_from_string(text, content_type="application/vnd.apple.mpegurl")
+    print(f"[RENAME] Updated sub-manifest refs in {master_name}")
 
 
 _RESOLUTION_ORDER = {"720p": 0, "480p": 1, "1080p": 2}
@@ -296,9 +311,8 @@ def _reorder_streams_in_manifest(creds, cdn_prefix, manifest_name):
     print(f"[REORDER] Reordered streams in {manifest_name} to 720p→480p→1080p")
 
 
-def _fix_audio_name(creds, cdn_prefix, slug, codec):
+def _fix_audio_name(creds, cdn_prefix, slug, manifest_name):
     """Replace placeholder audio NAME in the codec's master manifest."""
-    manifest_name = f"{codec}_master.m3u8"
     client = gcs.Client(credentials=creds)
     bucket = client.bucket(CDN_BUCKET)
     blob = bucket.blob(f"{cdn_prefix}/{manifest_name}")
@@ -324,19 +338,23 @@ def handler(event, context):
     gcs_output_bucket = os.environ["GCS_OUTPUT_BUCKET"]
 
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
-    gcs_prefix = output_uri.replace(f"gs://{gcs_output_bucket}/", "").rstrip("/")
 
     _now = datetime.now(timezone.utc)
     folder_ts = _now.strftime("%d%m%Y_%H%M%S")
-    cdn_prefix = f"{episode_id}/{folder_ts}"
+    cdn_prefix = episode_id
     now_iso = _now.isoformat()
 
     episode_slug, _, show_slug, episode_number = _get_episode_meta(db, episode_id)
 
+    slug_prefix = f"{show_slug}_ep_{episode_number}_{folder_ts}"
+    name_map = _build_name_map(slug_prefix, codec)
+    master_filename = name_map[f"{codec}_master.m3u8"]
+
     creds = _get_gcp_credentials()
-    _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id, cdn_prefix, codec)
-    _fix_audio_name(creds, cdn_prefix, episode_slug, codec)
-    _reorder_streams_in_manifest(creds, cdn_prefix, f"{codec}_master.m3u8")
+    _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id, cdn_prefix, codec, name_map)
+    _rename_manifest_refs(creds, cdn_prefix, master_filename, name_map)
+    _fix_audio_name(creds, cdn_prefix, episode_slug, master_filename)
+    _reorder_streams_in_manifest(creds, cdn_prefix, master_filename)
 
     # --- Subtitle pipeline (only for this codec's manifest) ---
     vtt_urls = _get_subtitle_vtt_urls(episode_id)
@@ -344,8 +362,7 @@ def handler(event, context):
     if vtt_urls:
         try:
             subtitle_tracks = _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls)
-            manifest_name = f"{codec}_master.m3u8"
-            _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks)
+            _patch_master_manifest(creds, cdn_prefix, master_filename, subtitle_tracks)
         except Exception as e:
             print(f"[SUBS] Subtitle injection failed (non-fatal): {e}")
             finished_key = f"gcp_finished_at_{codec}"
@@ -357,7 +374,7 @@ def handler(event, context):
                 }},
             )
 
-    url_value = f"{CDN_BASE}/{cdn_prefix}/{codec}_master.m3u8"
+    url_value = f"{CDN_BASE}/{cdn_prefix}/{master_filename}"
 
     url_key = f"{codec}_master_m3u8_url"
     status_key = f"gcp_job_status_{codec}"
@@ -392,7 +409,6 @@ def handler(event, context):
 
     return {
         "episode_id": episode_id,
-        "folder_ts": folder_ts,
         "h264_master_m3u8_url": h264_url,
         "h265_master_m3u8_url": h265_url,
     }

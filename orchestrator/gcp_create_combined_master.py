@@ -36,10 +36,10 @@ def _bandwidth(stream_inf_line):
     return int(m.group(1)) if m else 0
 
 
-_RESOLUTION_ORDER = {"720p": 0, "1080p": 1, "480p": 2}
+_RESOLUTION_ORDER = {"720p": 0, "480p": 1, "1080p": 2}
 
 def _sort_key(stream_inf_line):
-    """Sort by resolution order (720p→1080p→480p), then descending bandwidth within each group."""
+    """Sort by resolution order (720p→480p→1080p), then descending bandwidth within each group."""
     m = re.search(r'RESOLUTION=(\d+)x(\d+)', stream_inf_line)
     if m:
         width = int(m.group(1))
@@ -76,6 +76,19 @@ def _parse_manifest(text):
         else:
             i += 1
     return media_lines, stream_blocks
+
+
+def _get_episode_meta(mongo_client, episode_id):
+    """Fetch show_slug and episode_number from showcache."""
+    master_db = mongo_client["master"]
+    show = master_db["showcache"].find_one(
+        {"episodes.id": episode_id},
+        {"episodes.$": 1, "slug": 1},
+    )
+    if not show or not show.get("episodes"):
+        return "unknown", 0
+    ep = show["episodes"][0]
+    return show.get("slug", "unknown"), ep.get("episode_number", 0)
 
 
 def _download_manifest_from_url(bucket, cdn_base, url):
@@ -134,11 +147,7 @@ def handler(event, context):
     h265_audio_lines = [re.sub(r'GROUP-ID="[^"]+"', f'GROUP-ID="{h265_audio_group}"', l) for l in h265_audio_lines]
     h264_audio_lines = [re.sub(r'GROUP-ID="[^"]+"', f'GROUP-ID="{h264_audio_group}"', l) for l in h264_audio_lines]
 
-    # Base URLs for absolute URI resolution (each codec may be in a different versioned folder)
-    h264_base = h264_url.rsplit("/", 1)[0] + "/"
-    h265_base = h265_url.rsplit("/", 1)[0] + "/"
-
-    # Sort all streams by ascending bandwidth
+    # Sort all streams by resolution order (720p→480p→1080p), then descending bandwidth
     all_streams = h264_streams + h265_streams
     all_streams.sort(key=lambda b: _sort_key(b[0]))
 
@@ -153,14 +162,10 @@ def handler(event, context):
             inf_line = re.sub(r'AUDIO="[^"]+"', f'AUDIO="{h265_audio_group}"', inf_line)
             if 'AUDIO=' not in inf_line:
                 inf_line = inf_line + f',AUDIO="{h265_audio_group}"'
-            if not uri_line.startswith("http"):
-                uri_line = h265_base + uri_line
         else:
             inf_line = re.sub(r'AUDIO="[^"]+"', f'AUDIO="{h264_audio_group}"', inf_line)
             if 'AUDIO=' not in inf_line:
                 inf_line = inf_line + f',AUDIO="{h264_audio_group}"'
-            if not uri_line.startswith("http"):
-                uri_line = h264_base + uri_line
         if subtitle_lines and 'SUBTITLES=' not in inf_line:
             inf_line = inf_line + ',SUBTITLES="subtitles"'
         output_lines.append(inf_line)
@@ -171,14 +176,17 @@ def handler(event, context):
     _now = datetime.now(timezone.utc)
     folder_ts = _now.strftime("%d%m%Y_%H%M%S")
     now_iso = _now.isoformat()
-    cdn_prefix = f"{episode_id}/{folder_ts}"
+    cdn_prefix = episode_id
 
-    combined_blob = bucket.blob(f"{cdn_prefix}/combined_master.m3u8")
+    show_slug, episode_number = _get_episode_meta(mongo_client, episode_id)
+    combined_filename = f"{show_slug}_ep_{episode_number}_{folder_ts}_combined.m3u8"
+
+    combined_blob = bucket.blob(f"{cdn_prefix}/{combined_filename}")
     combined_blob.cache_control = "no-store"
     combined_blob.upload_from_string(combined_text, content_type="application/vnd.apple.mpegurl")
-    print(f"[COMBINED] Uploaded combined_master.m3u8 to {cdn_prefix}/")
+    print(f"[COMBINED] Uploaded {combined_filename} to {cdn_prefix}/")
 
-    combined_url = f"{CDN_BASE}/{cdn_prefix}/combined_master.m3u8"
+    combined_url = f"{CDN_BASE}/{cdn_prefix}/{combined_filename}"
 
     mongo_client["chai_q_lab"].video_episodes.update_one(
         {"episode_id": episode_id},
