@@ -17,6 +17,10 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [combining, setCombining] = useState(false);
   const [combineError, setCombineError] = useState(null);
   const [combinedUrl, setCombinedUrl] = useState(null);
+  const [qcResult, setQcResult] = useState(null);
+  const [qcRunning, setQcRunning] = useState(false);
+  const [qcError, setQcError] = useState(null);
+  const qcPollRef = useRef(null);
   const pollingRef = useRef(null);
 
   const resolutions = goldenRecipes?.resolutions;
@@ -50,8 +54,35 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
 
   useEffect(() => {
     fetchStatus();
-    return () => clearInterval(pollingRef.current);
-  }, [fetchStatus]);
+    // Restore QC state on mount/refresh
+    fetch(`/api/quality-check/${episodeId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d) return;
+        if (d.overall === 'RUNNING') {
+          // Lambda still running — re-enable spinner and resume polling
+          setQcRunning(true);
+          qcPollRef.current = setInterval(async () => {
+            try {
+              const r = await fetch(`/api/quality-check/${episodeId}`);
+              const result = await r.json();
+              if (result && result.overall && result.overall !== 'RUNNING') {
+                setQcResult(result);
+                setQcRunning(false);
+                clearInterval(qcPollRef.current);
+              }
+            } catch { /* ignore */ }
+          }, 5000);
+        } else {
+          setQcResult(d);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      clearInterval(pollingRef.current);
+      clearInterval(qcPollRef.current);
+    };
+  }, [fetchStatus, episodeId]);
 
   const handleRunGCP = async (codec) => {
     setPushing(codec);
@@ -69,6 +100,32 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
     } catch (err) {
       setPushError(err.message);
       setPushing(null);
+    }
+  };
+
+  const handleCheckQuality = async () => {
+    setQcRunning(true);
+    setQcError(null);
+    setQcResult(null);
+    try {
+      const res = await fetch(`/api/quality-check/${episodeId}`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to start quality check');
+      // Poll until result arrives
+      qcPollRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`/api/quality-check/${episodeId}`);
+          const d = await r.json();
+          if (d && d.overall && d.overall !== 'RUNNING') {
+            setQcResult(d);
+            setQcRunning(false);
+            clearInterval(qcPollRef.current);
+          }
+        } catch { /* ignore */ }
+      }, 5000);
+    } catch (err) {
+      setQcError(err.message);
+      setQcRunning(false);
     }
   };
 
@@ -242,18 +299,176 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
           <span style={{ color: '#e2e8f0' }}>{combinedUrl}</span>
         </div>
       )}
+
+      {/* Quality Check button — visible only when combined URL exists */}
+      {combinedUrl && (
+        <div style={{ marginTop: 12 }}>
+          <button
+            onClick={handleCheckQuality}
+            disabled={qcRunning}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: qcRunning ? '#1e1e1e' : '#16803c',
+              color: qcRunning ? '#555' : '#fff',
+              border: 'none', borderRadius: 8, padding: '10px 20px',
+              fontSize: 14, fontWeight: 600,
+              cursor: qcRunning ? 'not-allowed' : 'pointer',
+              transition: 'background 0.2s', width: '100%', justifyContent: 'center',
+            }}
+          >
+            {qcRunning ? <><Spinner color="#16803c" /> Checking frames…</> : '🔍 Check Video Quality'}
+          </button>
+
+          {qcError && (
+            <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>
+              QC error: {qcError}
+            </div>
+          )}
+
+          {qcResult && <QualityResult result={qcResult} />}
+        </div>
+      )}
     </div>
   );
 }
 
-function Spinner() {
+function Spinner({ color = '#9333ea' }) {
   return (
     <span style={{
       display: 'inline-block', width: 14, height: 14,
-      border: '2px solid #555', borderTop: '2px solid #9333ea',
+      border: '2px solid #555', borderTop: `2px solid ${color}`,
       borderRadius: '50%', animation: 'spin 0.7s linear infinite',
     }}>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </span>
   );
+}
+
+const ISSUE_COLORS = {
+  blocking:    '#f59e0b',
+  blur:        '#818cf8',
+  freeze:      '#fb7185',
+  black_frame: '#6b7280',
+};
+
+const ISSUE_LABELS = {
+  blocking:    'Blocking',
+  blur:        'Blur',
+  freeze:      'Frozen',
+  black_frame: 'Black',
+};
+
+function QualityResult({ result }) {
+  const pass = result.overall === 'PASS';
+  const streams = result.streams || {};
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      {/* Overall badge */}
+      <div style={{
+        display: 'inline-block', padding: '4px 12px', borderRadius: 20,
+        fontSize: 13, fontWeight: 700,
+        background: pass ? '#052e16' : '#1c0707',
+        color: pass ? '#22c55e' : '#ef4444',
+        border: `1px solid ${pass ? '#22c55e' : '#ef4444'}`,
+        marginBottom: 10,
+      }}>
+        {pass ? '✓ PASS — No issues found' : '✗ Issues found'}
+      </div>
+
+      {/* Per-codec results */}
+      {[['h265_1080p', 'H.265 — 1080p'], ['h264_1080p', 'H.264 — 1080p']].map(([key, label]) => {
+        const s = streams[key];
+        if (!s) return null;
+        const blockMax = Math.max(...(s.block_per_sec || [0]), 0.001);
+        const blurMax  = Math.max(...(s.blur_per_sec  || [0]), 0.001);
+        const codecPass = s.overall === 'PASS';
+        return (
+          <div key={key} style={{
+            marginBottom: 12, padding: '10px 12px',
+            background: '#111', borderRadius: 8,
+            border: `1px solid ${codecPass ? '#1a3a1a' : '#3a1a1a'}`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#ccc' }}>{label}</span>
+              <span style={{
+                fontSize: 11, fontWeight: 700, padding: '1px 8px', borderRadius: 10,
+                background: codecPass ? '#052e16' : '#1c0707',
+                color: codecPass ? '#22c55e' : '#ef4444',
+              }}>
+                {codecPass ? 'PASS' : `${s.issues?.length} issue${s.issues?.length !== 1 ? 's' : ''}`}
+              </span>
+            </div>
+
+            <div style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 10, color: '#555', marginBottom: 3 }}>Blocking</div>
+              <QualityBar values={s.block_per_sec} max={blockMax} threshold={0.02} color="#f59e0b" />
+            </div>
+            <div style={{ marginBottom: s.issues?.length > 0 ? 8 : 0 }}>
+              <div style={{ fontSize: 10, color: '#555', marginBottom: 3 }}>Blur</div>
+              <QualityBar values={s.blur_per_sec} max={blurMax} threshold={0.8} color="#818cf8" />
+            </div>
+
+            {s.issues?.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {s.issues.map((issue, i) => (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '4px 8px', borderRadius: 5,
+                    background: '#0a0a0a', border: `1px solid ${ISSUE_COLORS[issue.type] || '#333'}`,
+                    fontSize: 11,
+                  }}>
+                    <span style={{
+                      width: 56, textAlign: 'center', padding: '1px 4px', borderRadius: 3,
+                      background: ISSUE_COLORS[issue.type] || '#333',
+                      color: '#000', fontWeight: 700, fontSize: 10,
+                    }}>
+                      {ISSUE_LABELS[issue.type] || issue.type}
+                    </span>
+                    <span style={{ color: '#aaa' }}>{formatTime(issue.timestamp)}</span>
+                    {issue.score != null && <span style={{ color: '#555' }}>score: {issue.score}</span>}
+                    {issue.duration != null && <span style={{ color: '#555' }}>{issue.duration}s</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div style={{ fontSize: 10, color: '#444', marginTop: 4 }}>
+        Checked at {result.checked_at ? new Date(result.checked_at).toLocaleString() : '—'}
+      </div>
+    </div>
+  );
+}
+
+function QualityBar({ values = [], max, threshold, color }) {
+  if (!values.length) return null;
+  return (
+    <div style={{ display: 'flex', gap: 1, height: 20, alignItems: 'flex-end' }}>
+      {values.map((v, i) => {
+        const h = Math.max(2, Math.round((v / max) * 20));
+        const bad = v > threshold;
+        return (
+          <div
+            key={i}
+            title={`${i}s: ${v.toFixed(4)}`}
+            style={{
+              flex: 1, height: h,
+              background: bad ? color : '#2a2a2a',
+              borderRadius: 1,
+              minWidth: 2,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
 }

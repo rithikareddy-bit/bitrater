@@ -4,10 +4,11 @@ Standalone Lambda: Build combined_master.m3u8 from h264 + h265 master manifests.
 Steps:
 1. Download h264_master.m3u8 and h265_master.m3u8 from CDN GCS bucket
 2. Strip per-codec headers and collect EXT-X-MEDIA + stream blocks
-3. Sort all stream blocks by ascending BANDWIDTH
-4. Merge into one combined_master.m3u8
-5. Upload to CDN bucket under {episode_id}/combined_master.m3u8
-6. Save combined_master_m3u8_url to chai_q_lab.video_episodes
+3. Absolutize all URIs using each codec's versioned CDN folder as base
+4. Group H265 streams first (modern devices), then H264 (fallback)
+5. Within each codec group, sort 720p→480p→1080p
+6. Upload to CDN bucket under {episode_id}/{timestamp}/{slug}_combined.m3u8
+7. Save combined_master_m3u8_url to chai_q_lab.video_episodes
 """
 
 import os
@@ -215,13 +216,16 @@ def handler(event, context):
 
     combined_url = f"{CDN_BASE}/{cdn_prefix}/{combined_filename}"
 
-    mongo_client["chai_q_lab"].video_episodes.update_one(
-        {"episode_id": episode_id},
-        {"$set": {
-            "combined_master_m3u8_url": combined_url,
-            "combined_master_created_at": now_iso,
-        }},
-    )
+    try:
+        mongo_client["chai_q_lab"].video_episodes.update_one(
+            {"episode_id": episode_id},
+            {"$set": {
+                "combined_master_m3u8_url": combined_url,
+                "combined_master_created_at": now_iso,
+            }},
+        )
+    finally:
+        mongo_client.close()
 
     print(f"[COMBINED] Saved combined URL: {combined_url}")
     return {

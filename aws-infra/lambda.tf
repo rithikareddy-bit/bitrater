@@ -352,6 +352,80 @@ resource "aws_lambda_function" "gcp_create_combined_master" {
   }
 }
 
+# --- FFmpeg Lambda Layer ---
+# Downloads a static Linux x86_64 ffmpeg binary and packages it as a layer.
+resource "null_resource" "ffmpeg_layer_build" {
+  triggers = {
+    version = "ffmpeg-7.0-linux-x86_64-v1"
+  }
+  provisioner "local-exec" {
+    command = <<-EOT
+      rm -rf "${path.module}/.ffmpeg-layer" "${path.module}/.ffmpeg-tmp"
+      mkdir -p "${path.module}/.ffmpeg-layer/bin" "${path.module}/.ffmpeg-tmp"
+      curl -sL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
+        -o "${path.module}/.ffmpeg-tmp/ffmpeg.tar.xz"
+      tar -xJf "${path.module}/.ffmpeg-tmp/ffmpeg.tar.xz" -C "${path.module}/.ffmpeg-tmp"
+      find "${path.module}/.ffmpeg-tmp" -name "ffmpeg" -not -name "*.xz" -exec cp {} "${path.module}/.ffmpeg-layer/bin/ffmpeg" \;
+      find "${path.module}/.ffmpeg-tmp" -name "ffprobe" -exec cp {} "${path.module}/.ffmpeg-layer/bin/ffprobe" \;
+      chmod +x "${path.module}/.ffmpeg-layer/bin/ffmpeg" "${path.module}/.ffmpeg-layer/bin/ffprobe"
+      rm -rf "${path.module}/.ffmpeg-tmp"
+    EOT
+  }
+}
+
+data "archive_file" "ffmpeg_layer_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/.ffmpeg-layer"
+  output_path = "${path.module}/.ffmpeg-layer.zip"
+  depends_on  = [null_resource.ffmpeg_layer_build]
+}
+
+# FFmpeg binary zip exceeds Lambda's 70 MB direct-upload limit — upload via S3 first.
+resource "aws_s3_object" "ffmpeg_layer_zip" {
+  bucket = aws_s3_bucket.raw_input.id
+  key    = "lambda-layers/ffmpeg-layer.zip"
+  source = data.archive_file.ffmpeg_layer_zip.output_path
+  etag   = data.archive_file.ffmpeg_layer_zip.output_md5
+}
+
+resource "aws_lambda_layer_version" "ffmpeg" {
+  layer_name               = "chai-q-ffmpeg"
+  s3_bucket                = aws_s3_object.ffmpeg_layer_zip.bucket
+  s3_key                   = aws_s3_object.ffmpeg_layer_zip.key
+  source_code_hash         = data.archive_file.ffmpeg_layer_zip.output_base64sha256
+  compatible_runtimes      = ["python3.11"]
+}
+
+# --- QualityChecker Lambda ---
+data "archive_file" "quality_checker_zip" {
+  type        = "zip"
+  source_file = "../orchestrator/quality_checker.py"
+  output_path = "/tmp/chai-q-quality-checker.zip"
+}
+
+resource "aws_lambda_function" "quality_checker" {
+  filename         = data.archive_file.quality_checker_zip.output_path
+  source_code_hash = data.archive_file.quality_checker_zip.output_base64sha256
+  function_name    = "chai-q-quality-checker"
+  role             = aws_iam_role.gcp_lambda_role.arn
+  handler          = "quality_checker.handler"
+  runtime          = "python3.11"
+  timeout          = 600
+  memory_size      = 1024
+  layers           = [
+    aws_lambda_layer_version.pymongo.arn,
+    aws_lambda_layer_version.ffmpeg.arn,
+  ]
+
+  environment {
+    variables = {
+      MONGO_URI    = var.mongo_uri
+      FFMPEG_PATH  = "/opt/bin/ffmpeg"
+      FFPROBE_PATH = "/opt/bin/ffprobe"
+    }
+  }
+}
+
 # --- GCP-Orchestrator Step Function ---
 resource "aws_sfn_state_machine" "gcp_orchestrator" {
   name     = "GCP-Orchestrator"

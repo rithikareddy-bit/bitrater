@@ -43,7 +43,6 @@ def load_heavy_params(codec):
 
 def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, frame_rate, gop, bframes, episode_id):
     """Run two-pass FFmpeg encode. x264 and x265 use different two-pass mechanisms."""
-    maxrate = f"{int(bitrate)*2}k"
     bufsize = f"{int(bitrate)*3}k"
     vf = f"scale={scale_w}:{scale_h}:flags=lanczos"
 
@@ -54,7 +53,7 @@ def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, 
             "-c:v", codec, "-preset", preset, "-tune", "film",
             "-r", str(frame_rate), "-g", str(gop), "-bf", str(bframes),
             "-b:v", f"{bitrate}k",
-            "-maxrate", maxrate, "-bufsize", bufsize,
+            "-bufsize", bufsize,
             "-pix_fmt", pix_fmt,
         ]
         if params:
@@ -69,7 +68,7 @@ def _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, 
             "-c:v", codec, "-preset", preset,
             "-r", str(frame_rate),
             "-b:v", f"{bitrate}k",
-            "-maxrate", maxrate, "-bufsize", bufsize,
+            "-bufsize", bufsize,
             "-pix_fmt", pix_fmt, "-vf", vf,
         ]
         pass_base = f"stats={stats_file}"

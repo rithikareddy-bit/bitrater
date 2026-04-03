@@ -100,10 +100,13 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
         Resource = "*"
       },
       {
-        Sid      = "InvokeCombinedMasterLambda"
+        Sid      = "InvokeLambdas"
         Effect   = "Allow"
         Action   = "lambda:InvokeFunction"
-        Resource = aws_lambda_function.gcp_create_combined_master.arn
+        Resource = [
+          aws_lambda_function.gcp_create_combined_master.arn,
+          aws_lambda_function.quality_checker.arn,
+        ]
       }
     ]
   })
@@ -133,6 +136,7 @@ resource "aws_apprunner_service" "dashboard" {
           GCP_SFN_ARN             = aws_sfn_state_machine.gcp_orchestrator.arn
           BATCH_JOB_QUEUE         = aws_batch_job_queue.chai_q_queue.name
           CREATE_COMBINED_MASTER_LAMBDA_ARN = aws_lambda_function.gcp_create_combined_master.arn
+          QUALITY_CHECK_LAMBDA_ARN          = aws_lambda_function.quality_checker.arn
           NEXT_TELEMETRY_DISABLED           = "1"
           # AWS_REGION is set automatically by App Runner
         }

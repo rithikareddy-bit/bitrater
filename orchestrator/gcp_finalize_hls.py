@@ -380,7 +380,8 @@ def handler(event, context):
     mongo_uri = os.environ["MONGO_URI"]
     gcs_output_bucket = os.environ["GCS_OUTPUT_BUCKET"]
 
-    db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
+    mongo_client = pymongo.MongoClient(mongo_uri)
+    db = mongo_client["chai_q_lab"]
 
     _now = datetime.now(timezone.utc)
     folder_ts = _now.strftime("%d%m%Y_%H%M%S")
@@ -446,6 +447,8 @@ def handler(event, context):
         h265_url = existing.get("h265_master_m3u8_url")
     else:
         h264_url = existing.get("h264_master_m3u8_url")
+
+    mongo_client.close()
 
     print(f"[OK] Finalized HLS for {episode_id} (codec={codec})")
     print(f"  {codec.upper()}: {url_value}")
