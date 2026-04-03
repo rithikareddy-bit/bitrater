@@ -122,22 +122,45 @@ def handler(event, context):
     h264_text = _download_manifest_from_url(bucket, CDN_BASE, h264_url)
     h265_text = _download_manifest_from_url(bucket, CDN_BASE, h265_url)
 
+    # Base CDN folder for each codec (absolute, no trailing slash)
+    h264_base = h264_url.rsplit("/", 1)[0]
+    h265_base = h265_url.rsplit("/", 1)[0]
+
+    def _absolutize(line, base):
+        """Replace relative URI="..." values with absolute CDN URLs."""
+        return re.sub(
+            r'URI="(?!https?://)([^"]+)"',
+            lambda m: f'URI="{base}/{m.group(1)}"',
+            line,
+        )
+
     h264_media, h264_streams = _parse_manifest(h264_text)
     h265_media, h265_streams = _parse_manifest(h265_text)
 
-    # Separate audio and subtitle lines for each codec
-    h265_audio_lines = [l for l in h265_media if 'TYPE=AUDIO' in l]
-    h264_audio_lines = [l for l in h264_media if 'TYPE=AUDIO' in l]
+    # Absolutize stream URIs
+    h264_streams = [
+        (inf, f"{h264_base}/{uri}" if not uri.startswith("http") else uri)
+        for inf, uri in h264_streams
+    ]
+    h265_streams = [
+        (inf, f"{h265_base}/{uri}" if not uri.startswith("http") else uri)
+        for inf, uri in h265_streams
+    ]
 
-    # Deduplicate subtitle lines only
+    # Separate audio lines, absolutize URIs
+    h265_audio_lines = [_absolutize(l, h265_base) for l in h265_media if 'TYPE=AUDIO' in l]
+    h264_audio_lines = [_absolutize(l, h264_base) for l in h264_media if 'TYPE=AUDIO' in l]
+
+    # Deduplicate subtitle lines, absolutize URIs
     seen_subtitles = {}
-    for line in h265_media + h264_media:
-        if 'TYPE=SUBTITLES' not in line:
-            continue
+    for line, base in (
+        [(l, h265_base) for l in h265_media if 'TYPE=SUBTITLES' in l] +
+        [(l, h264_base) for l in h264_media if 'TYPE=SUBTITLES' in l]
+    ):
         m = re.search(r'GROUP-ID="([^"]+)".*?LANGUAGE="([^"]+)"', line)
         key = m.group(0) if m else line
         if key not in seen_subtitles:
-            seen_subtitles[key] = line
+            seen_subtitles[key] = _absolutize(line, base)
     subtitle_lines = list(seen_subtitles.values())
 
     # Give each codec its own audio group ID so timestamps stay aligned
@@ -147,12 +170,16 @@ def handler(event, context):
     h265_audio_lines = [re.sub(r'GROUP-ID="[^"]+"', f'GROUP-ID="{h265_audio_group}"', l) for l in h265_audio_lines]
     h264_audio_lines = [re.sub(r'GROUP-ID="[^"]+"', f'GROUP-ID="{h264_audio_group}"', l) for l in h264_audio_lines]
 
-    # Sort all streams by resolution order (720p→480p→1080p), then descending bandwidth
-    all_streams = h264_streams + h265_streams
-    all_streams.sort(key=lambda b: _sort_key(b[0]))
+    # Group H265 first (modern phones), then H264 (fallback).
+    # Within each codec, sort by resolution order (720p→480p→1080p).
+    # This prevents ABR from switching between codec groups mid-playback,
+    # which would also switch audio groups and cause audio gaps.
+    h265_streams.sort(key=lambda b: _sort_key(b[0]))
+    h264_streams.sort(key=lambda b: _sort_key(b[0]))
+    all_streams = h265_streams + h264_streams
 
-    # Build combined manifest
-    output_lines = ["#EXTM3U", "#EXT-X-VERSION:3"]
+    # Build combined manifest (VERSION:7 — sub-manifests use fMP4/BYTERANGE features)
+    output_lines = ["#EXTM3U", "#EXT-X-VERSION:7"]
     output_lines.extend(h265_audio_lines)
     output_lines.extend(h264_audio_lines)
     output_lines.extend(subtitle_lines)
@@ -176,14 +203,14 @@ def handler(event, context):
     _now = datetime.now(timezone.utc)
     folder_ts = _now.strftime("%d%m%Y_%H%M%S")
     now_iso = _now.isoformat()
-    cdn_prefix = episode_id
+    cdn_prefix = f"{episode_id}/{folder_ts}"
 
     show_slug, episode_number = _get_episode_meta(mongo_client, episode_id)
     combined_filename = f"{show_slug}_ep_{episode_number}_{folder_ts}_combined.m3u8"
 
     combined_blob = bucket.blob(f"{cdn_prefix}/{combined_filename}")
     combined_blob.cache_control = "no-store"
-    combined_blob.upload_from_string(combined_text, content_type="application/vnd.apple.mpegurl")
+    combined_blob.upload_from_string(combined_text, content_type="application/x-mpegURL")
     print(f"[COMBINED] Uploaded {combined_filename} to {cdn_prefix}/")
 
     combined_url = f"{CDN_BASE}/{cdn_prefix}/{combined_filename}"

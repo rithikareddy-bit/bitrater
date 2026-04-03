@@ -130,7 +130,7 @@ def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls):
             playlist_content = SUBTITLE_PLAYLIST_TEMPLATE.format(vtt_filename=vtt_filename)
             playlist_blob = bucket.blob(f"{cdn_prefix}/{playlist_filename}")
             playlist_blob.cache_control = "no-store"
-            playlist_blob.upload_from_string(playlist_content, content_type="application/vnd.apple.mpegurl")
+            playlist_blob.upload_from_string(playlist_content, content_type="application/x-mpegURL")
 
             uploaded.append((lang_code, display_name, playlist_filename))
             print(f"[SUBS] Uploaded {vtt_filename} + {playlist_filename}")
@@ -181,21 +181,13 @@ def _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks):
 
     patched_text = "\n".join(patched) + "\n"
     blob.cache_control = "no-store"
-    blob.upload_from_string(patched_text, content_type="application/vnd.apple.mpegurl")
+    blob.upload_from_string(patched_text, content_type="application/x-mpegURL")
     print(f"[PATCH] Patched {manifest_name} with {len(subtitle_tracks)} subtitle tracks")
 
 
 # ---------------------------------------------------------------------------
 # Clear codec-specific CDN files + copy transcoder output
 # ---------------------------------------------------------------------------
-
-def _codec_filename_pattern(codec):
-    """Blob names that belong to this codec."""
-    if codec == "h264":
-        return "h264"
-    return "h265"
-
-
 
 def _build_name_map(slug_prefix, codec):
     """Map original GCP Transcoder output filenames to slug-prefixed names."""
@@ -240,6 +232,57 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec
     print(f"[COPY] Copied {copied} {codec} objects to gs://{CDN_BUCKET}/{cdn_prefix}/")
 
 
+def _correct_init_byterange(creds, cdn_prefix, name_map):
+    """
+    GCP Transcoder sometimes declares EXT-X-MAP BYTERANGE 1 byte beyond the true
+    ftyp+moov boundary, causing the player to read 1 byte into the mdat box.
+    For each sub-manifest, read the actual MP4 box sizes from the .m4s file and
+    patch BYTERANGE if it is off.
+    """
+    import re
+    import struct
+    client = gcs.Client(credentials=creds)
+    bucket = client.bucket(CDN_BUCKET)
+
+    sub_manifests = [v for k, v in name_map.items() if k.endswith(".m3u8") and "master" not in k]
+
+    for manifest_name in sub_manifests:
+        blob = bucket.blob(f"{cdn_prefix}/{manifest_name}")
+        if not blob.exists():
+            continue
+        text = blob.download_as_text()
+        m = re.search(r'#EXT-X-MAP:URI="([^"]+)",BYTERANGE="(\d+)@0"', text)
+        if not m:
+            continue
+        m4s_name = m.group(1)
+        declared_size = int(m.group(2))
+
+        # Read first 16 bytes of .m4s to parse ftyp and moov box sizes
+        m4s_blob = bucket.blob(f"{cdn_prefix}/{m4s_name}")
+        if not m4s_blob.exists():
+            continue
+        header = m4s_blob.download_as_bytes(start=0, end=15)
+
+        ftyp_size = struct.unpack(">I", header[0:4])[0]
+        if ftyp_size + 8 > len(header):
+            # Need more bytes to reach moov size field
+            header = m4s_blob.download_as_bytes(start=0, end=ftyp_size + 7)
+        moov_size = struct.unpack(">I", header[ftyp_size:ftyp_size + 4])[0]
+        correct_size = ftyp_size + moov_size
+
+        if declared_size != correct_size:
+            patched = text.replace(
+                f'BYTERANGE="{declared_size}@0"',
+                f'BYTERANGE="{correct_size}@0"',
+                1,
+            )
+            blob.cache_control = "no-store"
+            blob.upload_from_string(patched, content_type="application/x-mpegURL")
+            print(f"[BYTERANGE] Fixed {manifest_name}: {declared_size} → {correct_size}")
+        else:
+            print(f"[BYTERANGE] {manifest_name}: {declared_size} correct")
+
+
 def _rename_manifest_refs(creds, cdn_prefix, master_name, name_map):
     """Replace old sub-manifest filenames inside the master with new slug-prefixed names."""
     client = gcs.Client(credentials=creds)
@@ -252,7 +295,7 @@ def _rename_manifest_refs(creds, cdn_prefix, master_name, name_map):
         if old_name != master_name:
             text = text.replace(old_name, new_name)
     blob.cache_control = "no-store"
-    blob.upload_from_string(text, content_type="application/vnd.apple.mpegurl")
+    blob.upload_from_string(text, content_type="application/x-mpegURL")
     print(f"[RENAME] Updated sub-manifest refs in {master_name}")
 
 
@@ -307,7 +350,7 @@ def _reorder_streams_in_manifest(creds, cdn_prefix, manifest_name):
         reordered.append(uri_line)
 
     blob.cache_control = "no-store"
-    blob.upload_from_string("\n".join(reordered) + "\n", content_type="application/vnd.apple.mpegurl")
+    blob.upload_from_string("\n".join(reordered) + "\n", content_type="application/x-mpegURL")
     print(f"[REORDER] Reordered streams in {manifest_name} to 720p→480p→1080p")
 
 
@@ -322,7 +365,7 @@ def _fix_audio_name(creds, cdn_prefix, slug, manifest_name):
     patched = text.replace('NAME="Test Language"', f'NAME="{slug}"')
     if patched != text:
         blob.cache_control = "no-store"
-        blob.upload_from_string(patched, content_type="application/vnd.apple.mpegurl")
+        blob.upload_from_string(patched, content_type="application/x-mpegURL")
         print(f"[PATCH] Fixed audio NAME to '{slug}' in {manifest_name}")
 
 
@@ -341,7 +384,7 @@ def handler(event, context):
 
     _now = datetime.now(timezone.utc)
     folder_ts = _now.strftime("%d%m%Y_%H%M%S")
-    cdn_prefix = episode_id
+    cdn_prefix = f"{episode_id}/{folder_ts}"
     now_iso = _now.isoformat()
 
     episode_slug, _, show_slug, episode_number = _get_episode_meta(db, episode_id)
@@ -352,6 +395,7 @@ def handler(event, context):
 
     creds = _get_gcp_credentials()
     _copy_to_cdn_bucket(creds, gcs_output_bucket, episode_id, cdn_prefix, codec, name_map)
+    _correct_init_byterange(creds, cdn_prefix, name_map)
     _rename_manifest_refs(creds, cdn_prefix, master_filename, name_map)
     _fix_audio_name(creds, cdn_prefix, episode_slug, master_filename)
     _reorder_streams_in_manifest(creds, cdn_prefix, master_filename)
