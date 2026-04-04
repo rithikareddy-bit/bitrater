@@ -17,6 +17,9 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [combining, setCombining] = useState(false);
   const [combineError, setCombineError] = useState(null);
   const [combinedUrl, setCombinedUrl] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(null);
+  const [syncOk, setSyncOk] = useState(null);
   const [qcResult, setQcResult] = useState(null);
   const [qcRunning, setQcRunning] = useState(false);
   const [qcError, setQcError] = useState(null);
@@ -145,6 +148,33 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       setCombineError(err.message);
     } finally {
       setCombining(false);
+    }
+  };
+
+  const handleSyncShowcache = async () => {
+    if (!combinedUrl) return;
+    setSyncing(true);
+    setSyncError(null);
+    setSyncOk(null);
+    try {
+      const res = await fetch('/api/sync-showcache-episode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodeId, signedPlaybackUrl: combinedUrl }),
+      });
+      let data = {};
+      try {
+        const text = await res.text();
+        if (text) data = JSON.parse(text);
+      } catch {
+        throw new Error(res.ok ? 'Invalid response from server' : `Sync failed (${res.status})`);
+      }
+      if (!res.ok) throw new Error(data.error || 'Sync failed');
+      setSyncOk('Saved signed_playback_url and download_config on show catalog.');
+    } catch (err) {
+      setSyncError(err.message);
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -297,6 +327,52 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         }}>
           <strong style={{ color: '#22d3ee' }}>Combined (H264 + H265):</strong>{' '}
           <span style={{ color: '#e2e8f0' }}>{combinedUrl}</span>
+        </div>
+      )}
+
+      {combinedUrl && (
+        <div style={{ marginTop: 14 }}>
+          <button
+            type="button"
+            onClick={handleSyncShowcache}
+            disabled={syncing}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              background: syncing ? '#1e1e1e' : '#1d4ed8',
+              color: syncing ? '#555' : '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: '10px 20px',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: syncing ? 'not-allowed' : 'pointer',
+              width: '100%',
+              justifyContent: 'center',
+            }}
+          >
+            {syncing ? <><Spinner color="#1d4ed8" /> Syncing…</> : '↗ Sync to show catalog'}
+          </button>
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 10, lineHeight: 1.45 }}>
+            <strong style={{ color: '#888' }}>Will sync this URL to signed_playback_url:</strong>
+            <div
+              style={{
+                fontFamily: 'ui-monospace, monospace',
+                wordBreak: 'break-all',
+                color: '#94a3b8',
+                marginTop: 6,
+              }}
+            >
+              {combinedUrl}
+            </div>
+          </div>
+          {syncError && (
+            <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>{syncError}</div>
+          )}
+          {syncOk && (
+            <div style={{ color: '#22c55e', fontSize: 12, marginTop: 8 }}>{syncOk}</div>
+          )}
         </div>
       )}
 

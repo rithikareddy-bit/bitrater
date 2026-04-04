@@ -65,5 +65,11 @@ export default function RDCurve({ researchData, golden, selectedRes = '1080p', v
 
   const enriched = [...researchData, ...goldenAnnotation];
 
-  return <ConvexHullChart researchData={enriched} vmafThreshold={vmafThreshold} />;
+  return (
+    <ConvexHullChart
+      researchData={enriched}
+      vmafThreshold={vmafThreshold}
+      resolution={selectedRes}
+    />
+  );
 }

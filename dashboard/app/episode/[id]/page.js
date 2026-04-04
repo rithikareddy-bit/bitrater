@@ -9,6 +9,11 @@ import FrameComparison from '@/components/FrameComparison';
 import LabStatus from '@/components/LabStatus';
 import GCPStatus from '@/components/GCPStatus';
 import { VMAF_THRESHOLDS } from '@/lib/constants';
+import {
+  durationSourceLabel,
+  formatConsumptionCell,
+  resolveDurationSeconds,
+} from '@/lib/downloadConfig';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -93,7 +98,14 @@ export default function EpisodePage() {
   if (loading) return <p style={{ color: '#888' }}>Loading episode data...</p>;
   if (error) return <p style={{ color: '#f87171' }}>{error}</p>;
 
-  const { research = [], golden, videoUrl } = data || {};
+  const {
+    research = [],
+    golden,
+    videoUrl,
+    episodeMeta,
+    durationSeconds: durationFromApi,
+    durationSource: durationSourceFromApi,
+  } = data || {};
 
   const allRdData = research.map((r) => ({
     codec: r.codec,
@@ -132,12 +144,16 @@ export default function EpisodePage() {
 
   const vmafTimeline = goldenRow?.vmaf_timeline || [];
 
-  const durationSeconds = research.reduce((max, r) => Math.max(max, r.vmaf_timeline?.length || 0), 0);
+  const durationSeconds =
+    durationFromApi != null && Number.isFinite(Number(durationFromApi))
+      ? Number(durationFromApi)
+      : resolveDurationSeconds(episodeMeta, research);
+  const durationSrcLabel =
+    durationSourceFromApi ?? durationSourceLabel(episodeMeta, research);
 
   const calcSizeMB = (res, codec) => {
     const bitrate = golden?.golden_recipes?.resolutions?.[res]?.[codec]?.bitrate_kbps;
-    if (!bitrate || !durationSeconds) return '--';
-    return ((bitrate * durationSeconds) / 8 / 1024).toFixed(1) + ' MB';
+    return formatConsumptionCell(bitrate, durationSeconds);
   };
 
   return (
@@ -212,7 +228,7 @@ export default function EpisodePage() {
         )}
         {durationSeconds > 0 && (
           <div style={{ fontSize: 11, color: '#555', marginTop: 8 }}>
-            Source duration: {durationSeconds}s · Formula: (bitrate_kbps × duration) / 8 / 1024
+            Source duration: {durationSeconds}s ({durationSrcLabel}) · Formula: (bitrate_kbps × duration) / 8 / 1024
           </div>
         )}
       </div>

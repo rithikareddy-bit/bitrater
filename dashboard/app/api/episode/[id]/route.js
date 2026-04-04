@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { resolveDurationForLabEpisode } from '@/lib/labEpisodeDuration';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -24,8 +25,14 @@ export async function GET(request, { params }) {
     const episodeMeta = showWithEp?.episodes?.[0] ?? null;
     const videoUrl = episodeMeta?.s3_url ?? null;
 
+    const { durationSeconds, durationSource } = await resolveDurationForLabEpisode(
+      labDb,
+      episodeMeta,
+      id,
+    );
+
     return NextResponse.json(
-      { research, golden, videoUrl, episodeMeta },
+      { research, golden, videoUrl, episodeMeta, durationSeconds, durationSource },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } },
     );
   } catch (err) {
