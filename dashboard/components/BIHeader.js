@@ -1,6 +1,6 @@
 'use client';
 
-const DEFAULT_THRESHOLDS = { '1080p': 88, '720p': 75, '480p': 48 };
+import { VMAF_THRESHOLDS } from '@/lib/constants';
 
 /** Same winner rule as orchestrator/aggregator.py */
 function pickWinner(rows, threshold) {
@@ -18,7 +18,7 @@ export default function BIHeader({
   golden,
   selectedRes = '1080p',
   research = [],
-  vmafThreshold = DEFAULT_THRESHOLDS['1080p'],
+  vmafThreshold = VMAF_THRESHOLDS['1080p'],
 }) {
   if (!golden && (!research || research.length === 0)) {
     return (

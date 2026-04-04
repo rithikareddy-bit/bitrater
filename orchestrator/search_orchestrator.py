@@ -21,8 +21,8 @@ SEARCH_CONFIG = {
                 "threshold": 88,
                 "dip_floor": 80,
                 "job_timeout_seconds": 3000,
-                "candidates": [1800, 2000, 2300, 2500, 2700, 3000, 3300, 3600, 3900, 4200],
-                "initial_probes": [2300, 3000, 3900],
+                "candidates": [1800, 2000, 2300, 2500, 2700, 3000, 3300, 3600, 3900, 4200, 4400, 4600, 4800],
+                "initial_probes": [2300, 3000, 3900, 4600],
             },
             "720p": {
                 "threshold": 75,

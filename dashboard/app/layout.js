@@ -3,6 +3,8 @@ export const metadata = {
   description: 'Video quality research & encoding analysis',
 };
 
+import Link from 'next/link';
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
@@ -28,11 +30,16 @@ export default function RootLayout({ children }) {
           alignItems: 'center',
           gap: 12,
           background: '#111',
+          flexWrap: 'wrap',
         }}>
-          <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.5px' }}>
+          <Link href="/" style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.5px', color: '#e8e8e8' }}>
             Chai-Q Lab
-          </span>
+          </Link>
           <span style={{ color: '#555', fontSize: 14 }}>/ Video Encoding Research</span>
+          <nav style={{ marginLeft: 'auto', display: 'flex', gap: 16, fontSize: 14 }}>
+            <Link href="/" style={{ color: '#888' }}>Catalog</Link>
+            <Link href="/show" style={{ color: '#4da6ff' }}>Show overview</Link>
+          </nav>
         </header>
         <main style={{ padding: '24px' }}>
           {children}
