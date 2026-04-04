@@ -7,6 +7,10 @@ After the GCP Transcoder job succeeds:
 3. Patch only this codec's master m3u8 with subtitle track entries
 4. Write only this codec's CDN URL to MongoDB
 5. Return both URL keys (null for codec not produced)
+
+Subtitle pipeline: VTT files are read as raw bytes and decoded strictly as UTF-8 (never
+requests.Response.text). GCS objects are stored with Content-Type charset=utf-8 so players
+do not misinterpret Telugu or other scripts.
 """
 
 import os
@@ -21,6 +25,40 @@ from google.oauth2 import service_account
 
 CDN_BASE = os.environ["CDN_BASE"]
 CDN_BUCKET = "chai-shots-manifests"
+
+# WebVTT and HLS manifests must be UTF-8 (Telugu, smart quotes, etc.).
+# Do not rely on HTTP Content-Type charset or requests' guessed encoding for VTT bodies.
+CONTENT_TYPE_VTT = "text/vtt; charset=utf-8"
+CONTENT_TYPE_M3U8 = "application/x-mpegURL; charset=utf-8"
+
+
+def _decode_utf8_vtt_bytes(raw: bytes) -> str:
+    """
+    Decode WebVTT file bytes as UTF-8 (W3C WebVTT: UTF-8 only).
+    utf-8-sig strips an optional BOM so cue text is not corrupted.
+    Raises UnicodeDecodeError if the source is not valid UTF-8 (mis-encoded uploads).
+    """
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        head = raw[: min(160, len(raw))]
+        print(
+            "[SUBS] VTT decode failed: file is not valid UTF-8. "
+            "Re-export the source .vtt as UTF-8 (no Windows-1252 / Latin-1). "
+            f"First {len(head)} bytes (hex): {head.hex()}"
+        )
+        raise
+
+
+def _warn_if_missing_webvtt_header(text: str, lang_key: str) -> None:
+    """Log if the file does not look like WebVTT (helps catch HTML/error pages)."""
+    sample = text.lstrip("\ufeff").strip()
+    first_line = sample.split("\n", 1)[0] if sample else ""
+    if not first_line.upper().startswith("WEBVTT"):
+        print(
+            f"[SUBS] Warning ({lang_key}): expected WEBVTT header; "
+            f"first line was {first_line[:120]!r}"
+        )
 
 SUBTITLE_LANGS = {
     "english_translation_final": ("en", "English"),
@@ -101,10 +139,19 @@ def _get_subtitle_vtt_urls(episode_id):
 
 
 def _download_vtt(url):
-    """Download VTT content from a public S3 URL."""
-    resp = requests.get(url, timeout=30)
+    """Download VTT content from a public S3/HTTP URL.
+
+    Always decodes ``response.content`` as UTF-8 (never ``response.text``, which
+    follows Content-Type charset and can mangle Telugu / smart quotes).
+    """
+    resp = requests.get(
+        url,
+        timeout=30,
+        headers={"Accept": "text/vtt, text/*;q=0.9, */*;q=0.8"},
+    )
     resp.raise_for_status()
-    return resp.text
+    text = _decode_utf8_vtt_bytes(resp.content)
+    return text
 
 
 def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls):
@@ -121,16 +168,19 @@ def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls):
 
         try:
             vtt_content = _download_vtt(url)
-            print(f"[SUBS] Downloaded {lang_key}: {len(vtt_content)} bytes")
+            _warn_if_missing_webvtt_header(vtt_content, lang_key)
+            utf8_bytes = len(vtt_content.encode("utf-8"))
+            print(f"[SUBS] Downloaded {lang_key}: {utf8_bytes} UTF-8 bytes ({len(vtt_content)} chars)")
 
             vtt_blob = bucket.blob(f"{cdn_prefix}/{vtt_filename}")
             vtt_blob.cache_control = "no-store"
-            vtt_blob.upload_from_string(vtt_content, content_type="text/vtt")
+            # str → UTF-8 on upload; charset in Content-Type tells players/CDN the encoding
+            vtt_blob.upload_from_string(vtt_content, content_type=CONTENT_TYPE_VTT)
 
             playlist_content = SUBTITLE_PLAYLIST_TEMPLATE.format(vtt_filename=vtt_filename)
             playlist_blob = bucket.blob(f"{cdn_prefix}/{playlist_filename}")
             playlist_blob.cache_control = "no-store"
-            playlist_blob.upload_from_string(playlist_content, content_type="application/x-mpegURL")
+            playlist_blob.upload_from_string(playlist_content, content_type=CONTENT_TYPE_M3U8)
 
             uploaded.append((lang_code, display_name, playlist_filename))
             print(f"[SUBS] Uploaded {vtt_filename} + {playlist_filename}")
@@ -141,7 +191,7 @@ def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls):
 
 
 def _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks):
-    """Download master .m3u8, inject subtitle entries, re-upload."""
+    """Download master .m3u8 as UTF-8, inject subtitle entries, re-upload with charset=utf-8."""
     if not subtitle_tracks:
         return
 
@@ -153,7 +203,7 @@ def _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks):
         print(f"[PATCH] Skipping {manifest_name} — does not exist")
         return
 
-    original = blob.download_as_text()
+    original = blob.download_as_text(encoding="utf-8")
     lines = original.strip().split("\n")
 
     subtitle_lines = []
@@ -181,7 +231,7 @@ def _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks):
 
     patched_text = "\n".join(patched) + "\n"
     blob.cache_control = "no-store"
-    blob.upload_from_string(patched_text, content_type="application/x-mpegURL")
+    blob.upload_from_string(patched_text, content_type=CONTENT_TYPE_M3U8)
     print(f"[PATCH] Patched {manifest_name} with {len(subtitle_tracks)} subtitle tracks")
 
 
@@ -250,7 +300,7 @@ def _correct_init_byterange(creds, cdn_prefix, name_map):
         blob = bucket.blob(f"{cdn_prefix}/{manifest_name}")
         if not blob.exists():
             continue
-        text = blob.download_as_text()
+        text = blob.download_as_text(encoding="utf-8")
         m = re.search(r'#EXT-X-MAP:URI="([^"]+)",BYTERANGE="(\d+)@0"', text)
         if not m:
             continue
@@ -277,7 +327,7 @@ def _correct_init_byterange(creds, cdn_prefix, name_map):
                 1,
             )
             blob.cache_control = "no-store"
-            blob.upload_from_string(patched, content_type="application/x-mpegURL")
+            blob.upload_from_string(patched, content_type=CONTENT_TYPE_M3U8)
             print(f"[BYTERANGE] Fixed {manifest_name}: {declared_size} → {correct_size}")
         else:
             print(f"[BYTERANGE] {manifest_name}: {declared_size} correct")
@@ -290,12 +340,12 @@ def _rename_manifest_refs(creds, cdn_prefix, master_name, name_map):
     blob = bucket.blob(f"{cdn_prefix}/{master_name}")
     if not blob.exists():
         return
-    text = blob.download_as_text()
+    text = blob.download_as_text(encoding="utf-8")
     for old_name, new_name in name_map.items():
         if old_name != master_name:
             text = text.replace(old_name, new_name)
     blob.cache_control = "no-store"
-    blob.upload_from_string(text, content_type="application/x-mpegURL")
+    blob.upload_from_string(text, content_type=CONTENT_TYPE_M3U8)
     print(f"[RENAME] Updated sub-manifest refs in {master_name}")
 
 
@@ -326,7 +376,7 @@ def _reorder_streams_in_manifest(creds, cdn_prefix, manifest_name):
         print(f"[REORDER] {manifest_name} not found, skipping")
         return
 
-    text = blob.download_as_text()
+    text = blob.download_as_text(encoding="utf-8")
     lines = text.strip().split("\n")
 
     header = []
@@ -350,7 +400,7 @@ def _reorder_streams_in_manifest(creds, cdn_prefix, manifest_name):
         reordered.append(uri_line)
 
     blob.cache_control = "no-store"
-    blob.upload_from_string("\n".join(reordered) + "\n", content_type="application/x-mpegURL")
+    blob.upload_from_string("\n".join(reordered) + "\n", content_type=CONTENT_TYPE_M3U8)
     print(f"[REORDER] Reordered streams in {manifest_name} to 720p→480p→1080p")
 
 
@@ -361,11 +411,11 @@ def _fix_audio_name(creds, cdn_prefix, slug, manifest_name):
     blob = bucket.blob(f"{cdn_prefix}/{manifest_name}")
     if not blob.exists():
         return
-    text = blob.download_as_text()
+    text = blob.download_as_text(encoding="utf-8")
     patched = text.replace('NAME="Test Language"', f'NAME="{slug}"')
     if patched != text:
         blob.cache_control = "no-store"
-        blob.upload_from_string(patched, content_type="application/x-mpegURL")
+        blob.upload_from_string(patched, content_type=CONTENT_TYPE_M3U8)
         print(f"[PATCH] Fixed audio NAME to '{slug}' in {manifest_name}")
 
 

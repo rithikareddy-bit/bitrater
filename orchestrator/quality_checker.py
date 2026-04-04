@@ -29,9 +29,9 @@ BLUR_THRESHOLD  = 0.8
 
 
 def _fetch_manifest(url):
-    """Download a manifest text from a CDN URL."""
+    """Download a manifest text from a CDN URL (HLS is UTF-8)."""
     with urllib.request.urlopen(url, timeout=30) as r:
-        return r.read().decode("utf-8")
+        return r.read().decode("utf-8-sig")
 
 
 def _extract_1080p_streams(combined_url):

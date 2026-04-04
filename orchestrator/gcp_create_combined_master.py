@@ -24,6 +24,10 @@ from google.oauth2 import service_account
 CDN_BASE = os.environ["CDN_BASE"]
 CDN_BUCKET = "chai-shots-manifests"
 
+# HLS playlists are UTF-8; subtitle #EXT-X-MEDIA NAME may include non-ASCII.
+CONTENT_TYPE_M3U8 = "application/x-mpegURL; charset=utf-8"
+
+
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
     sm = boto3.client("secretsmanager")
@@ -98,7 +102,7 @@ def _download_manifest_from_url(bucket, cdn_base, url):
     blob = bucket.blob(gcs_path)
     if not blob.exists():
         raise FileNotFoundError(f"Manifest not found at gs path: {gcs_path}")
-    return blob.download_as_text()
+    return blob.download_as_text(encoding="utf-8")
 
 
 def handler(event, context):
@@ -211,7 +215,7 @@ def handler(event, context):
 
     combined_blob = bucket.blob(f"{cdn_prefix}/{combined_filename}")
     combined_blob.cache_control = "no-store"
-    combined_blob.upload_from_string(combined_text, content_type="application/x-mpegURL")
+    combined_blob.upload_from_string(combined_text, content_type=CONTENT_TYPE_M3U8)
     print(f"[COMBINED] Uploaded {combined_filename} to {cdn_prefix}/")
 
     combined_url = f"{CDN_BASE}/{cdn_prefix}/{combined_filename}"
