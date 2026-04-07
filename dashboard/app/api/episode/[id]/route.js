@@ -13,7 +13,9 @@ export async function GET(request, { params }) {
 
     const labDb = client.db('chai_q_lab');
     const [research, golden] = await Promise.all([
-      labDb.collection('video_vmaf_research').find({ episode_id: id }).limit(200).toArray(),
+      // No cap: an arbitrary .limit() can drop an entire codec from the R-D chart while
+      // lab_status / golden_recipes still reflect a complete run (aggregator has no limit).
+      labDb.collection('video_vmaf_research').find({ episode_id: id }).toArray(),
       labDb.collection('video_episodes').findOne({ episode_id: id }),
     ]);
 

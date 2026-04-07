@@ -13,7 +13,11 @@ function hasGoldenForCodec(resolutions, codec) {
 export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [status, setStatus] = useState(null);
   const [pushing, setPushing] = useState(null);
-  const [pushError, setPushError] = useState(null);
+  /** GCP transcoding errors — separate per leg so H.264 + thumbnail VTT do not share one banner. */
+  const [gcpErr264, setGcpErr264] = useState(null);
+  const [gcpErr265, setGcpErr265] = useState(null);
+  const [vttErr, setVttErr] = useState(null);
+  const [vttInfo, setVttInfo] = useState(null);
   const [combining, setCombining] = useState(false);
   const [combineError, setCombineError] = useState(null);
   const [combinedUrl, setCombinedUrl] = useState(null);
@@ -87,9 +91,71 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
     };
   }, [fetchStatus, episodeId]);
 
+  const handleRunH264 = async () => {
+    setPushing('h264');
+    setGcpErr264(null);
+    setVttErr(null);
+    setVttInfo(null);
+    try {
+      const [gcpSettled, vttSettled] = await Promise.allSettled([
+        fetch('/api/gcp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ episodeId, codec: 'h264' }),
+        }),
+        fetch('/api/episode-vtt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ episodeId }),
+        }),
+      ]);
+
+      if (gcpSettled.status === 'fulfilled') {
+        const r = gcpSettled.value;
+        let data = {};
+        try {
+          const t = await r.text();
+          if (t) data = JSON.parse(t);
+        } catch { /* ignore */ }
+        if (!r.ok) {
+          setGcpErr264(data.error || `GCP H.264 failed (${r.status})`);
+        } else {
+          startPolling();
+        }
+      } else {
+        setGcpErr264(gcpSettled.reason?.message || 'GCP H.264 request failed');
+      }
+
+      if (vttSettled.status === 'fulfilled') {
+        const r = vttSettled.value;
+        let data = {};
+        try {
+          const t = await r.text();
+          if (t) data = JSON.parse(t);
+        } catch { /* ignore */ }
+        if (!r.ok) {
+          setVttErr(data.error || `Thumbnail VTT failed (${r.status})`);
+        } else if (data.skipped) {
+          setVttInfo(data.message || 'vtt_url already present — skipped');
+        } else {
+          setVttInfo(data.message || 'Thumbnail VTT generation complete');
+          fetchStatus();
+        }
+      } else {
+        setVttErr(vttSettled.reason?.message || 'Thumbnail VTT request failed');
+      }
+    } finally {
+      setPushing(null);
+    }
+  };
+
   const handleRunGCP = async (codec) => {
+    if (codec === 'h264') {
+      await handleRunH264();
+      return;
+    }
     setPushing(codec);
-    setPushError(null);
+    setGcpErr265(null);
     try {
       const res = await fetch('/api/gcp', {
         method: 'POST',
@@ -101,7 +167,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       setPushing(null);
       startPolling();
     } catch (err) {
-      setPushError(err.message);
+      setGcpErr265(err.message);
       setPushing(null);
     }
   };
@@ -247,6 +313,18 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         </div>
       )}
 
+      {(status?.thumb_vtt?.vtt_url || status?.thumb_vtt?.sprite_url) && (
+        <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12, wordBreak: 'break-all' }}>
+          <div style={{ fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>Thumbnail VTT</div>
+          {status.thumb_vtt.vtt_url && (
+            <div><strong style={{ color: '#7dd3fc' }}>VTT:</strong> {status.thumb_vtt.vtt_url}</div>
+          )}
+          {status.thumb_vtt.sprite_url && (
+            <div><strong style={{ color: '#7dd3fc' }}>Sprite:</strong> {status.thumb_vtt.sprite_url}</div>
+          )}
+        </div>
+      )}
+
       {/* Run GCP buttons */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <button
@@ -307,9 +385,24 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         })()}
       </div>
 
-      {pushError && (
+      {gcpErr264 && (
         <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
-          Error: {pushError}
+          H.264 transcoding: {gcpErr264}
+        </div>
+      )}
+      {gcpErr265 && (
+        <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
+          H.265 transcoding: {gcpErr265}
+        </div>
+      )}
+      {vttErr && (
+        <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
+          Thumbnail VTT: {vttErr}
+        </div>
+      )}
+      {vttInfo && (
+        <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 8 }}>
+          {vttInfo}
         </div>
       )}
 

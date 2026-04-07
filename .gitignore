@@ -32,3 +32,13 @@ aws-infra/terraform.tfvars
 .env.deploy
 .env.local
 *.pem
+# GCP service account JSON keys (e.g. downloaded from IAM)
+media-cdn-poc-*.json
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Backfill log files
+webp_backfill_*.log

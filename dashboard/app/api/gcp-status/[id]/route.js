@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { SFNClient, DescribeExecutionCommand } from '@aws-sdk/client-sfn';
 import clientPromise from '@/lib/mongodb';
+import { videoIdFromS3Url } from '@/lib/videoId';
 
 const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
@@ -59,6 +60,8 @@ export async function GET(request, { params }) {
   try {
     const client = await clientPromise();
     const db = client.db('chai_q_lab');
+    const masterDb = client.db(process.env.MONGO_DATABASE || 'master');
+    const vttCollection = process.env.MONGO_VTT_COLLECTION || 'episode_vtt';
 
     const projection = {
       h264_master_m3u8_url: 1,
@@ -74,13 +77,39 @@ export async function GET(request, { params }) {
       projection[`gcp_job_name_${codec}`] = 1;
     }
 
+    let thumb_vtt = null;
+    try {
+      const showWithEp = await masterDb.collection('showcache').findOne(
+        { 'episodes.id': id },
+        { projection: { 'episodes.$': 1 } },
+      );
+      const s3Url = showWithEp?.episodes?.[0]?.s3_url;
+      if (s3Url) {
+        const videoId = videoIdFromS3Url(s3Url);
+        if (videoId) {
+          const vttDoc = await masterDb.collection(vttCollection).findOne(
+            { video_id: videoId },
+            { projection: { vtt_url: 1, sprite_url: 1 } },
+          );
+          if (vttDoc) {
+            thumb_vtt = {
+              vtt_url: vttDoc.vtt_url || null,
+              sprite_url: vttDoc.sprite_url || null,
+            };
+          }
+        }
+      }
+    } catch {
+      thumb_vtt = null;
+    }
+
     const episode = await db.collection('video_episodes').findOne(
       { episode_id: id },
       { projection },
     );
 
     if (!episode) {
-      return NextResponse.json({ h264: null, h265: null });
+      return NextResponse.json({ h264: null, h265: null, thumb_vtt });
     }
 
     const [h264, h265] = await Promise.all([
@@ -94,6 +123,7 @@ export async function GET(request, { params }) {
       h264_master_m3u8_url: episode.h264_master_m3u8_url || null,
       h265_master_m3u8_url: episode.h265_master_m3u8_url || null,
       combined_master_m3u8_url: episode.combined_master_m3u8_url || null,
+      thumb_vtt,
     });
   } catch (err) {
     console.error('[GET /api/gcp-status/[id]]', err);
