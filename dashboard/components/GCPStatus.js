@@ -136,7 +136,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         if (!r.ok) {
           setVttErr(data.error || `Thumbnail VTT failed (${r.status})`);
         } else if (data.skipped) {
-          setVttInfo(data.message || 'vtt_url already present — skipped');
+          setVttInfo('VTT file already exists — skipped generation');
         } else {
           setVttInfo(data.message || 'Thumbnail VTT generation complete');
           fetchStatus();
@@ -313,15 +313,10 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         </div>
       )}
 
-      {(status?.thumb_vtt?.vtt_url || status?.thumb_vtt?.sprite_url) && (
+      {status?.thumb_vtt?.vtt_url && (
         <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12, wordBreak: 'break-all' }}>
           <div style={{ fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>Thumbnail VTT</div>
-          {status.thumb_vtt.vtt_url && (
-            <div><strong style={{ color: '#7dd3fc' }}>VTT:</strong> {status.thumb_vtt.vtt_url}</div>
-          )}
-          {status.thumb_vtt.sprite_url && (
-            <div><strong style={{ color: '#7dd3fc' }}>Sprite:</strong> {status.thumb_vtt.sprite_url}</div>
-          )}
+          <div><strong style={{ color: '#7dd3fc' }}>VTT:</strong> {status.thumb_vtt.vtt_url}</div>
         </div>
       )}
 

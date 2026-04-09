@@ -26,6 +26,9 @@ aws-infra/.pymongo-layer/
 aws-infra/.pymongo-layer.zip
 aws-infra/.gcp-layer/
 aws-infra/.gcp-layer.zip
+aws-infra/.ffmpeg-layer/
+aws-infra/.ffmpeg-layer.zip
+aws-infra/.terraform.lock.hcl
 
 # Secrets — never commit
 aws-infra/terraform.tfvars

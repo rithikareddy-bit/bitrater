@@ -40,6 +40,14 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Lab results (golden_recipes) not found' }, { status: 400 });
     }
 
+    const sourceFps = episode?.source_fps;
+    if (!sourceFps || ![24, 30].includes(sourceFps)) {
+      return NextResponse.json(
+        { error: `source_fps is ${sourceFps ?? 'missing'} — only 24 and 30 are supported. Re-run the lab to detect FPS.` },
+        { status: 400 },
+      );
+    }
+
     const resolutions = goldenRecipes.resolutions;
     for (const res of ['1080p', '720p', '480p']) {
       const recipe = resolutions[res]?.[codec];
@@ -88,6 +96,7 @@ export async function POST(request) {
       s3_url: s3Url,
       golden_recipes: goldenRecipes,
       codec,
+      source_fps: sourceFps,
     });
 
     let result;

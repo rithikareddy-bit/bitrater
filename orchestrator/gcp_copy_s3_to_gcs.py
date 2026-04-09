@@ -70,4 +70,5 @@ def handler(event, context):
         "gcs_input_uri": gcs_uri,
         "golden_recipes": event["golden_recipes"],
         "codec": event.get("codec"),
+        "source_fps": event.get("source_fps", 24),
     }

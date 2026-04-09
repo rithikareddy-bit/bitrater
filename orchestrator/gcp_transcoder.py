@@ -24,6 +24,8 @@ PORTRAIT_DIMS = {
 
 RESOLUTIONS = ["720p", "480p", "1080p"]
 
+SUPPORTED_FPS = {24, 30}
+
 
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
@@ -33,8 +35,9 @@ def _get_gcp_credentials():
     return service_account.Credentials.from_service_account_info(info)
 
 
-def _build_h264_video_stream(res_tag, bitrate_kbps, width, height):
+def _build_h264_video_stream(res_tag, bitrate_kbps, width, height, frame_rate):
     """H.264 ElementaryStream — exact parity where API allows."""
+    gop = frame_rate * 2
     return types.ElementaryStream(
         key=f"{res_tag}_h264",
         video_stream=types.VideoStream(
@@ -42,12 +45,12 @@ def _build_h264_video_stream(res_tag, bitrate_kbps, width, height):
                 width_pixels=width,
                 height_pixels=height,
                 bitrate_bps=bitrate_kbps * 1000,
-                frame_rate=24,
+                frame_rate=frame_rate,
                 profile="high",
                 preset="slower",
                 tune="film",
                 gop_duration=duration_pb2.Duration(seconds=2),
-                gop_frame_count=48,
+                gop_frame_count=gop,
                 enable_two_pass=True,
                 vbv_size_bits=bitrate_kbps * 1000 * 3,
                 vbv_fullness_bits=int(bitrate_kbps * 1000 * 3 * 0.9),
@@ -58,8 +61,9 @@ def _build_h264_video_stream(res_tag, bitrate_kbps, width, height):
     )
 
 
-def _build_h265_video_stream(res_tag, bitrate_kbps, width, height):
+def _build_h265_video_stream(res_tag, bitrate_kbps, width, height, frame_rate):
     """H.265 (HEVC) ElementaryStream — closest approximation."""
+    gop = frame_rate * 2
     return types.ElementaryStream(
         key=f"{res_tag}_h265",
         video_stream=types.VideoStream(
@@ -67,11 +71,11 @@ def _build_h265_video_stream(res_tag, bitrate_kbps, width, height):
                 width_pixels=width,
                 height_pixels=height,
                 bitrate_bps=bitrate_kbps * 1000,
-                frame_rate=24,
+                frame_rate=frame_rate,
                 profile="main",
                 preset="slower",
                 gop_duration=duration_pb2.Duration(seconds=2),
-                gop_frame_count=48,
+                gop_frame_count=gop,
                 enable_two_pass=True,
                 vbv_size_bits=bitrate_kbps * 1000 * 3,
                 vbv_fullness_bits=int(bitrate_kbps * 1000 * 3 * 0.9),
@@ -82,7 +86,7 @@ def _build_h265_video_stream(res_tag, bitrate_kbps, width, height):
     )
 
 
-def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec):
+def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_rate):
     """Construct a GCP Transcoder JobConfig for the requested codec."""
     resolutions_data = golden_recipes["resolutions"]
 
@@ -101,7 +105,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec):
             h264_recipe = res_recipes.get("h264")
             if h264_recipe:
                 elementary_streams.append(
-                    _build_h264_video_stream(res_tag, h264_recipe["bitrate_kbps"], width, height)
+                    _build_h264_video_stream(res_tag, h264_recipe["bitrate_kbps"], width, height, frame_rate)
                 )
                 video_mux_key = f"mux_{res_tag}_h264_video"
                 mux_streams.append(types.MuxStream(
@@ -138,7 +142,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec):
             h265_recipe = res_recipes.get("h265")
             if h265_recipe:
                 elementary_streams.append(
-                    _build_h265_video_stream(res_tag, h265_recipe["bitrate_kbps"], width, height)
+                    _build_h265_video_stream(res_tag, h265_recipe["bitrate_kbps"], width, height, frame_rate)
                 )
                 video_mux_key = f"mux_{res_tag}_h265_video"
                 mux_streams.append(types.MuxStream(
@@ -192,7 +196,11 @@ def handler(event, context):
     gcs_input_uri = event["gcs_input_uri"]
     golden_recipes = event["golden_recipes"]
     codec = event.get("codec", "h265")
+    source_fps = event.get("source_fps", 24)
     mongo_uri = os.environ["MONGO_URI"]
+
+    if source_fps not in SUPPORTED_FPS:
+        raise ValueError(f"source_fps={source_fps} not supported, must be one of {sorted(SUPPORTED_FPS)}")
 
     gcp_project = os.environ["GCP_PROJECT"]
     gcp_location = os.environ.get("GCP_LOCATION", "us-central1")
@@ -200,7 +208,7 @@ def handler(event, context):
 
     output_uri = f"gs://{gcs_output_bucket}/{episode_id}/"
 
-    job_config = _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec)
+    job_config = _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, source_fps)
 
     creds = _get_gcp_credentials()
     client = transcoder_v1.TranscoderServiceClient(credentials=creds)
@@ -229,4 +237,5 @@ def handler(event, context):
         "golden_recipes": golden_recipes,
         "output_uri": output_uri,
         "codec": codec,
+        "source_fps": source_fps,
     }

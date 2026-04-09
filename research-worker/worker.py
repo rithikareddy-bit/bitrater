@@ -1,7 +1,9 @@
-import os, subprocess, json, sys, pymongo, boto3
+import os, subprocess, json, sys, re, pymongo, boto3
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 from fractions import Fraction
+
+SUPPORTED_FPS = {24, 30}
 
 RESOLUTION_MAP = {
     "1080": {"width": 1080, "height": 1920},
@@ -118,19 +120,27 @@ def run_research():
     s3 = boto3.client('s3', region_name=region) if region else get_s3_client()
     s3.download_file(bucket, key, 'source.mp4')
 
-    config     = load_heavy_params(codec)
-    preset     = config.get("preset", "slower")
-    pix_fmt    = config.get("pix_fmt", "yuv420p")
-    params     = config.get("params", "")
-    frame_rate = config.get("frame_rate", 24)
-    gop        = config.get("gop", 48)
-    bframes    = config.get("bframes", 3)
-
-    _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, frame_rate, gop, bframes, episode_id)
-
     info = _get_video_info("source.mp4")
     w, h = info["width"], info["height"]
     source_fps = max(1, round(info["fps"]))
+
+    if source_fps not in SUPPORTED_FPS:
+        raise ValueError(f"Source FPS is {source_fps}, only {sorted(SUPPORTED_FPS)} are supported")
+
+    config   = load_heavy_params(codec)
+    preset   = config.get("preset", "slower")
+    pix_fmt  = config.get("pix_fmt", "yuv420p")
+    params   = config.get("params", "")
+    bframes  = config.get("bframes", 3)
+
+    frame_rate = source_fps
+    gop        = source_fps * 2
+    if 'keyint=' in params:
+        params = re.sub(r'keyint=\d+', f'keyint={gop}', params)
+    elif codec == "libx265":
+        params = f"keyint={gop}:{params}" if params else f"keyint={gop}"
+
+    _two_pass_encode(codec, preset, bitrate, pix_fmt, params, scale_w, scale_h, frame_rate, gop, bframes, episode_id)
 
     vmaf_filter = (
         f"[0:v]setpts=PTS-STARTPTS[ref];"
@@ -178,6 +188,11 @@ def run_research():
             db["video_vmaf_research"].insert_one(doc)
         except Exception as e:
             raise RuntimeError(f"Failed to write VMAF result to MongoDB: {e}") from e
+        db["video_episodes"].update_one(
+            {"episode_id": episode_id},
+            {"$set": {"source_fps": source_fps}},
+            upsert=True,
+        )
     finally:
         mongo_client.close()
     print(f"[OK] episode={episode_id} codec={codec} res={resolution_tag} bitrate={bitrate}k vmaf={vmaf_score:.2f}")

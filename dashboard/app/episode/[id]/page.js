@@ -8,6 +8,7 @@ import VMAFHeatmap from '@/components/VMAFHeatmap';
 import FrameComparison from '@/components/FrameComparison';
 import LabStatus from '@/components/LabStatus';
 import GCPStatus from '@/components/GCPStatus';
+import SourceProbe from '@/components/SourceProbe';
 import { VMAF_THRESHOLDS } from '@/lib/constants';
 import {
   durationSourceLabel,
@@ -264,6 +265,14 @@ export default function EpisodePage() {
           <div style={PANEL_TITLE}>Lab Status</div>
           <ErrorBoundary name="LabStatus">
             <LabStatus episodeId={id} golden={golden} videoUrl={videoUrl} onRunComplete={fetchData} />
+          </ErrorBoundary>
+        </div>
+
+        {/* Source Video Probe */}
+        <div style={PANEL_STYLE}>
+          <div style={PANEL_TITLE}>Source Video Info</div>
+          <ErrorBoundary name="SourceProbe">
+            <SourceProbe episodeId={id} />
           </ErrorBoundary>
         </div>
 

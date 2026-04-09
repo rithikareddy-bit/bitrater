@@ -13,6 +13,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm install --os=linux --cpu=x64 @next/swc-linux-x64-musl@14 2>/dev/null; npm run build
 
 FROM node:20-alpine AS runner
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
