@@ -70,15 +70,18 @@ def generate_webp_vtt_to_dir(
     if duration_sec <= 0:
         duration_sec = _ffprobe_duration_sec(url)
 
-    n_frames = max(1, int(math.floor(duration_sec / interval_sec)) + 1)
-    cols = min(5, max(1, int(math.ceil(math.sqrt(n_frames)))))
-    rows = int(math.ceil(n_frames / cols))
+    total_frames = max(1, int(duration_sec / interval_sec))
+    cols = min(5, max(1, int(math.ceil(math.sqrt(total_frames)))))
+    rows = int(math.ceil(total_frames / cols))
 
     sprite_path = out_dir / f"{video_id}-sprite.webp"
     vtt_path = out_dir / f"{video_id}-thumbnails.vtt"
 
-    fps_expr = 1.0 / interval_sec
-    vf = f"fps={fps_expr},scale=320:-2,tile={cols}x{rows}"
+    vf = (
+        f"trim=start={interval_sec},setpts=PTS-STARTPTS,"
+        f"fps=1/{interval_sec},trim=end_frame={total_frames},"
+        f"scale=320:-2,tile={cols}x{rows}"
+    )
     q = min(100, max(0, int(quality)))
     _run_ffmpeg(
         [
@@ -128,13 +131,13 @@ def generate_webp_vtt_to_dir(
 
     lines = ["WEBVTT", ""]
     base_file = f"{video_id}-sprite.webp"
-    for i in range(n_frames):
+    for i in range(total_frames):
         r = i // cols
         c = i % cols
         x0 = c * cell_w
         y0 = r * cell_h
         t0 = i * interval_sec
-        t1 = min(t0 + interval_sec, duration_sec)
+        t1 = (i + 1) * interval_sec if i < total_frames - 1 else duration_sec
         frag = f"{sprite_base_url.rstrip('/')}/{base_file}#xywh={x0},{y0},{cell_w},{cell_h}"
         lines.append(f"{fmt_ts(t0)} --> {fmt_ts(t1)}")
         lines.append(frag)
