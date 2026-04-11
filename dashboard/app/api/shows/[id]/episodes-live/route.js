@@ -250,6 +250,7 @@ export async function GET(_request, { params }) {
                   gcp_job_status_h265: 1,
                   h264_master_m3u8_url: 1,
                   h265_master_m3u8_url: 1,
+                  combined_master_m3u8_url: 1,
                 },
               },
             )
@@ -273,6 +274,7 @@ export async function GET(_request, { params }) {
         episodeNumber: pickEpisodeNumber(ep, index),
         title: ep?.title ?? null,
         durationSeconds,
+        s3_url: ep?.s3_url ?? null,
         lab_h264: doc?.lab_status_h264 ?? null,
         lab_h265: doc?.lab_status_h265 ?? null,
         golden_h264: h264Golden,
@@ -282,6 +284,7 @@ export async function GET(_request, { params }) {
         gcp_h265: gcpShort(doc?.gcp_job_status_h265),
         has_h264_url: Boolean(doc?.h264_master_m3u8_url),
         has_h265_url: Boolean(doc?.h265_master_m3u8_url),
+        combined_url: doc?.combined_master_m3u8_url ?? null,
       };
     });
 

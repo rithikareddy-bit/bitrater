@@ -264,6 +264,7 @@ export default function ShowOverviewPage() {
   const [liveError, setLiveError] = useState(null);
   const [fetchedAt, setFetchedAt] = useState(null);
   const [pollMs, setPollMs] = useState(15000);
+  const [expandedEp, setExpandedEp] = useState(null);
 
   const timerRef = useRef(null);
   const visibleRef = useRef(true);
@@ -557,9 +558,10 @@ export default function ShowOverviewPage() {
                     'Golden H.265',
                     'QC',
                     'GCP',
+                    '',
                   ].map((h) => (
                     <th
-                      key={h}
+                      key={h || 'actions'}
                       style={{
                         textAlign: h === '#' || h === 'Dur.' ? 'center' : 'left',
                         padding: '10px 12px',
@@ -579,82 +581,20 @@ export default function ShowOverviewPage() {
                 </tr>
               </thead>
               <tbody>
-                {live.episodes.map((row, i) => (
-                  <tr
+                {live.episodes.map((row, i) => {
+                  const isExpanded = expandedEp === row.episodeId;
+                  return (
+                  <EpisodeTableRow
                     key={row.episodeId || i}
-                    style={{
-                      borderBottom: '1px solid #1e1e1e',
-                      background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)',
-                    }}
-                  >
-                    <td
-                      style={{
-                        padding: '10px 12px',
-                        textAlign: 'center',
-                        color: '#64748b',
-                        fontWeight: 600,
-                        verticalAlign: 'top',
-                      }}
-                    >
-                      {row.episodeNumber}
-                    </td>
-                    <td style={{ padding: '10px 12px', verticalAlign: 'top', maxWidth: 200 }}>
-                      {row.episodeId ? (
-                        <Link
-                          href={`/episode/${encodeURIComponent(row.episodeId)}`}
-                          style={{ color: '#e2e8f0', fontWeight: 500, lineHeight: 1.35 }}
-                        >
-                          {row.title || row.episodeId}
-                        </Link>
-                      ) : (
-                        <span style={{ color: '#555' }}>—</span>
-                      )}
-                      {row.episodeId && (
-                        <div
-                          style={{
-                            fontSize: 10,
-                            color: '#555',
-                            marginTop: 4,
-                            wordBreak: 'break-all',
-                          }}
-                        >
-                          {row.episodeId}
-                        </div>
-                      )}
-                    </td>
-                    <td
-                      style={{
-                        padding: '10px 8px',
-                        verticalAlign: 'top',
-                        textAlign: 'center',
-                        fontSize: 11,
-                        color: '#64748b',
-                        whiteSpace: 'nowrap',
-                      }}
-                      title="From research VMAF timeline length"
-                    >
-                      {formatEpDuration(row.durationSeconds)}
-                    </td>
-                    <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
-                      <LabPill status={row.lab_h264} />
-                    </td>
-                    <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
-                      <LabPill status={row.lab_h265} />
-                    </td>
-                    <td style={{ padding: '10px 12px', verticalAlign: 'top', minWidth: 160 }}>
-                      <GoldenLadder golden={row.golden_h264} codecLabel="H.264" />
-                    </td>
-                    <td style={{ padding: '10px 12px', verticalAlign: 'top', minWidth: 160 }}>
-                      <GoldenLadder golden={row.golden_h265} codecLabel="H.265" />
-                    </td>
-                    <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
-                      <QCPill qc={row.qc} />
-                    </td>
-                    <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
-                      <GcpMini h264={row.gcp_h264} h265={row.gcp_h265} />
-                    </td>
-                  </tr>
-                ))}
+                    row={row}
+                    index={i}
+                    isExpanded={isExpanded}
+                    onToggle={() => setExpandedEp(isExpanded ? null : row.episodeId)}
+                    onActionDone={() => loadLive(selectedId, true)}
+                    colCount={10}
+                  />
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -667,6 +607,386 @@ export default function ShowOverviewPage() {
 
       {selectedId && !liveLoading && live && live.episodes.length === 0 && (
         <p style={{ color: '#888' }}>This show has no episodes in catalog data.</p>
+      )}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  Episode table row with expandable actions panel                         */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function EpisodeTableRow({ row, index, isExpanded, onToggle, onActionDone, colCount }) {
+  return (
+    <>
+      <tr
+        style={{
+          borderBottom: isExpanded ? 'none' : '1px solid #1e1e1e',
+          background: isExpanded
+            ? 'rgba(77,166,255,0.04)'
+            : index % 2 === 0
+              ? 'transparent'
+              : 'rgba(255,255,255,0.02)',
+          cursor: 'pointer',
+        }}
+        onClick={onToggle}
+      >
+        <td style={{ padding: '10px 12px', textAlign: 'center', color: '#64748b', fontWeight: 600, verticalAlign: 'top' }}>
+          {row.episodeNumber}
+        </td>
+        <td style={{ padding: '10px 12px', verticalAlign: 'top', maxWidth: 200 }}>
+          {row.episodeId ? (
+            <Link
+              href={`/episode/${encodeURIComponent(row.episodeId)}`}
+              style={{ color: '#e2e8f0', fontWeight: 500, lineHeight: 1.35 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {row.title || row.episodeId}
+            </Link>
+          ) : (
+            <span style={{ color: '#555' }}>—</span>
+          )}
+          {row.episodeId && (
+            <div style={{ fontSize: 10, color: '#555', marginTop: 4, wordBreak: 'break-all' }}>
+              {row.episodeId}
+            </div>
+          )}
+        </td>
+        <td style={{ padding: '10px 8px', verticalAlign: 'top', textAlign: 'center', fontSize: 11, color: '#64748b', whiteSpace: 'nowrap' }}>
+          {formatEpDuration(row.durationSeconds)}
+        </td>
+        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+          <LabPill status={row.lab_h264} />
+        </td>
+        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+          <LabPill status={row.lab_h265} />
+        </td>
+        <td style={{ padding: '10px 12px', verticalAlign: 'top', minWidth: 160 }}>
+          <GoldenLadder golden={row.golden_h264} codecLabel="H.264" />
+        </td>
+        <td style={{ padding: '10px 12px', verticalAlign: 'top', minWidth: 160 }}>
+          <GoldenLadder golden={row.golden_h265} codecLabel="H.265" />
+        </td>
+        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+          <QCPill qc={row.qc} />
+        </td>
+        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+          <GcpMini h264={row.gcp_h264} h265={row.gcp_h265} />
+        </td>
+        <td style={{ padding: '10px 12px', verticalAlign: 'top', textAlign: 'center' }}>
+          <span style={{
+            display: 'inline-block',
+            fontSize: 11,
+            fontWeight: 600,
+            color: isExpanded ? '#4da6ff' : '#555',
+            transition: 'transform 0.2s',
+            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}>
+            ▼
+          </span>
+        </td>
+      </tr>
+      {isExpanded && (
+        <tr style={{ background: 'rgba(77,166,255,0.04)', borderBottom: '1px solid #2a2a2a' }}>
+          <td colSpan={colCount} style={{ padding: 0 }}>
+            <EpisodeActions row={row} onActionDone={onActionDone} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  Inline action buttons for a single episode                              */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+const ACTION_BTN = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  borderRadius: 6,
+  padding: '7px 14px',
+  fontSize: 12,
+  fontWeight: 600,
+  border: 'none',
+  cursor: 'pointer',
+  transition: 'opacity 0.15s',
+  whiteSpace: 'nowrap',
+};
+
+function ActionBtn({ label, color, disabled, loading, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      disabled={disabled || loading}
+      style={{
+        ...ACTION_BTN,
+        background: disabled || loading ? '#1e1e1e' : color,
+        color: disabled || loading ? '#555' : '#fff',
+        cursor: disabled || loading ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {loading && <MiniSpinner />}
+      {label}
+    </button>
+  );
+}
+
+function MiniSpinner() {
+  return (
+    <span style={{
+      display: 'inline-block', width: 12, height: 12,
+      border: '2px solid #555', borderTop: '2px solid #4da6ff',
+      borderRadius: '50%', animation: 'spin 0.7s linear infinite',
+    }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </span>
+  );
+}
+
+function EpisodeActions({ row, onActionDone }) {
+  const [busy, setBusy] = useState({});
+  const [msgs, setMsgs] = useState({});
+  // Track the combined URL locally so Sync works immediately after Create Combined
+  const [localCombinedUrl, setLocalCombinedUrl] = useState(row.combined_url || null);
+
+  // Update local URL when the poll brings in a fresh value
+  useEffect(() => {
+    if (row.combined_url) setLocalCombinedUrl(row.combined_url);
+  }, [row.combined_url]);
+
+  const setActionBusy = (key, val) => setBusy((p) => ({ ...p, [key]: val }));
+  const setMsg = (key, type, text) => setMsgs((p) => ({ ...p, [key]: { type, text } }));
+  const clearMsg = (key) => setMsgs((p) => { const n = { ...p }; delete n[key]; return n; });
+
+  const apiCall = async (key, url, opts) => {
+    setActionBusy(key, true);
+    clearMsg(key);
+    try {
+      const res = await fetch(url, opts);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
+      setMsg(key, 'ok', data.message || 'Done');
+      if (onActionDone) onActionDone();
+      return data;
+    } catch (err) {
+      setMsg(key, 'err', err.message);
+      return null;
+    } finally {
+      setActionBusy(key, false);
+    }
+  };
+
+  const epId = row.episodeId;
+  const hasH264Golden = row.golden_h264 && Object.values(row.golden_h264).some((v) => v?.bitrate_kbps);
+  const hasH265Golden = row.golden_h265 && Object.values(row.golden_h265).some((v) => v?.bitrate_kbps);
+  const hasCombined = Boolean(localCombinedUrl);
+  const labH264Running = row.lab_h264 === 'RUNNING';
+  const labH265Running = row.lab_h265 === 'RUNNING';
+  const gcpH264Active = row.gcp_h264 === '…';
+  const gcpH265Active = row.gcp_h265 === '…';
+
+  const handleRunLabH264 = () => apiCall('lab264', '/api/push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ episodeId: epId, s3Url: row.s3_url, codec: 'h264' }),
+  });
+
+  const handleRunLabH265 = () => apiCall('lab265', '/api/push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ episodeId: epId, s3Url: row.s3_url, codec: 'h265' }),
+  });
+
+  const handleProbe = () => apiCall('probe', '/api/probe-source', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ episodeId: epId }),
+  });
+
+  // GCP H.264 also triggers VTT generation (same as episode page GCPStatus.handleRunH264)
+  const handleGcpH264 = async () => {
+    setActionBusy('gcp264', true);
+    clearMsg('gcp264');
+    clearMsg('vtt');
+    try {
+      const [gcpSettled, vttSettled] = await Promise.allSettled([
+        fetch('/api/gcp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ episodeId: epId, codec: 'h264' }),
+        }),
+        fetch('/api/episode-vtt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ episodeId: epId }),
+        }),
+      ]);
+
+      if (gcpSettled.status === 'fulfilled') {
+        const r = gcpSettled.value;
+        let data = {};
+        try { const t = await r.text(); if (t) data = JSON.parse(t); } catch { /* ignore */ }
+        if (!r.ok) {
+          setMsg('gcp264', 'err', data.error || `GCP H.264 failed (${r.status})`);
+        } else {
+          setMsg('gcp264', 'ok', 'GCP H.264 started');
+        }
+      } else {
+        setMsg('gcp264', 'err', gcpSettled.reason?.message || 'GCP H.264 request failed');
+      }
+
+      if (vttSettled.status === 'fulfilled') {
+        const r = vttSettled.value;
+        let data = {};
+        try { const t = await r.text(); if (t) data = JSON.parse(t); } catch { /* ignore */ }
+        if (!r.ok) {
+          setMsg('vtt', 'err', data.error || `VTT failed (${r.status})`);
+        } else if (data.skipped) {
+          setMsg('vtt', 'ok', 'VTT already exists');
+        } else {
+          setMsg('vtt', 'ok', data.message || 'VTT generated');
+        }
+      } else {
+        setMsg('vtt', 'err', vttSettled.reason?.message || 'VTT request failed');
+      }
+
+      if (onActionDone) onActionDone();
+    } finally {
+      setActionBusy('gcp264', false);
+    }
+  };
+
+  const handleGcpH265 = () => apiCall('gcp265', '/api/gcp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ episodeId: epId, codec: 'h265' }),
+  });
+
+  const handleCombine = async () => {
+    const data = await apiCall('combine', '/api/create-combined-master', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeId: epId }),
+    });
+    // Capture the URL so Sync can use it immediately without waiting for poll
+    if (data?.combined_master_m3u8_url) {
+      setLocalCombinedUrl(data.combined_master_m3u8_url);
+    }
+  };
+
+  const handleSync = () => {
+    if (!localCombinedUrl) {
+      setMsg('sync', 'err', 'No combined URL — run Create Combined URL first');
+      return;
+    }
+    return apiCall('sync', '/api/sync-showcache-episode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeId: epId, signedPlaybackUrl: localCombinedUrl }),
+    });
+  };
+
+  const handleQC = async () => {
+    const data = await apiCall('qc', `/api/quality-check/${epId}`, {
+      method: 'POST',
+    });
+    // POST returns { status: 'RUNNING' } — override the generic "Done" message
+    if (data) setMsg('qc', 'ok', 'QC started — watch status in table');
+  };
+
+  return (
+    <div
+      style={{
+        padding: '14px 18px',
+        borderTop: '1px solid #1a2a3a',
+        background: 'rgba(77,166,255,0.02)',
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div style={{ fontSize: 11, fontWeight: 600, color: '#64748b', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        Actions — {row.title || epId}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <ActionBtn
+          label={labH264Running ? 'Lab H.264 Running…' : '▶ Run Lab H.264'}
+          color="#4da6ff"
+          disabled={!row.s3_url || labH264Running}
+          loading={busy.lab264}
+          onClick={handleRunLabH264}
+        />
+        <ActionBtn
+          label={labH265Running ? 'Lab H.265 Running…' : '▶ Run Lab H.265'}
+          color="#4da6ff"
+          disabled={!row.s3_url || labH265Running}
+          loading={busy.lab265}
+          onClick={handleRunLabH265}
+        />
+        <ActionBtn
+          label="Calculate FPS & Res"
+          color="#0f766e"
+          loading={busy.probe}
+          onClick={handleProbe}
+        />
+        <ActionBtn
+          label={gcpH264Active ? 'GCP H.264 Running…' : '▶ Run GCP H.264'}
+          color="#9333ea"
+          disabled={!hasH264Golden || gcpH264Active}
+          loading={busy.gcp264}
+          onClick={handleGcpH264}
+        />
+        <ActionBtn
+          label={gcpH265Active ? 'GCP H.265 Running…' : '▶ Run GCP H.265'}
+          color="#9333ea"
+          disabled={!hasH265Golden || gcpH265Active}
+          loading={busy.gcp265}
+          onClick={handleGcpH265}
+        />
+        <ActionBtn
+          label="Create Combined URL"
+          color="#0e7490"
+          disabled={!row.has_h264_url || !row.has_h265_url}
+          loading={busy.combine}
+          onClick={handleCombine}
+        />
+        <ActionBtn
+          label="Sync"
+          color="#1d4ed8"
+          disabled={!hasCombined}
+          loading={busy.sync}
+          onClick={handleSync}
+        />
+        <ActionBtn
+          label="Check Quality"
+          color="#16803c"
+          disabled={!hasCombined}
+          loading={busy.qc}
+          onClick={handleQC}
+        />
+      </div>
+
+      {/* Feedback messages */}
+      {Object.entries(msgs).length > 0 && (
+        <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {Object.entries(msgs).map(([key, { type, text }]) => (
+            <span
+              key={key}
+              style={{
+                fontSize: 11,
+                padding: '3px 8px',
+                borderRadius: 4,
+                background: type === 'ok' ? '#052e16' : '#1c0707',
+                border: `1px solid ${type === 'ok' ? '#22c55e' : '#ef4444'}`,
+                color: type === 'ok' ? '#22c55e' : '#ef4444',
+              }}
+            >
+              {key}: {text}
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );
