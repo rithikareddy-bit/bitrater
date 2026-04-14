@@ -3,8 +3,6 @@ from urllib.parse import urlparse
 from datetime import datetime, timezone
 from fractions import Fraction
 
-SUPPORTED_FPS = {24, 30}
-
 RESOLUTION_MAP = {
     "1080": {"width": 1080, "height": 1920},
     "720":  {"width": 720,  "height": 1280},
@@ -28,8 +26,7 @@ def _get_video_info(path):
     w = int(stream["width"])
     h = int(stream["height"])
     r = stream.get("r_frame_rate", "30/1")
-    fps = float(Fraction(r)) if "/" in r else float(r)
-    return {"width": w, "height": h, "fps": fps}
+    return {"width": w, "height": h, "fps_raw": r}
 
 def get_s3_client():
     return boto3.client('s3')
@@ -122,10 +119,8 @@ def run_research():
 
     info = _get_video_info("source.mp4")
     w, h = info["width"], info["height"]
-    source_fps = max(1, round(info["fps"]))
-
-    if source_fps not in SUPPORTED_FPS:
-        raise ValueError(f"Source FPS is {source_fps}, only {sorted(SUPPORTED_FPS)} are supported")
+    source_fps = Fraction(info["fps_raw"])
+    fps_float  = float(source_fps)
 
     config   = load_heavy_params(codec)
     preset   = config.get("preset", "slower")
@@ -133,8 +128,8 @@ def run_research():
     params   = config.get("params", "")
     bframes  = config.get("bframes", 3)
 
-    frame_rate = source_fps
-    gop        = source_fps * 2
+    frame_rate = info["fps_raw"]
+    gop        = round(fps_float * 2)
     if 'keyint=' in params:
         params = re.sub(r'keyint=\d+', f'keyint={gop}', params)
     elif codec == "libx265":
@@ -162,8 +157,9 @@ def run_research():
 
     frames = data.get("frames", [])
     vmaf_timeline = []
-    for i in range(0, len(frames), source_fps):
-        chunk = frames[i:i + source_fps]
+    fps_int = round(fps_float)
+    for i in range(0, len(frames), fps_int):
+        chunk = frames[i:i + fps_int]
         if chunk:  # guard against empty trailing chunk
             vmaf_timeline.append(round(sum(f["metrics"]["vmaf"] for f in chunk) / len(chunk), 2))
 
@@ -190,7 +186,7 @@ def run_research():
             raise RuntimeError(f"Failed to write VMAF result to MongoDB: {e}") from e
         db["video_episodes"].update_one(
             {"episode_id": episode_id},
-            {"$set": {"source_fps": source_fps}},
+            {"$set": {"source_fps": round(fps_float, 4)}},
             upsert=True,
         )
     finally:

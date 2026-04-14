@@ -24,9 +24,6 @@ PORTRAIT_DIMS = {
 
 RESOLUTIONS = ["720p", "480p", "1080p"]
 
-SUPPORTED_FPS = {24, 30}
-
-
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
     sm = boto3.client("secretsmanager")
@@ -35,9 +32,8 @@ def _get_gcp_credentials():
     return service_account.Credentials.from_service_account_info(info)
 
 
-def _build_h264_video_stream(res_tag, bitrate_kbps, width, height, frame_rate):
+def _build_h264_video_stream(res_tag, bitrate_kbps, width, height, frame_rate, gop_duration):
     """H.264 ElementaryStream — exact parity where API allows."""
-    gop = frame_rate * 2
     return types.ElementaryStream(
         key=f"{res_tag}_h264",
         video_stream=types.VideoStream(
@@ -49,8 +45,7 @@ def _build_h264_video_stream(res_tag, bitrate_kbps, width, height, frame_rate):
                 profile="high",
                 preset="slower",
                 tune="film",
-                gop_duration=duration_pb2.Duration(seconds=2),
-                gop_frame_count=gop,
+                gop_duration=gop_duration,
                 enable_two_pass=True,
                 vbv_size_bits=bitrate_kbps * 1000 * 3,
                 vbv_fullness_bits=int(bitrate_kbps * 1000 * 3 * 0.9),
@@ -61,9 +56,8 @@ def _build_h264_video_stream(res_tag, bitrate_kbps, width, height, frame_rate):
     )
 
 
-def _build_h265_video_stream(res_tag, bitrate_kbps, width, height, frame_rate):
+def _build_h265_video_stream(res_tag, bitrate_kbps, width, height, frame_rate, gop_duration):
     """H.265 (HEVC) ElementaryStream — closest approximation."""
-    gop = frame_rate * 2
     return types.ElementaryStream(
         key=f"{res_tag}_h265",
         video_stream=types.VideoStream(
@@ -74,8 +68,7 @@ def _build_h265_video_stream(res_tag, bitrate_kbps, width, height, frame_rate):
                 frame_rate=frame_rate,
                 profile="main",
                 preset="slower",
-                gop_duration=duration_pb2.Duration(seconds=2),
-                gop_frame_count=gop,
+                gop_duration=gop_duration,
                 enable_two_pass=True,
                 vbv_size_bits=bitrate_kbps * 1000 * 3,
                 vbv_fullness_bits=int(bitrate_kbps * 1000 * 3 * 0.9),
@@ -86,6 +79,20 @@ def _build_h265_video_stream(res_tag, bitrate_kbps, width, height, frame_rate):
     )
 
 
+def _gop_and_segment_duration(frame_rate):
+    """Compute aligned GOP and segment durations.
+
+    GCP requires: segmentDuration >= gopDuration AND divisible by gopDuration.
+    For fractional FPS, frame-count-based GOP causes irrational durations that
+    can't be exactly represented in the Duration proto, leading to precision
+    mismatches.
+
+    Solution: use gop_duration (not gop_frame_count) set to exactly 2 seconds.
+    GCP calculates the frame count internally. Segment = 2s = 1 GOP. Clean.
+    """
+    return duration_pb2.Duration(seconds=2)
+
+
 def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_rate):
     """Construct a GCP Transcoder JobConfig for the requested codec."""
     resolutions_data = golden_recipes["resolutions"]
@@ -94,6 +101,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
     mux_streams = []
     manifests = []
 
+    gop_dur = _gop_and_segment_duration(frame_rate)
     codec_lower = (codec or "h265").lower()
 
     if codec_lower == "h264":
@@ -105,7 +113,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
             h264_recipe = res_recipes.get("h264")
             if h264_recipe:
                 elementary_streams.append(
-                    _build_h264_video_stream(res_tag, h264_recipe["bitrate_kbps"], width, height, frame_rate)
+                    _build_h264_video_stream(res_tag, h264_recipe["bitrate_kbps"], width, height, frame_rate, gop_dur)
                 )
                 video_mux_key = f"mux_{res_tag}_h264_video"
                 mux_streams.append(types.MuxStream(
@@ -113,7 +121,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
                     container="fmp4",
                     elementary_streams=[f"{res_tag}_h264"],
                     segment_settings=types.SegmentSettings(
-                        segment_duration=duration_pb2.Duration(seconds=2),
+                        segment_duration=gop_dur,
                     ),
                 ))
                 h264_video_mux_keys.append(video_mux_key)
@@ -122,7 +130,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
             container="fmp4",
             elementary_streams=["audio_aac"],
             segment_settings=types.SegmentSettings(
-                segment_duration=duration_pb2.Duration(seconds=2),
+                segment_duration=gop_dur,
             ),
         ))
         manifests = [
@@ -142,7 +150,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
             h265_recipe = res_recipes.get("h265")
             if h265_recipe:
                 elementary_streams.append(
-                    _build_h265_video_stream(res_tag, h265_recipe["bitrate_kbps"], width, height, frame_rate)
+                    _build_h265_video_stream(res_tag, h265_recipe["bitrate_kbps"], width, height, frame_rate, gop_dur)
                 )
                 video_mux_key = f"mux_{res_tag}_h265_video"
                 mux_streams.append(types.MuxStream(
@@ -150,7 +158,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
                     container="fmp4",
                     elementary_streams=[f"{res_tag}_h265"],
                     segment_settings=types.SegmentSettings(
-                        segment_duration=duration_pb2.Duration(seconds=2),
+                        segment_duration=gop_dur,
                     ),
                 ))
                 h265_mux_keys.append(video_mux_key)
@@ -160,7 +168,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
             container="fmp4",
             elementary_streams=["audio_aac"],
             segment_settings=types.SegmentSettings(
-                segment_duration=duration_pb2.Duration(seconds=2),
+                segment_duration=gop_dur,
             ),
         ))
         manifests = [
@@ -196,11 +204,10 @@ def handler(event, context):
     gcs_input_uri = event["gcs_input_uri"]
     golden_recipes = event["golden_recipes"]
     codec = event.get("codec", "h265")
-    source_fps = event.get("source_fps", 24)
+    if "source_fps" not in event:
+        raise ValueError("Missing source_fps in event payload")
+    source_fps = event["source_fps"]
     mongo_uri = os.environ["MONGO_URI"]
-
-    if source_fps not in SUPPORTED_FPS:
-        raise ValueError(f"source_fps={source_fps} not supported, must be one of {sorted(SUPPORTED_FPS)}")
 
     gcp_project = os.environ["GCP_PROJECT"]
     gcp_location = os.environ.get("GCP_LOCATION", "us-central1")

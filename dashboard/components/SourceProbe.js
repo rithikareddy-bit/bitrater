@@ -70,12 +70,12 @@ export default function SourceProbe({ episodeId }) {
           </div>
           <div style={{
             fontSize: 12,
-            color: result.supported ? '#22c55e' : '#f59e0b',
+            color: result.supported ? '#22c55e' : '#ef4444',
             fontWeight: 600,
           }}>
             {result.supported
               ? `FPS ${result.fps} is supported`
-              : `FPS ${result.fps} is not supported — only 24 and 30 are allowed`}
+              : 'FPS could not be detected'}
           </div>
         </div>
       )}

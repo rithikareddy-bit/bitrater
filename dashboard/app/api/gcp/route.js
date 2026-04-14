@@ -41,9 +41,9 @@ export async function POST(request) {
     }
 
     const sourceFps = episode?.source_fps;
-    if (!sourceFps || ![24, 30].includes(sourceFps)) {
+    if (!sourceFps) {
       return NextResponse.json(
-        { error: `source_fps is ${sourceFps ?? 'missing'} — only 24 and 30 are supported. Re-run the lab to detect FPS.` },
+        { error: 'source_fps is missing. Re-run the lab to detect FPS.' },
         { status: 400 },
       );
     }

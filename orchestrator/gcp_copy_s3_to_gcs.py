@@ -65,10 +65,13 @@ def handler(event, context):
     gcs_uri = f"gs://{gcs_input_bucket}/{episode_id}/source.mp4"
     print(f"[OK] Copied s3://{s3_bucket}/{s3_key} → {gcs_uri}")
 
+    if "source_fps" not in event:
+        raise ValueError("Missing source_fps in event payload")
+
     return {
         "episode_id": episode_id,
         "gcs_input_uri": gcs_uri,
         "golden_recipes": event["golden_recipes"],
         "codec": event.get("codec"),
-        "source_fps": event.get("source_fps", 24),
+        "source_fps": event["source_fps"],
     }

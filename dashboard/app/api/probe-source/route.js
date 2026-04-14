@@ -66,20 +66,20 @@ export async function POST(request) {
     const height = stream.height || null;
     const fpsRaw = stream.r_frame_rate || null;
 
-    let fps = null;
+    let fpsExact = null;
     if (fpsRaw && fpsRaw.includes('/')) {
       const [num, den] = fpsRaw.split('/').map(Number);
-      fps = den ? Math.round(num / den) : null;
+      fpsExact = den ? num / den : null;
     } else if (fpsRaw) {
-      fps = Math.round(Number(fpsRaw));
+      fpsExact = Number(fpsRaw);
     }
 
-    const supported = fps === 24 || fps === 30;
+    const supported = fpsExact !== null && fpsExact > 0;
 
     return NextResponse.json({
       width,
       height,
-      fps,
+      fps: fpsExact != null ? parseFloat(fpsExact.toFixed(4)) : null,
       fps_raw: fpsRaw,
       supported,
     });

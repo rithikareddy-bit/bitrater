@@ -95,10 +95,8 @@ print(f'Resolution : {w} x {h}')
 print(f'FPS        : {fps_raw} = {fps:.2f}')
 print()
 
-if fps in [24, 30]:
-    print(f'✅ FPS is {fps:.0f} — supported by the worker. VMAF will be correct.')
-elif fps > 0:
-    print(f'❌ FPS is {fps:.0f} — only 24 and 30 are supported.')
+if fps > 0:
+    print(f'✅ FPS is {fps:.2f} — supported by the worker.')
 else:
     print('⚠️  Could not determine FPS.')
 "
