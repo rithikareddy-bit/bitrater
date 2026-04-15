@@ -253,6 +253,180 @@ function ShowStatsPanel({ stats }) {
   );
 }
 
+function formatDuration(ms) {
+  if (ms == null || ms < 0) return null;
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+// ── Pipeline controls (Run Pipeline / Sync Show buttons + status badge) ──────
+
+function PipelineControls({
+  selectedId, pipelineRun, pipelineLoading, pipelineSyncing,
+  pipelineError, onRunPipeline, onSyncShow, onCancel,
+}) {
+  const status    = pipelineRun?.status;
+  const isRunning = status === 'RUNNING';
+  const isDone    = status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+
+  const total    = pipelineRun?.total_episodes ?? 0;
+  const skipped  = pipelineRun?.skipped_count ?? 0;
+  const eligible = total - skipped;
+  const done     = pipelineRun?.completed_count ?? 0;
+  const failed   = pipelineRun?.failed_count ?? 0;
+  const ready    = done; // episodes in READY_TO_SYNC or SYNCED
+  const etaMs    = pipelineRun?.eta_ms;
+
+  const hasReady = pipelineRun?.episodes?.some(ep =>
+    ep.status === 'READY_TO_SYNC' || ep.status === 'SYNCED'
+  ) ?? false;
+
+  // "Run Pipeline" button label + disabled state
+  let runLabel = '▶ Run Pipeline';
+  let runDisabled = pipelineLoading;
+  let runTitle = '';
+  if (pipelineLoading) {
+    runLabel = 'Starting…';
+    runDisabled = true;
+  } else if (isRunning) {
+    runLabel = `Pipeline Running… (${done + failed}/${eligible})`;
+    runDisabled = true;
+    runTitle = 'Pipeline already running';
+  } else if (isDone && done === eligible && eligible > 0) {
+    runDisabled = false; // allow re-run
+  }
+
+  // "Sync Show" button
+  const syncDisabled = pipelineSyncing || !hasReady;
+  let syncLabel = 'Sync Show';
+  if (pipelineSyncing) syncLabel = 'Syncing…';
+
+  // Status badge colours
+  const badgeColor =
+    isRunning ? '#f59e0b' :
+    status === 'COMPLETED' ? '#22c55e' :
+    status === 'CANCELLED' ? '#94a3b8' :
+    status === 'FAILED' ? '#ef4444' : '#555';
+
+  return (
+    <div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 14 }}>
+        {/* Run Pipeline */}
+        <button
+          type="button"
+          onClick={onRunPipeline}
+          disabled={runDisabled}
+          title={runTitle}
+          style={{
+            padding: '8px 16px',
+            borderRadius: 6,
+            border: `1px solid ${runDisabled ? '#2a3a2a' : '#166534'}`,
+            background: runDisabled ? '#0f1f0f' : '#14532d',
+            color: runDisabled ? '#4a6a4a' : '#4ade80',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: runDisabled ? 'not-allowed' : 'pointer',
+            whiteSpace: 'nowrap',
+            animation: isRunning ? 'pulse 2s ease-in-out infinite' : 'none',
+          }}
+        >
+          {runLabel}
+        </button>
+
+        {/* Sync Show */}
+        <button
+          type="button"
+          onClick={onSyncShow}
+          disabled={syncDisabled}
+          title={syncDisabled && !pipelineSyncing ? 'No episodes ready to sync' : ''}
+          style={{
+            padding: '8px 16px',
+            borderRadius: 6,
+            border: `1px solid ${syncDisabled ? '#1a2a3a' : '#1e3a5f'}`,
+            background: syncDisabled ? '#0f172a' : '#172554',
+            color: syncDisabled ? '#3a5a7a' : '#60a5fa',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: syncDisabled ? 'not-allowed' : 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {syncLabel}
+        </button>
+
+        {/* Cancel button — only when RUNNING */}
+        {isRunning && (
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              padding: '8px 12px',
+              borderRadius: 6,
+              border: '1px solid #4a1a1a',
+              background: '#2a0f0f',
+              color: '#f87171',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+        )}
+
+        {/* Status badge */}
+        {pipelineRun && (
+          <span style={{
+            fontSize: 12,
+            color: badgeColor,
+            fontWeight: 600,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}>
+            {isRunning && (
+              <span style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: badgeColor,
+                boxShadow: `0 0 6px ${badgeColor}`,
+                animation: 'pulse 2s ease-in-out infinite',
+                display: 'inline-block',
+              }} />
+            )}
+            {status === 'RUNNING' && `Pipeline: ${done + failed}/${eligible} done`}
+            {status === 'COMPLETED' && `Pipeline complete — ${done}/${eligible} ready`}
+            {status === 'CANCELLED' && 'Pipeline cancelled'}
+            {status === 'FAILED' && 'Pipeline failed'}
+            {etaMs && isRunning ? ` · ETA ~${formatDuration(etaMs)}` : ''}
+          </span>
+        )}
+      </div>
+
+      {/* Error message */}
+      {pipelineError && (
+        <p style={{ margin: '8px 0 0', fontSize: 12, color: '#f87171' }}>
+          {pipelineError}
+        </p>
+      )}
+
+      {/* Per-status summary when run is visible */}
+      {pipelineRun && (pipelineRun.failed_count > 0 || pipelineRun.skipped_count > 0) && (
+        <p style={{ margin: '6px 0 0', fontSize: 11, color: '#64748b', lineHeight: 1.4 }}>
+          {pipelineRun.failed_count > 0 && `${pipelineRun.failed_count} failed · `}
+          {pipelineRun.skipped_count > 0 && `${pipelineRun.skipped_count} skipped (no s3_url)`}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function ShowOverviewPage() {
   const [shows, setShows] = useState([]);
   const [showsLoading, setShowsLoading] = useState(true);
@@ -265,6 +439,14 @@ export default function ShowOverviewPage() {
   const [fetchedAt, setFetchedAt] = useState(null);
   const [pollMs, setPollMs] = useState(15000);
   const [expandedEp, setExpandedEp] = useState(null);
+
+  // ── Pipeline state ──────────────────────────────────────────────────────────
+  const [pipelineRunId, setPipelineRunId]   = useState(null);
+  const [pipelineRun, setPipelineRun]       = useState(null);   // full run doc
+  const [pipelineLoading, setPipelineLoading] = useState(false); // "Run Pipeline" button busy
+  const [pipelineSyncing, setPipelineSyncing] = useState(false); // "Sync Show" button busy
+  const [pipelineError, setPipelineError]   = useState(null);
+  const pipelineTimerRef = useRef(null);
 
   const timerRef = useRef(null);
   const visibleRef = useRef(true);
@@ -314,15 +496,33 @@ export default function ShowOverviewPage() {
     }
   }, []);
 
+  // ── Fetch active pipeline run when show is selected ─────────────────────────
   useEffect(() => {
     if (!selectedId) {
       setLive(null);
       setFetchedAt(null);
       setPollMs(15000);
+      setPipelineRunId(null);
+      setPipelineRun(null);
+      setPipelineError(null);
       return;
     }
     setPollMs(15000);
     loadLive(selectedId, false);
+
+    // Look up any existing pipeline run for this show
+    fetch(`/api/auto-pipeline/active/${selectedId}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data?.run) {
+          setPipelineRunId(String(data.run._id));
+          setPipelineRun(data.run);
+        } else {
+          setPipelineRunId(null);
+          setPipelineRun(null);
+        }
+      })
+      .catch(() => { /* non-fatal */ });
   }, [selectedId, loadLive]);
 
   useEffect(() => {
@@ -336,6 +536,26 @@ export default function ShowOverviewPage() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [selectedId, pollMs, loadLive]);
+
+  // ── Poll pipeline status every 10 s while a run is known ─────────────────
+  useEffect(() => {
+    if (!pipelineRunId) return;
+    // Also stop polling if run reached a terminal state
+    const isTerminalRun = pipelineRun?.status &&
+      ['COMPLETED', 'FAILED', 'CANCELLED'].includes(pipelineRun.status);
+    if (isTerminalRun) return;
+
+    const poll = () => {
+      fetch(`/api/auto-pipeline/status/${pipelineRunId}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data && !data.error) setPipelineRun(data);
+        })
+        .catch(() => { /* non-fatal */ });
+    };
+    pipelineTimerRef.current = setInterval(poll, 10_000);
+    return () => clearInterval(pipelineTimerRef.current);
+  }, [pipelineRunId, pipelineRun?.status]);
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -403,6 +623,84 @@ export default function ShowOverviewPage() {
                 Latest {LATEST_SHOWS_LIMIT} shows from the catalog, most recently updated first (same order as
                 the home page list API).
               </p>
+            )}
+            {selectedId && (
+              <PipelineControls
+                selectedId={selectedId}
+                pipelineRun={pipelineRun}
+                pipelineLoading={pipelineLoading}
+                pipelineSyncing={pipelineSyncing}
+                pipelineError={pipelineError}
+                onRunPipeline={async () => {
+                  setPipelineLoading(true);
+                  setPipelineError(null);
+                  try {
+                    const res = await fetch('/api/auto-pipeline/start', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ showId: selectedId }),
+                    });
+                    const data = await res.json();
+                    if (res.status === 409 && data.runId) {
+                      // Already running — attach to that run
+                      setPipelineRunId(data.runId);
+                      const statusRes = await fetch(`/api/auto-pipeline/status/${data.runId}`);
+                      if (statusRes.ok) setPipelineRun(await statusRes.json());
+                    } else if (!res.ok) {
+                      setPipelineError(data.error || `HTTP ${res.status}`);
+                    } else {
+                      setPipelineRunId(data.runId);
+                      // Fetch initial status
+                      const statusRes = await fetch(`/api/auto-pipeline/status/${data.runId}`);
+                      if (statusRes.ok) setPipelineRun(await statusRes.json());
+                    }
+                  } catch (err) {
+                    setPipelineError(err.message || 'Failed to start pipeline');
+                  } finally {
+                    setPipelineLoading(false);
+                  }
+                }}
+                onSyncShow={async () => {
+                  setPipelineSyncing(true);
+                  setPipelineError(null);
+                  try {
+                    const res = await fetch('/api/auto-pipeline/sync-all', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ showId: selectedId }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      setPipelineError(data.error || `Sync failed (HTTP ${res.status})`);
+                    } else {
+                      // Refresh pipeline run status after sync
+                      if (pipelineRunId) {
+                        const sr = await fetch(`/api/auto-pipeline/status/${pipelineRunId}`);
+                        if (sr.ok) setPipelineRun(await sr.json());
+                      }
+                      // Refresh episode table
+                      loadLive(selectedId, true);
+                    }
+                  } catch (err) {
+                    setPipelineError(err.message || 'Sync failed');
+                  } finally {
+                    setPipelineSyncing(false);
+                  }
+                }}
+                onCancel={async () => {
+                  if (!pipelineRunId) return;
+                  try {
+                    await fetch('/api/auto-pipeline/cancel', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ runId: pipelineRunId }),
+                    });
+                    // Refresh status
+                    const sr = await fetch(`/api/auto-pipeline/status/${pipelineRunId}`);
+                    if (sr.ok) setPipelineRun(await sr.json());
+                  } catch { /* non-fatal */ }
+                }}
+              />
             )}
           </div>
 

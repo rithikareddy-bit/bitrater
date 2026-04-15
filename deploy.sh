@@ -130,7 +130,9 @@ terraform apply -auto-approve \
   -var="gcs_output_bucket=${GCS_OUTPUT_BUCKET}" \
   -var="gcp_credentials_secret_arn=${GCP_SECRET_ARN_FOR_TF}" \
   -var="subtitle_mongo_uri=${SUBTITLE_MONGO_URI:-}" \
-  -var="cdn_base=${CDN_BASE:-https://cdn.chaishots.in}"
+  -var="cdn_base=${CDN_BASE:-https://cdn.chaishots.in}" \
+  -var="vtt_worker_url=${VTT_WORKER_URL:-}" \
+  -var="vtt_worker_secret=${VTT_WORKER_SECRET:-}"
 
 echo ""
 echo "========================================"

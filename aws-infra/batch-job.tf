@@ -30,6 +30,10 @@ resource "aws_batch_job_definition" "chai_q_worker_def" {
     ]
   })
 
+  timeout {
+    attempt_duration_seconds = 72000 # 20 hours
+  }
+
   # This ensures we don't try to create the job def until the image is pushed
   depends_on = [null_resource.docker_push]
 }

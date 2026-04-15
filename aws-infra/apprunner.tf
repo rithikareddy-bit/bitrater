@@ -138,6 +138,8 @@ resource "aws_apprunner_service" "dashboard" {
           CREATE_COMBINED_MASTER_LAMBDA_ARN = aws_lambda_function.gcp_create_combined_master.arn
           QUALITY_CHECK_LAMBDA_ARN          = aws_lambda_function.quality_checker.arn
           NEXT_TELEMETRY_DISABLED           = "1"
+          VTT_WORKER_URL                    = var.vtt_worker_url
+          VTT_WORKER_SECRET                 = var.vtt_worker_secret
           # AWS_REGION is set automatically by App Runner
         }
       }

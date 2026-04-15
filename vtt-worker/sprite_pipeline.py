@@ -70,13 +70,20 @@ def generate_webp_vtt_to_dir(
     if duration_sec <= 0:
         duration_sec = _ffprobe_duration_sec(url)
 
-    total_frames = max(1, int(duration_sec / interval_sec))
+    # Frames at 3, 6, 9, ... seconds (first frame at interval_sec, not 0)
+    # Available duration after trim = duration_sec - interval_sec
+    # Number of frames = how many interval_sec chunks fit in the remaining duration
+    available = max(0, duration_sec - interval_sec)
+    total_frames = max(1, int(available / interval_sec) + 1)
     cols = min(5, max(1, int(math.ceil(math.sqrt(total_frames)))))
     rows = int(math.ceil(total_frames / cols))
 
     sprite_path = out_dir / f"{video_id}-sprite.webp"
     vtt_path = out_dir / f"{video_id}-thumbnails.vtt"
 
+    # Extract frames starting at interval_sec (3s), one frame every interval_sec
+    # trim=start=3 → skip first 3 seconds
+    # fps=1/3 → take one frame every 3 seconds (at 3, 6, 9, ...)
     vf = (
         f"trim=start={interval_sec},setpts=PTS-STARTPTS,"
         f"fps=1/{interval_sec},trim=end_frame={total_frames},"
@@ -136,8 +143,12 @@ def generate_webp_vtt_to_dir(
         c = i % cols
         x0 = c * cell_w
         y0 = r * cell_h
+        # Frame 0 (captured at 3s) covers 0s-3s
+        # Frame 1 (captured at 6s) covers 3s-6s
+        # Frame 2 (captured at 9s) covers 6s-9s
+        # Last frame extends to end of video
         t0 = i * interval_sec
-        t1 = (i + 1) * interval_sec if i < total_frames - 1 else duration_sec
+        t1 = (i + 1) * interval_sec if i < total_frames - 1 else max(duration_sec, t0 + 0.001)
         frag = f"{sprite_base_url.rstrip('/')}/{base_file}#xywh={x0},{y0},{cell_w},{cell_h}"
         lines.append(f"{fmt_ts(t0)} --> {fmt_ts(t1)}")
         lines.append(frag)
