@@ -61,7 +61,10 @@ def generate_webp_vtt_to_dir(
     sprite_base_url: str,
 ) -> Tuple[Path, Path]:
     """
-    Stream from URL, write {video_id}-sprite.webp and {video_id}-thumbnails.vtt under out_dir.
+    Stream from URL, generate 5x5 sprite sheets and a single VTT covering the full video.
+    For videos with >25 frames, multiple sprite sheets are generated:
+      {video_id}-sprite-0.webp, {video_id}-sprite-1.webp, ...
+    All referenced from one {video_id}-thumbnails.vtt file.
     """
     url = _normalize_url(s3_url)
     out_dir = Path(out_dir)
@@ -70,92 +73,106 @@ def generate_webp_vtt_to_dir(
     if duration_sec <= 0:
         duration_sec = _ffprobe_duration_sec(url)
 
-    # Frames at 3, 6, 9, ... seconds (first frame at interval_sec, not 0)
-    # Available duration after trim = duration_sec - interval_sec
-    # Number of frames = how many interval_sec chunks fit in the remaining duration
+    # Fixed 5x5 grid per sprite sheet
+    cols = 5
+    rows = 5
+    frames_per_sheet = cols * rows  # 25
+
+    # Total frames needed to cover the full video
+    # Frames at interval_sec, 2*interval_sec, ... (first frame at interval_sec, not 0)
     available = max(0, duration_sec - interval_sec)
     total_frames = max(1, int(available / interval_sec) + 1)
-    cols = min(5, max(1, int(math.ceil(math.sqrt(total_frames)))))
-    rows = int(math.ceil(total_frames / cols))
+    num_sheets = math.ceil(total_frames / frames_per_sheet)
 
-    sprite_path = out_dir / f"{video_id}-sprite.webp"
-    vtt_path = out_dir / f"{video_id}-thumbnails.vtt"
-
-    # Extract frames starting at interval_sec (3s), one frame every interval_sec
-    # trim=start=3 → skip first 3 seconds
-    # fps=1/3 → take one frame every 3 seconds (at 3, 6, 9, ...)
-    vf = (
-        f"trim=start={interval_sec},setpts=PTS-STARTPTS,"
-        f"fps=1/{interval_sec},trim=end_frame={total_frames},"
-        f"scale=320:-2,tile={cols}x{rows}"
-    )
     q = min(100, max(0, int(quality)))
-    _run_ffmpeg(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            url,
-            "-vf",
-            vf,
-            "-frames:v",
-            "1",
-            "-c:v",
-            "libwebp",
-            "-q:v",
-            str(q),
-            str(sprite_path),
-        ]
-    )
+    sprite_paths: List[Path] = []
 
-    probe = subprocess.check_output(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "json",
-            str(sprite_path),
-        ],
-        text=True,
-    )
-    pinfo = json.loads(probe)
-    streams = pinfo.get("streams") or [{}]
-    sw = int(streams[0].get("width") or (320 * cols))
-    sh = int(streams[0].get("height") or 1)
-    cell_w = max(sw // cols, 1)
-    cell_h = max(sh // rows, 1)
+    # Cell dimensions (determined from first sheet, reused for all)
+    cell_w = 0
+    cell_h = 0
 
+    for sheet_idx in range(num_sheets):
+        frame_offset = sheet_idx * frames_per_sheet
+        sheet_frames = min(frames_per_sheet, total_frames - frame_offset)
+        # Time offset for this sheet's first frame
+        trim_start = interval_sec + frame_offset * interval_sec
+
+        sprite_path = out_dir / f"{video_id}-sprite-{sheet_idx}.webp"
+        sprite_paths.append(sprite_path)
+
+        vf = (
+            f"trim=start={trim_start},setpts=PTS-STARTPTS,"
+            f"fps=1/{interval_sec},trim=end_frame={sheet_frames},"
+            f"scale=320:-2,tile={cols}x{rows}"
+        )
+        _run_ffmpeg(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                url,
+                "-vf",
+                vf,
+                "-frames:v",
+                "1",
+                "-c:v",
+                "libwebp",
+                "-q:v",
+                str(q),
+                str(sprite_path),
+            ]
+        )
+
+        # Get cell dimensions from the first sheet
+        if sheet_idx == 0:
+            probe = subprocess.check_output(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=width,height",
+                    "-of",
+                    "json",
+                    str(sprite_path),
+                ],
+                text=True,
+            )
+            pinfo = json.loads(probe)
+            streams = pinfo.get("streams") or [{}]
+            sw = int(streams[0].get("width") or (320 * cols))
+            sh = int(streams[0].get("height") or 1)
+            cell_w = max(sw // cols, 1)
+            cell_h = max(sh // rows, 1)
+
+    # Build single VTT referencing all sheets
     def fmt_ts(ts: float) -> str:
         hh = int(ts // 3600)
         mm = int((ts % 3600) // 60)
         ss = ts % 60
         return f"{hh:02d}:{mm:02d}:{ss:06.3f}"
 
+    vtt_path = out_dir / f"{video_id}-thumbnails.vtt"
     lines = ["WEBVTT", ""]
-    base_file = f"{video_id}-sprite.webp"
     for i in range(total_frames):
-        r = i // cols
-        c = i % cols
+        sheet_idx = i // frames_per_sheet
+        pos_in_sheet = i % frames_per_sheet
+        r = pos_in_sheet // cols
+        c = pos_in_sheet % cols
         x0 = c * cell_w
         y0 = r * cell_h
-        # Frame 0 (captured at 3s) covers 0s-3s
-        # Frame 1 (captured at 6s) covers 3s-6s
-        # Frame 2 (captured at 9s) covers 6s-9s
-        # Last frame extends to end of video
         t0 = i * interval_sec
         t1 = (i + 1) * interval_sec if i < total_frames - 1 else max(duration_sec, t0 + 0.001)
-        frag = f"{sprite_base_url.rstrip('/')}/{base_file}#xywh={x0},{y0},{cell_w},{cell_h}"
+        sprite_file = f"{video_id}-sprite-{sheet_idx}.webp"
+        frag = f"{sprite_base_url.rstrip('/')}/{sprite_file}#xywh={x0},{y0},{cell_w},{cell_h}"
         lines.append(f"{fmt_ts(t0)} --> {fmt_ts(t1)}")
         lines.append(frag)
         lines.append("")
 
     vtt_path.write_text("\n".join(lines), encoding="utf-8")
-    return sprite_path, vtt_path
+    return sprite_paths[0], vtt_path
 
 
 def upload_and_make_public(
@@ -220,17 +237,18 @@ def process_one_episode(
         )
 
     vtt_url = None
-    sprite_url = None
+    sprite_urls = []
     base_url = f"https://storage.googleapis.com/{bucket_name.rstrip('/')}/{gcs_prefix.rstrip('/')}"
     for name, url in uploaded:
         if name.endswith(".vtt"):
             vtt_url = url
-        if name.endswith(".webp") and sprite_url is None:
-            sprite_url = url
+        if name.endswith(".webp"):
+            sprite_urls.append(url)
     if not vtt_url:
         vtt_url = f"{base_url}/{video_id}-thumbnails.vtt"
-    if not sprite_url:
-        sprite_url = f"{base_url}/{video_id}-sprite.webp"
+    if not sprite_urls:
+        sprite_urls = [f"{base_url}/{video_id}-sprite-0.webp"]
+    sprite_url = sprite_urls[0]
 
     now = datetime.now(tz=timezone.utc).isoformat()
     mc = MongoClient(mongo_uri)
@@ -244,6 +262,7 @@ def process_one_episode(
                 "show_id": show_id,
                 "vtt_url": vtt_url,
                 "sprite_url": sprite_url,
+                "sprite_urls": sprite_urls,
                 "duration_sec": float(duration_sec),
                 "updated_at": now,
             }
