@@ -9,6 +9,7 @@ import FrameComparison from '@/components/FrameComparison';
 import LabStatus from '@/components/LabStatus';
 import GCPStatus from '@/components/GCPStatus';
 import SourceProbe from '@/components/SourceProbe';
+import S3NotificationBell from '@/components/S3NotificationBell';
 import { VMAF_THRESHOLDS } from '@/lib/constants';
 import {
   durationSourceLabel,
@@ -163,9 +164,15 @@ export default function EpisodePage() {
         ← Back to catalog
       </a>
 
-      <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 20 }}>
-        Episode Research — <code style={{ color: '#4da6ff', fontSize: 16 }}>{id}</code>
-      </h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>
+          Episode Research — <code style={{ color: '#4da6ff', fontSize: 16 }}>{id}</code>
+        </h2>
+        <S3NotificationBell
+          fetchUrl={`/api/s3-notifications/episode/${encodeURIComponent(id)}`}
+          label="Episode"
+        />
+      </div>
 
       {/* Resolution tab selector */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>

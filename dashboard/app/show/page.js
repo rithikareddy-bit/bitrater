@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import S3NotificationBell from '@/components/S3NotificationBell';
 
 /** Must match `/api/shows` max limit — only the latest N shows (catalog sort: updated/created). */
 const LATEST_SHOWS_LIMIT = 100;
@@ -563,8 +564,9 @@ export default function ShowOverviewPage() {
         <Link href="/" style={{ fontSize: 13, color: '#4da6ff' }}>
           ← Catalog
         </Link>
-        <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0, flex: '1 1 auto' }}>
+        <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0, flex: '1 1 auto', display: 'flex', alignItems: 'center', gap: 12 }}>
           Show overview
+          <S3NotificationBell fetchUrl="/api/s3-notifications" />
         </h1>
       </div>
 
@@ -828,12 +830,19 @@ export default function ShowOverviewPage() {
               color: '#888',
               textTransform: 'uppercase',
               letterSpacing: '0.06em',
+              display: 'flex',
+              alignItems: 'center',
             }}
           >
             {live.showTitle}
             <span style={{ color: '#555', fontWeight: 400, marginLeft: 8 }}>
               {live.episodeCount} episode{live.episodeCount !== 1 ? 's' : ''}
             </span>
+            <S3NotificationBell
+              fetchUrl={`/api/s3-notifications/${selectedId}`}
+              label="Show"
+              style={{ marginLeft: 'auto', textTransform: 'none' }}
+            />
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table
