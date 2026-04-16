@@ -14,6 +14,7 @@ do not misinterpret Telugu or other scripts.
 """
 
 import os
+import re
 import json
 import boto3
 import pymongo
@@ -60,6 +61,113 @@ def _warn_if_missing_webvtt_header(text: str, lang_key: str) -> None:
             f"first line was {first_line[:120]!r}"
         )
 
+def _parse_vtt_time_to_seconds(time_str: str) -> float:
+    """Convert VTT time string (HH:MM:SS.mmm or MM:SS.mmm) to seconds."""
+    time_str = time_str.strip()
+    if time_str.count(":") == 2:
+        h, m, s = time_str.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    elif time_str.count(":") == 1:
+        m, s = time_str.split(":")
+        return int(m) * 60 + float(s)
+    return float(time_str)
+
+
+def _seconds_to_vtt_time(seconds: float) -> str:
+    """Convert seconds to VTT time string HH:MM:SS.mmm."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:06.3f}"
+
+
+def _inject_gap_separators(vtt_content: str, video_duration: float = 0) -> str:
+    """Insert hash-separator cues into gaps between subtitles.
+
+    HLS players keep displaying the last cue until a new one appears.
+    By filling every gap with a ``########################`` cue the player
+    shows that (effectively blank-looking) text instead of lingering on the
+    previous subtitle.
+
+    If *video_duration* is provided and the last subtitle ends before the video
+    ends, a final hash cue is added from the last subtitle's end to the video
+    end so the player does not freeze on the last real subtitle.
+    """
+    normalized = vtt_content.replace("\r\n", "\n").replace("\r", "\n").strip()
+    blocks = [b.strip() for b in normalized.split("\n\n") if b.strip()]
+
+    # Extract subtitle cues
+    cues: list[dict] = []
+    for block in blocks:
+        lines = block.split("\n")
+        if not lines:
+            continue
+        if lines[0].strip().upper().startswith(("WEBVTT", "NOTE", "STYLE", "REGION")):
+            continue
+
+        timestamp_line = ""
+        text_lines: list[str] = []
+        for line in lines:
+            if "-->" in line:
+                timestamp_line = line
+            elif line.strip():
+                text_lines.append(line)
+
+        if not timestamp_line or not text_lines:
+            continue
+
+        try:
+            start_raw, end_raw = timestamp_line.split("-->", 1)
+            start_raw = re.sub(r"^\d+\s+", "", start_raw.strip())
+            end_raw = re.sub(r"\s+\d+$", "", end_raw.strip())
+
+            # Drop leading cue-number line
+            filtered = []
+            for j, tl in enumerate(text_lines):
+                if j == 0 and re.match(r"^\d+$", tl.strip()):
+                    continue
+                filtered.append(tl)
+
+            cues.append({
+                "start": start_raw,
+                "end": end_raw,
+                "text": "\n".join(filtered),
+            })
+        except ValueError:
+            continue
+
+    if not cues:
+        return vtt_content  # nothing to process, return as-is
+
+    # Rebuild VTT with separator cues in gaps
+    out = "WEBVTT\n\n"
+    cue_num = 1
+    for i, cue in enumerate(cues):
+        out += f"{cue_num}\n{cue['start']} --> {cue['end']}\n{cue['text']}\n\n"
+        cue_num += 1
+
+        if i < len(cues) - 1:
+            try:
+                end_sec = _parse_vtt_time_to_seconds(cue["end"])
+                next_sec = _parse_vtt_time_to_seconds(cues[i + 1]["start"])
+                if end_sec < next_sec:
+                    out += f"{cue_num}\n{cue['end']} --> {cues[i + 1]['start']}\n########################\n\n"
+                    cue_num += 1
+            except (ValueError, IndexError):
+                pass
+
+    # Trailing hash cue: last subtitle end → video end
+    if video_duration > 0 and cues:
+        try:
+            last_end_sec = _parse_vtt_time_to_seconds(cues[-1]["end"])
+            if last_end_sec < video_duration:
+                out += f"{cue_num}\n{cues[-1]['end']} --> {_seconds_to_vtt_time(video_duration)}\n########################\n\n"
+        except (ValueError, IndexError):
+            pass
+
+    return out.strip()
+
+
 SUBTITLE_LANGS = {
     "english_translation_final": ("en", "English"),
     "native_script_final":       ("te", "Telugu"),
@@ -99,7 +207,8 @@ def _get_episode_meta(db, episode_id):
     show_slug = show.get("slug", "unknown")
     episode_number = ep.get("episode_number", 0)
     episode_output_key = f"{show_slug}/{episode_slug}"
-    return episode_slug, episode_output_key, show_slug, episode_number
+    duration = ep.get("duration", 0)
+    return episode_slug, episode_output_key, show_slug, episode_number, duration
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +263,7 @@ def _download_vtt(url):
     return text
 
 
-def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls):
+def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls, video_duration=0):
     """Download VTTs, upload to GCS, and create subtitle .m3u8 playlists.
     Returns list of (lang_code, display_name, playlist_filename) for uploaded languages."""
     client = gcs.Client(credentials=creds)
@@ -169,6 +278,7 @@ def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls):
         try:
             vtt_content = _download_vtt(url)
             _warn_if_missing_webvtt_header(vtt_content, lang_key)
+            vtt_content = _inject_gap_separators(vtt_content, video_duration)
             utf8_bytes = len(vtt_content.encode("utf-8"))
             print(f"[SUBS] Downloaded {lang_key}: {utf8_bytes} UTF-8 bytes ({len(vtt_content)} chars)")
 
@@ -289,7 +399,6 @@ def _correct_init_byterange(creds, cdn_prefix, name_map):
     For each sub-manifest, read the actual MP4 box sizes from the .m4s file and
     patch BYTERANGE if it is off.
     """
-    import re
     import struct
     client = gcs.Client(credentials=creds)
     bucket = client.bucket(CDN_BUCKET)
@@ -353,7 +462,6 @@ _RESOLUTION_ORDER = {"720p": 0, "480p": 1, "1080p": 2}
 
 def _resolution_rank(stream_inf_line):
     """Return sort key for a #EXT-X-STREAM-INF line based on RESOLUTION= attribute."""
-    import re
     m = re.search(r'RESOLUTION=(\d+)x(\d+)', stream_inf_line)
     if not m:
         return 99
@@ -438,7 +546,7 @@ def handler(event, context):
     cdn_prefix = f"{episode_id}/{folder_ts}"
     now_iso = _now.isoformat()
 
-    episode_slug, _, show_slug, episode_number = _get_episode_meta(db, episode_id)
+    episode_slug, _, show_slug, episode_number, video_duration = _get_episode_meta(db, episode_id)
 
     slug_prefix = f"{show_slug}_ep_{episode_number}_{folder_ts}"
     name_map = _build_name_map(slug_prefix, codec)
@@ -456,7 +564,7 @@ def handler(event, context):
     subtitle_tracks = []
     if vtt_urls:
         try:
-            subtitle_tracks = _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls)
+            subtitle_tracks = _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls, video_duration)
             _patch_master_manifest(creds, cdn_prefix, master_filename, subtitle_tracks)
         except Exception as e:
             print(f"[SUBS] Subtitle injection failed (non-fatal): {e}")
