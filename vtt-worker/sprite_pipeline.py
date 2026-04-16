@@ -56,7 +56,7 @@ def generate_webp_vtt_to_dir(
     video_id: str,
     *,
     duration_sec: float,
-    quality: int = 100,
+    quality: int = 65,
     interval_sec: float = 3.0,
     sprite_base_url: str,
 ) -> Tuple[Path, Path]:
@@ -84,7 +84,7 @@ def generate_webp_vtt_to_dir(
     total_frames = max(1, int(available / interval_sec) + 1)
     num_sheets = math.ceil(total_frames / frames_per_sheet)
 
-    q = min(100, max(0, int(quality)))
+    q = min(100, max(0, int(quality or 65)))
     sprite_paths: List[Path] = []
 
     # Cell dimensions (determined from first sheet, reused for all)
@@ -103,7 +103,7 @@ def generate_webp_vtt_to_dir(
         vf = (
             f"trim=start={trim_start},setpts=PTS-STARTPTS,"
             f"fps=1/{interval_sec},trim=end_frame={sheet_frames},"
-            f"scale=320:-2,tile={cols}x{rows}"
+            f"scale=120:-2,tile={cols}x{rows}"
         )
         _run_ffmpeg(
             [
@@ -142,7 +142,7 @@ def generate_webp_vtt_to_dir(
             )
             pinfo = json.loads(probe)
             streams = pinfo.get("streams") or [{}]
-            sw = int(streams[0].get("width") or (320 * cols))
+            sw = int(streams[0].get("width") or (120 * cols))
             sh = int(streams[0].get("height") or 1)
             cell_w = max(sw // cols, 1)
             cell_h = max(sh // rows, 1)
@@ -216,7 +216,7 @@ def process_one_episode(
     duration_sec: float,
     show_id: Any,
     episode_mongo_id: Any,
-    quality: int = 100,
+    quality: int = 65,
     interval_sec: float = 3.0,
 ) -> Dict[str, Any]:
     sprite_base_url = f"https://storage.googleapis.com/{bucket_name.rstrip('/')}/{gcs_prefix.rstrip('/')}"

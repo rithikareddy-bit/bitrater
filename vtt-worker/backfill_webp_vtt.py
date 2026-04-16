@@ -296,8 +296,8 @@ def main() -> None:
     parser.add_argument(
         "--quality",
         type=int,
-        default=int(os.environ.get("WEBP_QUALITY", "100")),
-        help="WebP quality 0-100 (default: 100). Env: WEBP_QUALITY.",
+        default=int(os.environ.get("WEBP_QUALITY", "65")),
+        help="WebP quality 0-100 (default: 65). Env: WEBP_QUALITY.",
     )
     parser.add_argument(
         "--interval",

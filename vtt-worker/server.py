@@ -77,7 +77,7 @@ def process():
     bucket_name = _vtt_gcs_bucket()
     gcs_prefix = _vtt_gcs_prefix()
 
-    quality = int(os.environ.get("WEBP_QUALITY", "100"))
+    quality = int(os.environ.get("WEBP_QUALITY", "65"))
     interval_sec = float(os.environ.get("THUMB_INTERVAL_SEC", "3"))
 
     try:
