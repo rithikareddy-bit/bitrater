@@ -99,8 +99,7 @@ export async function orchestrate(runIdStr) {
   }
   const isResuming = !isFreshStart;
 
-  const MAX_H264 = run.h264_workers || 18;
-  const BASE_H265 = run.h265_workers || 12;
+  const MAX_LAB = run.lab_workers || 30;
   const MAX_GCP = run.max_gcp || 20;
 
   // Build mutable episodes array + lookup map
@@ -140,12 +139,6 @@ export async function orchestrate(runIdStr) {
       update.$push = { 'episodes.$.transition_log': logEntry };
     }
     await col.updateOne({ _id: runId, 'episodes.episode_id': episodeId }, update);
-  }
-
-  // ── HELPER: H.265 limit — H.264 active + H.265 active = 12 during handover.
-  // Returns 0 while H.264 still has ≥ 12 active. Gradually opens as H.264 winds down.
-  function effectiveH265Limit() {
-    return Math.max(0, BASE_H265 - h264Active.size);
   }
 
   // ── HELPER: is episode in terminal state ──────────────────────────────────────
@@ -200,12 +193,12 @@ export async function orchestrate(runIdStr) {
   }
 
   // ── HELPER: fill available lab slots ─────────────────────────────────────────
-  // H.264 runs first (up to 18). H.265 blocked until h264Queue is empty (all dispatched).
-  // Then gradual handover: H.264 active + H.265 active = 12.
-  // 18 H.264 running → 0 H.265. As H.264 complete: 11+1, 10+2, ... 0+12.
+  // Flat pool of MAX_LAB concurrent jobs across all episodes. H.264 has strict
+  // priority: H.265 dispatches only once h264Queue is fully drained.
   async function fillLabSlots() {
     let seen264 = 0;
-    while (h264Active.size < MAX_H264 && h264Queue.length > 0 && seen264 < h264Queue.length) {
+    while (h264Active.size + h265Active.size < MAX_LAB
+           && h264Queue.length > 0 && seen264 < h264Queue.length) {
       const ep = h264Queue.shift();
       if (ep.retry_after_lab_h264 && nowMs() < new Date(ep.retry_after_lab_h264).getTime()) {
         h264Queue.push(ep);
@@ -215,12 +208,11 @@ export async function orchestrate(runIdStr) {
       await startLabH264(ep);
     }
 
-    // H.265 only enters when ALL H.264 episodes have been dispatched (queue empty)
     if (h264Queue.length > 0) return;
 
     let seen265 = 0;
-    const limit265 = effectiveH265Limit();
-    while (h265Active.size < limit265 && h265Queue.length > 0 && seen265 < h265Queue.length) {
+    while (h264Active.size + h265Active.size < MAX_LAB
+           && h265Queue.length > 0 && seen265 < h265Queue.length) {
       const ep = h265Queue.shift();
       if (ep.retry_after_lab_h265 && nowMs() < new Date(ep.retry_after_lab_h265).getTime()) {
         h265Queue.push(ep);

@@ -7,11 +7,6 @@ import pymongo
 
 
 RESOLUTION_ORDER = ["1080p", "720p", "480p"]
-SEARCH_GLOBALS = {
-    "MAX_TESTS_PER_RESOLUTION": 10,
-    "CONFIDENCE_STOP_GAP_KBPS": 100,
-    "CONFIDENCE_STOP_VMAF_MARGIN": 3,
-}
 
 SEARCH_CONFIG = {
     "h264": {
@@ -19,24 +14,18 @@ SEARCH_CONFIG = {
         "resolutions": {
             "1080p": {
                 "threshold": 88,
-                "dip_floor": 80,
                 "job_timeout_seconds": 3000,
                 "candidates": [1800, 2000, 2300, 2500, 2700, 3000, 3300, 3600, 3900, 4200, 4400, 4600, 4800],
-                "initial_probes": [2300, 3000, 3900, 4600],
             },
             "720p": {
                 "threshold": 75,
-                "dip_floor": 67,
                 "job_timeout_seconds": 1800,
                 "candidates": [700, 900, 1100, 1300, 1500, 1700, 1900],
-                "initial_probes": [1100, 1700],
             },
             "480p": {
                 "threshold": 48,
-                "dip_floor": 40,
                 "job_timeout_seconds": 1200,
                 "candidates": [200, 300, 400, 500, 600],
-                "initial_probes": [400],
             },
         },
     },
@@ -45,27 +34,30 @@ SEARCH_CONFIG = {
         "resolutions": {
             "1080p": {
                 "threshold": 88,
-                "dip_floor": 80,
                 "job_timeout_seconds": 3000,
                 "candidates": [800, 1000, 1200, 1500, 1800, 2100, 2300, 2600, 2900, 3200],
-                "initial_probes": [1200, 2100, 2900],
             },
             "720p": {
                 "threshold": 75,
-                "dip_floor": 67,
                 "job_timeout_seconds": 1800,
                 "candidates": [500, 700, 900, 1200, 1350, 1500, 1650],
-                "initial_probes": [900, 1500],
             },
             "480p": {
                 "threshold": 48,
-                "dip_floor": 40,
                 "job_timeout_seconds": 1200,
                 "candidates": [100, 200, 300, 400, 500],
-                "initial_probes": [300],
             },
         },
     },
+}
+
+LEGACY_TO_NEW_PHASE = {
+    "PROBING": "SEARCHING",
+    "LOWER_SEARCH": "SEARCHING",
+    "HIGHER_SEARCH": "SEARCHING",
+    "SEARCHING": "SEARCHING",
+    "PENDING": "PENDING",
+    "FINAL": "FINAL",
 }
 
 
@@ -98,52 +90,57 @@ def _normalize_state(search_state, codec):
     normalized = {}
     for res in RESOLUTION_ORDER:
         existing = resolutions.get(res) or {}
+        cands = list(cfg[res]["candidates"])
         tested = existing.get("tested") or {}
+        legacy_phase = existing.get("phase")
+        if legacy_phase in LEGACY_TO_NEW_PHASE:
+            phase = LEGACY_TO_NEW_PHASE[legacy_phase]
+        else:
+            phase = "SEARCHING" if res == RESOLUTION_ORDER[0] else "PENDING"
         normalized[res] = {
-            "phase": existing.get("phase") or "PROBING",
-            "candidates": list(cfg[res]["candidates"]),
+            "phase": phase,
+            "candidates": cands,
             "tested": tested,
-            "bracket": existing.get("bracket"),
+            "left": existing.get("left", 0),
+            "right": existing.get("right", len(cands) - 1),
+            "best_pass": existing.get("best_pass"),
             "winner": existing.get("winner"),
             "winner_vmaf_delta": existing.get("winner_vmaf_delta"),
-            "bracket_display": existing.get("bracket_display"),
-            "anchor_pass": existing.get("anchor_pass"),
             "test_count": _count_non_discarded(tested),
         }
 
-    return {"codec": codec, "resolutions": normalized}
+    return {
+        "codec": codec,
+        "active_resolution": search_state.get("active_resolution") or RESOLUTION_ORDER[0],
+        "resolutions": normalized,
+    }
 
 
 def _build_initial_state(codec):
     cfg = SEARCH_CONFIG[codec]["resolutions"]
+    resolutions = {}
+    for res in RESOLUTION_ORDER:
+        cands = list(cfg[res]["candidates"])
+        resolutions[res] = {
+            "phase": "PENDING",
+            "candidates": cands,
+            "tested": {},
+            "left": 0,
+            "right": len(cands) - 1,
+            "best_pass": None,
+            "winner": None,
+            "winner_vmaf_delta": None,
+            "test_count": 0,
+        }
     return {
         "codec": codec,
-        "resolutions": {
-            res: {
-                "phase": "PROBING",
-                "candidates": list(cfg[res]["candidates"]),
-                "tested": {},
-                "bracket": None,
-                "winner": None,
-                "winner_vmaf_delta": None,
-                "bracket_display": None,
-                "anchor_pass": None,
-                "test_count": 0,
-            }
-            for res in RESOLUTION_ORDER
-        },
+        "active_resolution": RESOLUTION_ORDER[0],
+        "resolutions": resolutions,
     }
 
 
 def _count_non_discarded(tested):
     return sum(1 for entry in tested.values() if entry.get("status") != "DISCARDED")
-
-
-def _get_status(tested, bitrate):
-    entry = tested.get(str(bitrate))
-    if not entry:
-        return None
-    return entry.get("status")
 
 
 def _pending_bitrates(tested):
@@ -154,15 +151,7 @@ def _pending_bitrates(tested):
     return sorted(out)
 
 
-def _any_pending_strictly_below(tested, space_bitrates, cap_bitrate):
-    """True if any candidate in space with bitrate < cap is still PENDING (parallel-wave ordering)."""
-    return any(
-        b < cap_bitrate and _get_status(tested, b) == "PENDING"
-        for b in space_bitrates
-    )
-
-
-def _is_pass(vmaf_score, timeline, threshold, dip_floor):
+def _is_pass(vmaf_score, threshold):
     if vmaf_score is None or vmaf_score < threshold:
         return False
     return True
@@ -239,7 +228,6 @@ def _resolve_pending_for_resolution(
 
     now_dt = datetime.now(timezone.utc)
     threshold = res_cfg["threshold"]
-    dip_floor = res_cfg["dip_floor"]
     timeout_s = res_cfg["job_timeout_seconds"]
 
     resubmit = []
@@ -249,8 +237,7 @@ def _resolve_pending_for_resolution(
         doc = _find_latest_vmaf_doc(db, episode_id, codec_lib, resolution_tag, bitrate, run_id=run_id)
         if doc:
             score = _safe_float(doc.get("vmaf_score"))
-            timeline = doc.get("vmaf_timeline") or []
-            passed = _is_pass(score, timeline, threshold, dip_floor)
+            passed = _is_pass(score, threshold)
             tested[bitrate_key] = {
                 "status": "PASS" if passed else "FAIL",
                 "reason": "PASS" if passed else "FAIL_THRESHOLD",
@@ -334,18 +321,6 @@ def _resolve_pending_for_resolution(
     res_state["test_count"] = _count_non_discarded(tested)
 
 
-def _choose_low_search_targets(candidates_below):
-    if len(candidates_below) <= 2:
-        return list(candidates_below)
-    mid_idx = len(candidates_below) // 2
-    picks = [candidates_below[0], candidates_below[mid_idx]]
-    dedup = []
-    for bitrate in picks:
-        if bitrate not in dedup:
-            dedup.append(bitrate)
-    return dedup
-
-
 def _choose_best_available(res_state):
     tested = res_state["tested"]
     pass_bitrates = []
@@ -377,203 +352,77 @@ def _finalize_resolution(res_state, winner, winner_delta=None):
     res_state["phase"] = "FINAL"
     res_state["winner"] = winner
     res_state["winner_vmaf_delta"] = winner_delta
-    res_state["bracket"] = None
-    res_state["bracket_display"] = None
-    res_state["anchor_pass"] = None
 
 
-def _decide_resolution(res_state, res_cfg):
+def _advance_binary(res_state):
+    """Pure binary search step. Returns {'submit': [bitrate]|[], 'discard': []}.
+       Folds resolved tests into left/right + best_pass; finalizes when range empty."""
     actions = {"submit": [], "discard": []}
-    phase = res_state.get("phase")
     tested = res_state["tested"]
     candidates = res_state["candidates"]
+    left, right = res_state["left"], res_state["right"]
 
-    if phase == "FINAL":
+    if _pending_bitrates(tested):
         return actions
 
-    res_state["test_count"] = _count_non_discarded(tested)
-    if res_state["test_count"] >= SEARCH_GLOBALS["MAX_TESTS_PER_RESOLUTION"]:
-        winner, winner_delta = _choose_best_available(res_state)
-        _finalize_resolution(res_state, winner, winner_delta)
-        actions["discard"] = _pending_bitrates(tested)
+    last_tested = sorted(
+        (_to_int(k), v) for k, v in tested.items() if v.get("status") in {"PASS", "FAIL"}
+    )
+    if last_tested:
+        for bitrate, entry in last_tested:
+            try:
+                idx = candidates.index(bitrate)
+            except ValueError:
+                continue
+            if entry["status"] == "PASS":
+                if res_state["best_pass"] is None or bitrate < res_state["best_pass"]:
+                    res_state["best_pass"] = bitrate
+                if left <= idx <= right:
+                    right = idx - 1
+            else:
+                if left <= idx <= right:
+                    left = idx + 1
+        res_state["left"], res_state["right"] = left, right
+
+    if left > right:
+        winner = res_state["best_pass"]
+        if winner is None:
+            winner, delta = _choose_best_available(res_state)
+        else:
+            delta = (tested.get(str(winner)) or {}).get("vmaf_delta")
+        _finalize_resolution(res_state, winner, delta)
         return actions
 
-    if phase == "PROBING":
-        submitted = sorted(
-            _to_int(k)
-            for k, entry in tested.items()
-            if entry.get("status") != "DISCARDED"
-        )
-        if not submitted:
-            return actions
-
-        lowest = submitted[0]
-        lowest_status = _get_status(tested, lowest)
-        if lowest_status == "PENDING":
-            return actions
-
-        if lowest_status == "PASS":
-            lower_candidates = [b for b in candidates if b < lowest and str(b) not in tested]
-            actions["discard"] = [b for b in _pending_bitrates(tested) if b > lowest]
-            if not lower_candidates:
-                winner_delta = (tested.get(str(lowest)) or {}).get("vmaf_delta")
-                _finalize_resolution(res_state, lowest, winner_delta)
-                actions["discard"] = _pending_bitrates(tested)
-                return actions
-
-            res_state["phase"] = "LOWER_SEARCH"
-            res_state["anchor_pass"] = lowest
-            actions["submit"] = _choose_low_search_targets(lower_candidates)
-            return actions
-
-        if lowest_status == "FAIL":
-            pass_submitted = [b for b in submitted if _get_status(tested, b) == "PASS"]
-            if pass_submitted:
-                low_pass = min(pass_submitted)
-                unresolved_lower = [b for b in submitted if b < low_pass and _get_status(tested, b) == "PENDING"]
-                if unresolved_lower:
-                    return actions
-                low_fail = max([b for b in submitted if b < low_pass and _get_status(tested, b) == "FAIL"], default=lowest)
-                res_state["phase"] = "HIGHER_SEARCH"
-                res_state["bracket"] = [low_fail, low_pass]
-                res_state["bracket_display"] = f"{low_fail}-{low_pass}"
-                actions["discard"] = [b for b in _pending_bitrates(tested) if b <= low_fail or b >= low_pass]
-                return actions
-
-            pending = [b for b in submitted if _get_status(tested, b) == "PENDING"]
-            if pending:
-                return actions
-
-            next_higher = next((b for b in candidates if b > max(submitted) and str(b) not in tested), None)
-            if next_higher is not None:
-                actions["submit"] = [next_higher]
-                return actions
-
-            winner = max(submitted)
-            winner_delta = (tested.get(str(winner)) or {}).get("vmaf_delta")
-            _finalize_resolution(res_state, winner, winner_delta)
-            actions["discard"] = _pending_bitrates(tested)
-            return actions
-
+    mid = (left + right) // 2
+    next_bitrate = candidates[mid]
+    if str(next_bitrate) in tested:
         return actions
-
-    if phase == "LOWER_SEARCH":
-        anchor = res_state.get("anchor_pass")
-        if anchor is None:
-            winner, winner_delta = _choose_best_available(res_state)
-            _finalize_resolution(res_state, winner, winner_delta)
-            actions["discard"] = _pending_bitrates(tested)
-            return actions
-
-        lower_space = [b for b in candidates if b < anchor]
-        pass_lower = sorted([b for b in lower_space if _get_status(tested, b) == "PASS"])
-        if pass_lower:
-            best = pass_lower[0]
-            # Wait until every strictly lower rung has resolved before committing to
-            # best, so e.g. 2000 kbps cannot win while 1800 kbps is still PENDING.
-            if _any_pending_strictly_below(tested, lower_space, best):
-                return actions
-            pending_above_best = [b for b in _pending_bitrates(tested) if b > best]
-            if pending_above_best:
-                actions["discard"] = pending_above_best
-            remaining_lower = [b for b in candidates if b < best and str(b) not in tested]
-            if not remaining_lower:
-                winner_delta = (tested.get(str(best)) or {}).get("vmaf_delta")
-                _finalize_resolution(res_state, best, winner_delta)
-                actions["discard"] = _pending_bitrates(tested)
-                return actions
-            res_state["anchor_pass"] = best
-            actions["submit"] = _choose_low_search_targets(remaining_lower)
-            return actions
-
-        pending_lower = [b for b in lower_space if _get_status(tested, b) == "PENDING"]
-        if pending_lower:
-            return actions
-
-        untested_lower = [b for b in lower_space if str(b) not in tested]
-        if untested_lower:
-            actions["submit"] = _choose_low_search_targets(untested_lower)
-            return actions
-
-        winner_delta = (tested.get(str(anchor)) or {}).get("vmaf_delta")
-        _finalize_resolution(res_state, anchor, winner_delta)
-        actions["discard"] = _pending_bitrates(tested)
-        return actions
-
-    if phase == "HIGHER_SEARCH":
-        bracket = res_state.get("bracket") or []
-        if len(bracket) != 2:
-            winner, winner_delta = _choose_best_available(res_state)
-            _finalize_resolution(res_state, winner, winner_delta)
-            actions["discard"] = _pending_bitrates(tested)
-            return actions
-
-        low_fail, high_pass = int(bracket[0]), int(bracket[1])
-
-        if low_fail >= high_pass:
-            winner_delta = (tested.get(str(high_pass)) or {}).get("vmaf_delta")
-            _finalize_resolution(res_state, high_pass, winner_delta)
-            actions["discard"] = _pending_bitrates(tested)
-            return actions
-
-        pass_between = sorted(
-            b for b in candidates if low_fail < b <= high_pass and _get_status(tested, b) == "PASS"
-        )
-        if pass_between:
-            high_pass = pass_between[0]
-
-        fail_between = sorted(
-            b for b in candidates if low_fail <= b < high_pass and _get_status(tested, b) == "FAIL"
-        )
-        if fail_between:
-            low_fail = fail_between[-1]
-
-        if low_fail >= high_pass:
-            winner_delta = (tested.get(str(high_pass)) or {}).get("vmaf_delta")
-            _finalize_resolution(res_state, high_pass, winner_delta)
-            actions["discard"] = _pending_bitrates(tested)
-            return actions
-
-        res_state["bracket"] = [low_fail, high_pass]
-        res_state["bracket_display"] = f"{low_fail}-{high_pass}"
-
-        high_entry = tested.get(str(high_pass)) or {}
-        high_vmaf = _safe_float(high_entry.get("vmaf"))
-        if (
-            (high_pass - low_fail) <= SEARCH_GLOBALS["CONFIDENCE_STOP_GAP_KBPS"]
-            and high_vmaf is not None
-            and abs(high_vmaf - res_cfg["threshold"]) <= SEARCH_GLOBALS["CONFIDENCE_STOP_VMAF_MARGIN"]
-        ):
-            winner_delta = (tested.get(str(high_pass)) or {}).get("vmaf_delta")
-            _finalize_resolution(res_state, high_pass, winner_delta)
-            actions["discard"] = _pending_bitrates(tested)
-            return actions
-
-        between = [b for b in candidates if low_fail < b < high_pass]
-        if not between:
-            winner_delta = (tested.get(str(high_pass)) or {}).get("vmaf_delta")
-            _finalize_resolution(res_state, high_pass, winner_delta)
-            actions["discard"] = _pending_bitrates(tested)
-            return actions
-
-        pending_between = [b for b in between if _get_status(tested, b) == "PENDING"]
-        if pending_between:
-            actions["discard"] = [b for b in _pending_bitrates(tested) if b <= low_fail or b >= high_pass]
-            return actions
-
-        unresolved = [b for b in between if str(b) not in tested]
-        if unresolved:
-            idx = (len(unresolved) - 1) // 2
-            actions["submit"] = [unresolved[idx]]
-            actions["discard"] = [b for b in _pending_bitrates(tested) if b <= low_fail or b >= high_pass]
-            return actions
-
-        winner_delta = (tested.get(str(high_pass)) or {}).get("vmaf_delta")
-        _finalize_resolution(res_state, high_pass, winner_delta)
-        actions["discard"] = _pending_bitrates(tested)
-        return actions
-
+    actions["submit"] = [next_bitrate]
     return actions
+
+
+def _advance_to_next_resolution(search_state, batch_client, episode_id, s3_url, codec_lib, run_id):
+    """Move active pointer to the next non-FINAL resolution and seed its mid bitrate.
+       Sets active_resolution = None when nothing remains."""
+    cur = search_state.get("active_resolution")
+    order = RESOLUTION_ORDER
+    if cur is None or cur not in order:
+        search_state["active_resolution"] = None
+        return
+    for next_res in order[order.index(cur) + 1:]:
+        rs = search_state["resolutions"][next_res]
+        if rs["phase"] == "FINAL":
+            continue
+        search_state["active_resolution"] = next_res
+        rs["phase"] = "SEARCHING"
+        cands = rs["candidates"]
+        mid = (rs["left"] + rs["right"]) // 2
+        _submit_jobs(
+            batch_client, episode_id, s3_url, codec_lib, next_res, rs,
+            [cands[mid]], run_id=run_id,
+        )
+        return
+    search_state["active_resolution"] = None
 
 
 def _submit_jobs(batch_client, episode_id, s3_url, codec_lib, resolution_tag, res_state, bitrates, run_id=None):
@@ -682,8 +531,6 @@ def _discard_jobs(batch_client, res_state, bitrates):
 
 
 def _phase_label(phase):
-    if phase in {"LOWER_SEARCH", "HIGHER_SEARCH"}:
-        return "REFINING"
     if phase == "FINAL":
         return "DONE"
     return "PROBING"
@@ -691,17 +538,17 @@ def _phase_label(phase):
 
 def _phase_message(resolution_tag, res_state):
     phase = res_state.get("phase")
-    if phase == "PROBING":
-        return f"{resolution_tag}: waiting for decisive result"
-    if phase == "LOWER_SEARCH":
-        return f"{resolution_tag}: testing lower candidates"
-    if phase == "HIGHER_SEARCH":
-        br = res_state.get("bracket_display")
-        return f"{resolution_tag}: narrowing {br}" if br else f"{resolution_tag}: narrowing bracket"
-    winner = res_state.get("winner")
-    if winner is not None:
-        return f"{resolution_tag}: winner {winner} kbps"
-    return f"{resolution_tag}: done"
+    if phase == "FINAL":
+        winner = res_state.get("winner")
+        if winner is not None:
+            return f"{resolution_tag}: winner {winner} kbps"
+        return f"{resolution_tag}: no winner"
+    if phase == "PENDING":
+        return f"{resolution_tag}: queued"
+    pending = _pending_bitrates(res_state.get("tested") or {})
+    if pending:
+        return f"{resolution_tag}: testing {pending[0]}"
+    return f"{resolution_tag}: deciding"
 
 
 def _write_progress(db, episode_id, codec, poll_count, all_done, search_state):
@@ -787,18 +634,21 @@ def handler(event, context):
         search_state = event.get("search_state")
         if not search_state:
             search_state = _build_initial_state(codec)
-            for res in RESOLUTION_ORDER:
-                rs = search_state["resolutions"][res]
-                _submit_jobs(
-                    batch_client=batch_client,
-                    episode_id=episode_id,
-                    s3_url=s3_url,
-                    codec_lib=codec_lib,
-                    resolution_tag=res,
-                    res_state=rs,
-                    bitrates=cfg_by_res[res]["initial_probes"],
-                    run_id=run_id,
-                )
+            first_res = RESOLUTION_ORDER[0]
+            rs = search_state["resolutions"][first_res]
+            rs["phase"] = "SEARCHING"
+            mid = (rs["left"] + rs["right"]) // 2
+            _submit_jobs(
+                batch_client=batch_client,
+                episode_id=episode_id,
+                s3_url=s3_url,
+                codec_lib=codec_lib,
+                resolution_tag=first_res,
+                res_state=rs,
+                bitrates=[rs["candidates"][mid]],
+                run_id=run_id,
+            )
+            search_state["active_resolution"] = first_res
             all_done = False
             _write_progress(db, episode_id, codec, poll_count, all_done, search_state)
             return _build_response(episode_id, codec, s3_url, search_state, poll_count, all_done, run_id=run_id)
@@ -806,39 +656,46 @@ def handler(event, context):
         poll_count += 1
         search_state = _normalize_state(search_state, codec)
 
-        for res in RESOLUTION_ORDER:
-            rs = search_state["resolutions"][res]
-            if rs.get("phase") == "FINAL":
-                continue
-
-            _resolve_pending_for_resolution(
-                db=db,
-                batch_client=batch_client,
-                episode_id=episode_id,
-                s3_url=s3_url,
-                codec_lib=codec_lib,
-                resolution_tag=res,
-                res_cfg=cfg_by_res[res],
-                res_state=rs,
-                run_id=run_id,
-            )
-
-            actions = _decide_resolution(rs, cfg_by_res[res])
-            if actions.get("discard"):
-                _discard_jobs(batch_client, rs, actions["discard"])
-            if actions.get("submit"):
-                _submit_jobs(
+        active = search_state.get("active_resolution")
+        if active:
+            rs = search_state["resolutions"][active]
+            if rs["phase"] == "FINAL":
+                _advance_to_next_resolution(
+                    search_state, batch_client, episode_id, s3_url, codec_lib, run_id,
+                )
+            else:
+                _resolve_pending_for_resolution(
+                    db=db,
                     batch_client=batch_client,
                     episode_id=episode_id,
                     s3_url=s3_url,
                     codec_lib=codec_lib,
-                    resolution_tag=res,
+                    resolution_tag=active,
+                    res_cfg=cfg_by_res[active],
                     res_state=rs,
-                    bitrates=actions["submit"],
                     run_id=run_id,
                 )
 
-        all_done = all(search_state["resolutions"][res]["phase"] == "FINAL" for res in RESOLUTION_ORDER)
+                actions = _advance_binary(rs)
+                if actions.get("discard"):
+                    _discard_jobs(batch_client, rs, actions["discard"])
+                if actions.get("submit"):
+                    _submit_jobs(
+                        batch_client=batch_client,
+                        episode_id=episode_id,
+                        s3_url=s3_url,
+                        codec_lib=codec_lib,
+                        resolution_tag=active,
+                        res_state=rs,
+                        bitrates=actions["submit"],
+                        run_id=run_id,
+                    )
+                elif rs["phase"] == "FINAL":
+                    _advance_to_next_resolution(
+                        search_state, batch_client, episode_id, s3_url, codec_lib, run_id,
+                    )
+
+        all_done = search_state.get("active_resolution") is None
         _write_progress(db, episode_id, codec, poll_count, all_done, search_state)
         return _build_response(episode_id, codec, s3_url, search_state, poll_count, all_done, run_id=run_id)
     finally:
