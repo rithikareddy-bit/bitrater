@@ -188,12 +188,30 @@ export default function ShowsPage() {
 
             {expanded === show._id && (
               <div style={{ borderTop: '1px solid #222', padding: '10px 14px' }}>
-                {(show.episodes || []).length === 0 && (
-                  <p style={{ color: '#555', fontSize: 13 }}>No episodes</p>
+                {(show.episodes || []).length === 0 && (show.trailers_playback_urls || []).length === 0 && (
+                  <p style={{ color: '#555', fontSize: 13 }}>No episodes or trailers</p>
                 )}
-                {(show.episodes || []).map((ep) => (
-                  <EpisodeRow key={ep._id || ep.id} episode={ep} />
-                ))}
+                {(show.episodes || []).length > 0 && (
+                  <>
+                    <SectionLabel>Episodes</SectionLabel>
+                    {(show.episodes || []).map((ep) => (
+                      <EpisodeRow key={ep._id || ep.id} episode={ep} />
+                    ))}
+                  </>
+                )}
+                {(show.trailers_playback_urls || []).length > 0 && (
+                  <>
+                    <SectionLabel>Trailers</SectionLabel>
+                    {(show.trailers_playback_urls || []).map((t, i) => (
+                      <TrailerRow
+                        key={t._key || i}
+                        trailer={t}
+                        index={i}
+                        showId={String(show._id)}
+                      />
+                    ))}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -220,6 +238,66 @@ export default function ShowsPage() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function SectionLabel({ children }) {
+  return (
+    <div style={{
+      fontSize: 10, fontWeight: 600, color: '#64748b',
+      textTransform: 'uppercase', letterSpacing: '0.06em',
+      margin: '8px 0 4px',
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function TrailerRow({ trailer, index, showId }) {
+  const [status, setStatus] = useState(null);
+  const trailerId = trailer?._key ? `trailer_${showId}_${trailer._key}` : null;
+
+  useEffect(() => {
+    if (!trailerId) return;
+    const cached = getCachedEpisodeStatus(trailerId);
+    if (cached !== undefined) {
+      setStatus(cached);
+      return;
+    }
+    setStatus(null);
+    let cancelled = false;
+    fetchEpisodeStatus(trailerId).then((s) => {
+      if (!cancelled) setStatus(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [trailerId]);
+
+  const label = status || '...';
+  const color = STATUS_COLORS[label] || '#555';
+  const title = trailer.title || `Trailer ${index + 1}`;
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '6px 0', borderBottom: '1px solid #1e1e1e', fontSize: 13,
+    }}>
+      {trailerId ? (
+        <Link href={`/episode/${encodeURIComponent(trailerId)}`} style={{ color: '#e8e8e8', flex: 1 }}>
+          {title}
+        </Link>
+      ) : (
+        <span style={{ color: '#e8e8e8', flex: 1 }}>{title}</span>
+      )}
+      <span style={{
+        fontSize: 11, fontWeight: 600, color,
+        border: `1px solid ${color}`, borderRadius: 4,
+        padding: '1px 6px', marginLeft: 8, whiteSpace: 'nowrap',
+      }}>
+        {label}
+      </span>
     </div>
   );
 }

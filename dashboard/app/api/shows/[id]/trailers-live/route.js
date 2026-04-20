@@ -12,22 +12,18 @@ import {
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-function pickEpisodeNumber(ep, index) {
-  const n =
-    ep.episode_number ??
-    ep.episodeNumber ??
-    ep.number ??
-    ep.episode ??
-    ep.seq ??
-    ep.position ??
-    ep.index;
-  if (n != null && Number.isFinite(Number(n))) return Number(n);
-  return index + 1;
+function trailerSyntheticId(showObjectIdStr, key) {
+  return `trailer_${showObjectIdStr}_${key}`;
 }
 
 /**
- * GET /api/shows/[id]/episodes-live
- * Bulk lab + golden + QC + GCP snapshot for all episodes in a show (single round-trip).
+ * GET /api/shows/[id]/trailers-live
+ * Bulk lab + golden + QC + GCP snapshot for all trailers in a show.
+ *
+ * Trailers live on master.showcache in `trailers_playback_urls[]` (camelCase,
+ * mirrored from Sanity). Each entry has `_key` and `s3Url` as the source.
+ * Pipeline state is stored in chai_q_lab.video_episodes under the synthetic id
+ * `trailer_<showObjectId>_<_key>`.
  */
 export async function GET(_request, { params }) {
   try {
@@ -45,11 +41,11 @@ export async function GET(_request, { params }) {
       return NextResponse.json({ error: 'Show not found' }, { status: 404 });
     }
 
-    const episodes = Array.isArray(show.episodes) ? show.episodes : [];
+    const trailers = Array.isArray(show.trailers_playback_urls) ? show.trailers_playback_urls : [];
     const ids = [
       ...new Set(
-        episodes
-          .map((e) => (e?.id != null ? String(e.id) : e?._id != null ? String(e._id) : ''))
+        trailers
+          .map((t) => (t?._key ? trailerSyntheticId(rawId, t._key) : ''))
           .filter(Boolean),
       ),
     ];
@@ -82,8 +78,8 @@ export async function GET(_request, { params }) {
 
     const durationById = await durationByEpisode(labDb, ids);
 
-    const rows = episodes.map((ep, index) => {
-      const episodeId = ep?.id != null ? String(ep.id) : ep?._id != null ? String(ep._id) : '';
+    const rows = trailers.map((t, index) => {
+      const episodeId = t?._key ? trailerSyntheticId(rawId, t._key) : '';
       const doc = episodeId ? byEpisodeId[episodeId] : null;
       const gr = doc?.golden_recipes ?? null;
 
@@ -93,10 +89,12 @@ export async function GET(_request, { params }) {
 
       return {
         episodeId,
-        episodeNumber: pickEpisodeNumber(ep, index),
-        title: ep?.title ?? null,
+        episodeNumber: index + 1,
+        trailerKey: t?._key ?? null,
+        title: t?.title || `Trailer ${index + 1}`,
         durationSeconds,
-        s3_url: ep?.s3_url ?? null,
+        s3_url: t?.s3Url ?? t?.s3_url ?? null,
+        existing_gcp_url: t?.gcpUrl ?? null,
         lab_h264: doc?.lab_status_h264 ?? null,
         lab_h265: doc?.lab_status_h265 ?? null,
         golden_h264: h264Golden,
@@ -136,7 +134,7 @@ export async function GET(_request, { params }) {
       { headers: { 'Cache-Control': 'no-store, max-age=0' } },
     );
   } catch (err) {
-    console.error('[GET /api/shows/[id]/episodes-live]', err);
-    return NextResponse.json({ error: 'Failed to load show episodes' }, { status: 500 });
+    console.error('[GET /api/shows/[id]/trailers-live]', err);
+    return NextResponse.json({ error: 'Failed to load show trailers' }, { status: 500 });
   }
 }

@@ -193,9 +193,36 @@ def _get_gcp_credentials():
     return service_account.Credentials.from_service_account_info(info)
 
 
+_TRAILER_ID_RE = re.compile(r"^trailer_([a-f0-9]{24})_(.+)$")
+
+
 def _get_episode_meta(db, episode_id):
-    """Fetch episode metadata from showcache to derive slug and output key."""
+    """Fetch item metadata from showcache. Supports episodes and trailers.
+
+    For trailers the episode_id has form `trailer_<showObjectId>_<_key>`; we look
+    up showcache.trailers_playback_urls by _key. Trailers have no episode_number
+    or slug of their own so we substitute the _key for stable output file names.
+    """
     master_db = db.client["master"]
+
+    trailer_match = _TRAILER_ID_RE.match(episode_id)
+    if trailer_match:
+        from bson import ObjectId as _ObjectId
+        show_id_hex, trailer_key = trailer_match.group(1), trailer_match.group(2)
+        show = master_db["showcache"].find_one(
+            {"_id": _ObjectId(show_id_hex), "trailers_playback_urls._key": trailer_key},
+            {"trailers_playback_urls.$": 1, "slug": 1},
+        )
+        if not show or not show.get("trailers_playback_urls"):
+            raise ValueError(f"Trailer {episode_id} not found in showcache")
+        trailer = show["trailers_playback_urls"][0]
+        show_slug = show.get("slug", "unknown")
+        duration = trailer.get("duration", 0)
+        episode_slug = trailer_key
+        episode_number = trailer_key
+        episode_output_key = f"{show_slug}/trailer_{trailer_key}"
+        return episode_slug, episode_output_key, show_slug, episode_number, duration
+
     show = master_db["showcache"].find_one(
         {"episodes.id": episode_id},
         {"episodes.$": 1, "slug": 1},
@@ -548,7 +575,12 @@ def handler(event, context):
 
     episode_slug, _, show_slug, episode_number, video_duration = _get_episode_meta(db, episode_id)
 
-    slug_prefix = f"{show_slug}_ep_{episode_number}_{folder_ts}"
+    trailer_match = _TRAILER_ID_RE.match(episode_id)
+    if trailer_match:
+        trailer_key = trailer_match.group(2)
+        slug_prefix = f"{show_slug}_trailer_{trailer_key}_{folder_ts}"
+    else:
+        slug_prefix = f"{show_slug}_ep_{episode_number}_{folder_ts}"
     name_map = _build_name_map(slug_prefix, codec)
     master_filename = name_map[f"{codec}_master.m3u8"]
 

@@ -9,6 +9,7 @@ export async function POST(request) {
   try {
     const body = await request.json();
     const { showId } = body || {};
+    const kind = body?.kind === 'trailer' ? 'trailer' : 'episode';
     if (!showId || typeof showId !== 'string') {
       return NextResponse.json({ error: 'showId is required' }, { status: 400 });
     }
@@ -22,14 +23,18 @@ export async function POST(request) {
     const labDb = client.db('chai_q_lab');
     const masterDb = client.db('master');
 
-    // Guard: reject if a pipeline is already RUNNING for this show
+    // Guard: reject if a pipeline of this kind is already RUNNING for this show.
+    // Legacy runs written before `kind` existed default to 'episode'.
+    const kindMatch = kind === 'trailer'
+      ? { kind: 'trailer' }
+      : { $or: [{ kind: 'episode' }, { kind: { $exists: false } }] };
     const existing = await labDb.collection('pipeline_runs').findOne(
-      { show_id: showId, status: 'RUNNING' },
+      { show_id: showId, status: 'RUNNING', ...kindMatch },
       { projection: { _id: 1 } },
     );
     if (existing) {
       return NextResponse.json(
-        { error: 'Pipeline already running for this show', runId: String(existing._id) },
+        { error: `${kind === 'trailer' ? 'Trailer' : 'Episode'} pipeline already running for this show`, runId: String(existing._id) },
         { status: 409 },
       );
     }
@@ -38,12 +43,29 @@ export async function POST(request) {
     const show = await masterDb.collection('showcache').findOne({ _id: showObjectId });
     if (!show) return NextResponse.json({ error: 'Show not found' }, { status: 404 });
 
-    const allEpisodes = Array.isArray(show.episodes) ? show.episodes : [];
-    const eligible   = allEpisodes.filter(ep => ep?.s3_url && ep.s3_url.trim() !== '');
-    const ineligible = allEpisodes.filter(ep => !ep?.s3_url || ep.s3_url.trim() === '');
+    // Normalize the source items to a common shape {id, s3_url, title, ...}
+    // so the orchestrator / downstream routes can stay identical.
+    let allItems;
+    if (kind === 'trailer') {
+      const trailers = Array.isArray(show.trailers_playback_urls) ? show.trailers_playback_urls : [];
+      allItems = trailers.map((t, i) => ({
+        id: `trailer_${showId}_${t?._key ?? `idx${i}`}`,
+        trailer_key: t?._key ?? null,
+        s3_url: t?.s3Url || t?.s3_url || '',
+        title: t?.title || `Trailer ${i + 1}`,
+      }));
+    } else {
+      allItems = Array.isArray(show.episodes) ? show.episodes : [];
+    }
+
+    const eligible   = allItems.filter(ep => ep?.s3_url && ep.s3_url.trim() !== '');
+    const ineligible = allItems.filter(ep => !ep?.s3_url || ep.s3_url.trim() === '');
 
     if (eligible.length === 0) {
-      return NextResponse.json({ error: 'No eligible episodes (no s3_url found)' }, { status: 400 });
+      return NextResponse.json(
+        { error: `No eligible ${kind === 'trailer' ? 'trailers' : 'episodes'} (no s3_url found)` },
+        { status: 400 },
+      );
     }
 
     const nowDate = new Date();
@@ -64,6 +86,7 @@ export async function POST(request) {
       const labH265Done = !skipped && existing?.lab_status_h265 === 'COMPLETE';
       return {
         episode_id: String(ep.id),
+        trailer_key: ep.trailer_key ?? null,
         title: ep.title || String(ep.id) || '',
         s3_url: ep.s3_url || '',
         status: skipped ? 'SKIPPED' : 'QUEUED',
@@ -97,7 +120,9 @@ export async function POST(request) {
 
     const runDoc = {
       show_id: showId,
+      show_slug: show.slug || null,
       show_title: show.title || '',
+      kind,
       status: 'RUNNING',
       lab_workers: 30,
       max_gcp: 20,
@@ -106,7 +131,7 @@ export async function POST(request) {
       created_at: nowDate,
       started_at: null,
       finished_at: null,
-      total_episodes: allEpisodes.length,
+      total_episodes: allItems.length,
       skipped_episodes: ineligible.length,
       episodes: episodeDocs,
       completed_count: 0,

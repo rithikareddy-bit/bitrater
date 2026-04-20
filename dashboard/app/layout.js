@@ -39,6 +39,7 @@ export default function RootLayout({ children }) {
           <nav style={{ marginLeft: 'auto', display: 'flex', gap: 16, fontSize: 14 }}>
             <Link href="/" style={{ color: '#888' }}>Catalog</Link>
             <Link href="/show" style={{ color: '#4da6ff' }}>Show overview</Link>
+            <Link href="/trailers" style={{ color: '#4da6ff' }}>Trailer overview</Link>
           </nav>
         </header>
         <main style={{ padding: '24px' }}>

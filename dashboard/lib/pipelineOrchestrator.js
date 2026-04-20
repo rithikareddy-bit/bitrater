@@ -101,6 +101,8 @@ export async function orchestrate(runIdStr) {
 
   const MAX_LAB = run.lab_workers || 30;
   const MAX_GCP = run.max_gcp || 20;
+  // Trailer runs skip the VTT/thumbnail sidecar step (no subtitles/thumbnails for trailers).
+  const withVttDefault = run.kind !== 'trailer';
 
   // Build mutable episodes array + lookup map
   const episodes = run.episodes || [];
@@ -237,7 +239,7 @@ export async function orchestrate(runIdStr) {
     // Enqueue GCP immediately for episodes whose lab is already done (pre-populated by start route)
     for (const ep of eligible) {
       if (ep.lab_h264_status === 'COMPLETE' && !ep.gcp_enqueued_h264) {
-        gcpQueueH264.push({ episodeId: ep.episode_id, codec: 'h264', withVtt: true });
+        gcpQueueH264.push({ episodeId: ep.episode_id, codec: 'h264', withVtt: withVttDefault });
         await updateEp(ep.episode_id, { gcp_enqueued_h264: true }, null);
       }
       if (ep.lab_h265_status === 'COMPLETE' && !ep.gcp_enqueued_h265) {
@@ -266,7 +268,7 @@ export async function orchestrate(runIdStr) {
       const inQ264 = gcpQueueH264.some(j => j.episodeId === ep.episode_id);
       if (ep.lab_h264_status === 'COMPLETE' &&
           (ep.gcp_h264_status == null || ep.gcp_h264_status === 'QUEUED') && !inQ264) {
-        gcpQueueH264.push({ episodeId: ep.episode_id, codec: 'h264', withVtt: true, retry_after: ep.retry_after_h264 || null });
+        gcpQueueH264.push({ episodeId: ep.episode_id, codec: 'h264', withVtt: withVttDefault, retry_after: ep.retry_after_h264 || null });
         if (!ep.gcp_enqueued_h264) {
           await updateEp(ep.episode_id, { gcp_enqueued_h264: true }, null);
         }
@@ -288,7 +290,7 @@ export async function orchestrate(runIdStr) {
         await col.updateOne({ _id: runId, 'episodes.episode_id': ep.episode_id },
           { $set: { 'episodes.$.gcp_h264_status': 'QUEUED' } });
         if (!gcpQueueH264.some(j => j.episodeId === ep.episode_id)) {
-          gcpQueueH264.push({ episodeId: ep.episode_id, codec: 'h264', withVtt: true, retry_after: ep.retry_after_h264 || null });
+          gcpQueueH264.push({ episodeId: ep.episode_id, codec: 'h264', withVtt: withVttDefault, retry_after: ep.retry_after_h264 || null });
         }
       }
       if (ep.gcp_h265_status === 'FAILED' && (ep.retries?.gcp_h265 ?? 0) < MAX_RETRIES) {
@@ -399,7 +401,7 @@ export async function orchestrate(runIdStr) {
           { step: 'LAB_H264', status: 'COMPLETE', at: nowDate() });
         h264Active.delete(episodeId);
         if (!ep.gcp_enqueued_h264) {
-          gcpQueueH264.push({ episodeId, codec: 'h264', withVtt: true });
+          gcpQueueH264.push({ episodeId, codec: 'h264', withVtt: withVttDefault });
           await persistQueues();
           await updateEp(episodeId, { gcp_enqueued_h264: true }, null);
         }
@@ -535,7 +537,7 @@ export async function orchestrate(runIdStr) {
               last_updated_at: nowDate(),
             }, { step: `GCP_${codec.toUpperCase()}`, status: 'RETRY (STARTING timeout)', at: nowDate() });
             const entry = { episodeId: ep.episode_id, codec, retry_after: retryAfter };
-            if (codec === 'h264') { entry.withVtt = true; gcpQueueH264.push(entry); }
+            if (codec === 'h264') { entry.withVtt = withVttDefault; gcpQueueH264.push(entry); }
             else gcpQueueH265.push(entry);
             await persistQueues();
           } else {
@@ -597,7 +599,7 @@ export async function orchestrate(runIdStr) {
               last_updated_at: nowDate(),
             }, { step: `GCP_${codec.toUpperCase()}`, status: 'RETRY', at: nowDate() });
             const entry = { episodeId: ep.episode_id, codec, retry_after: retryAfter };
-            if (codec === 'h264') { entry.withVtt = true; gcpQueueH264.push(entry); }
+            if (codec === 'h264') { entry.withVtt = withVttDefault; gcpQueueH264.push(entry); }
             else gcpQueueH265.push(entry);
             await persistQueues();
           } else {

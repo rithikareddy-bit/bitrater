@@ -24,12 +24,27 @@ export function getCachedEpisodeStatus(epId) {
   return statusByEpId.get(key);
 }
 
-function deriveStatusFromPayload(d) {
-  if (d.labStatus === 'FAILED') return 'FAILED';
-  if (d.succeeded >= d.total) return 'DONE';
-  if (d.failed > 0 && d.succeeded + d.failed >= d.total) return 'FAILED';
-  if (d.succeeded > 0 || d.running > 0 || d.labStatus === 'RUNNING') return 'PENDING';
+function deriveCodecStatus(c) {
+  if (!c) return 'NOT RUN';
+  if (c.labStatus === 'FAILED') return 'FAILED';
+  if (c.total > 0 && c.succeeded >= c.total) return 'DONE';
+  if (c.failed > 0 && c.succeeded + c.failed >= c.total) return 'FAILED';
+  if (c.succeeded > 0 || c.running > 0 || c.labStatus === 'RUNNING') return 'PENDING';
   return 'NOT RUN';
+}
+
+function deriveStatusFromPayload(d) {
+  if (!d || typeof d !== 'object') return 'NOT RUN';
+  // /api/status/[id] (no ?codec=) returns { h264, h265 }.
+  if (d.h264 || d.h265) {
+    const statuses = [d.h264, d.h265].filter(Boolean).map(deriveCodecStatus);
+    if (statuses.includes('FAILED')) return 'FAILED';
+    if (statuses.length > 0 && statuses.every((s) => s === 'DONE')) return 'DONE';
+    if (statuses.includes('PENDING') || statuses.includes('DONE')) return 'PENDING';
+    return 'NOT RUN';
+  }
+  // Legacy flat shape (single-codec response).
+  return deriveCodecStatus(d);
 }
 
 export function fetchEpisodeStatus(epId) {

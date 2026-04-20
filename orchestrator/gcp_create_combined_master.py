@@ -83,9 +83,29 @@ def _parse_manifest(text):
     return media_lines, stream_blocks
 
 
+_TRAILER_ID_RE = re.compile(r"^trailer_([a-f0-9]{24})_(.+)$")
+
+
 def _get_episode_meta(mongo_client, episode_id):
-    """Fetch show_slug and episode_number from showcache."""
+    """Fetch show_slug and episode_number (or trailer_key) from showcache.
+
+    For trailer ids (`trailer_<showObjectId>_<_key>`) return the _key as the
+    number-slot so filename builders can produce stable trailer-specific names.
+    """
     master_db = mongo_client["master"]
+
+    trailer_match = _TRAILER_ID_RE.match(episode_id)
+    if trailer_match:
+        from bson import ObjectId as _ObjectId
+        show_id_hex, trailer_key = trailer_match.group(1), trailer_match.group(2)
+        show = master_db["showcache"].find_one(
+            {"_id": _ObjectId(show_id_hex), "trailers_playback_urls._key": trailer_key},
+            {"slug": 1},
+        )
+        if not show:
+            return "unknown", trailer_key
+        return show.get("slug", "unknown"), trailer_key
+
     show = master_db["showcache"].find_one(
         {"episodes.id": episode_id},
         {"episodes.$": 1, "slug": 1},
@@ -211,7 +231,10 @@ def handler(event, context):
     cdn_prefix = f"{episode_id}/{folder_ts}"
 
     show_slug, episode_number = _get_episode_meta(mongo_client, episode_id)
-    combined_filename = f"{show_slug}_ep_{episode_number}_{folder_ts}_combined.m3u8"
+    if _TRAILER_ID_RE.match(episode_id):
+        combined_filename = f"{show_slug}_trailer_{episode_number}_{folder_ts}_combined.m3u8"
+    else:
+        combined_filename = f"{show_slug}_ep_{episode_number}_{folder_ts}_combined.m3u8"
 
     combined_blob = bucket.blob(f"{cdn_prefix}/{combined_filename}")
     combined_blob.cache_control = "no-store"

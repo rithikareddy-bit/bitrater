@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
+import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 
 const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -59,13 +60,37 @@ export async function POST(request) {
       }
     }
 
-    const showWithEp = await masterDb.collection('showcache').findOne(
-      { 'episodes.id': episodeId },
-      { projection: { 'episodes.$': 1 } },
-    );
-    const s3Url = showWithEp?.episodes?.[0]?.s3_url;
-    if (!s3Url) {
-      return NextResponse.json({ error: 'No s3_url found for this episode' }, { status: 400 });
+    // Resolve source URL + (for trailers) the slug prefix seed that the
+    // finalize/combine Lambdas use to build file names.
+    const TRAILER_ID_RE = /^trailer_([a-f0-9]{24})_(.+)$/;
+    const trailerMatch = TRAILER_ID_RE.exec(episodeId);
+    let s3Url;
+    let itemKind = 'episode';
+    let trailerKey = null;
+    let showSlug = null;
+    if (trailerMatch) {
+      itemKind = 'trailer';
+      const [, showIdHex, key] = trailerMatch;
+      trailerKey = key;
+      const showDoc = await masterDb.collection('showcache').findOne(
+        { _id: new ObjectId(showIdHex), 'trailers_playback_urls._key': key },
+        { projection: { slug: 1, 'trailers_playback_urls.$': 1 } },
+      );
+      const trailer = showDoc?.trailers_playback_urls?.[0];
+      s3Url = trailer?.s3Url || trailer?.s3_url;
+      showSlug = showDoc?.slug || null;
+      if (!s3Url) {
+        return NextResponse.json({ error: 'No s3Url found for this trailer' }, { status: 400 });
+      }
+    } else {
+      const showWithEp = await masterDb.collection('showcache').findOne(
+        { 'episodes.id': episodeId },
+        { projection: { 'episodes.$': 1 } },
+      );
+      s3Url = showWithEp?.episodes?.[0]?.s3_url;
+      if (!s3Url) {
+        return NextResponse.json({ error: 'No s3_url found for this episode' }, { status: 400 });
+      }
     }
 
     const urlKey = codec === 'h264' ? 'h264_master_m3u8_url' : 'h265_master_m3u8_url';
@@ -97,6 +122,8 @@ export async function POST(request) {
       golden_recipes: goldenRecipes,
       codec,
       source_fps: sourceFps,
+      kind: itemKind,
+      ...(itemKind === 'trailer' ? { trailer_key: trailerKey, show_slug: showSlug } : {}),
     });
 
     let result;

@@ -3,7 +3,10 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+
+const TRAILER_ID_RE = /^trailer_([a-f0-9]{24})_(.+)$/;
 
 const execFileAsync = promisify(execFile);
 
@@ -39,13 +42,28 @@ export async function POST(request) {
 
     const client = await clientPromise();
     const masterDb = client.db('master');
-    const showWithEp = await masterDb.collection('showcache').findOne(
-      { 'episodes.id': episodeId },
-      { projection: { 'episodes.$': 1 } },
-    );
-    const s3Url = showWithEp?.episodes?.[0]?.s3_url;
-    if (!s3Url) {
-      return NextResponse.json({ error: 'No s3_url found for this episode' }, { status: 400 });
+    const trailerMatch = TRAILER_ID_RE.exec(episodeId);
+    let s3Url;
+    if (trailerMatch) {
+      const [, showIdHex, key] = trailerMatch;
+      const showDoc = await masterDb.collection('showcache').findOne(
+        { _id: new ObjectId(showIdHex), 'trailers_playback_urls._key': key },
+        { projection: { 'trailers_playback_urls.$': 1 } },
+      );
+      const trailer = showDoc?.trailers_playback_urls?.[0];
+      s3Url = trailer?.s3Url || trailer?.s3_url;
+      if (!s3Url) {
+        return NextResponse.json({ error: 'No s3Url found for this trailer' }, { status: 400 });
+      }
+    } else {
+      const showWithEp = await masterDb.collection('showcache').findOne(
+        { 'episodes.id': episodeId },
+        { projection: { 'episodes.$': 1 } },
+      );
+      s3Url = showWithEp?.episodes?.[0]?.s3_url;
+      if (!s3Url) {
+        return NextResponse.json({ error: 'No s3_url found for this episode' }, { status: 400 });
+      }
     }
 
     const { bucket, key, region } = parseS3Url(s3Url);

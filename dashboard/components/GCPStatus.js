@@ -96,19 +96,26 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
     setGcpErr264(null);
     setVttErr(null);
     setVttInfo(null);
+    const isTrailer = typeof episodeId === 'string' && episodeId.startsWith('trailer_');
     try {
-      const [gcpSettled, vttSettled] = await Promise.allSettled([
+      // Trailers skip VTT generation (no subtitles/thumbnails for trailers).
+      const requests = [
         fetch('/api/gcp', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ episodeId, codec: 'h264' }),
         }),
-        fetch('/api/episode-vtt', {
+      ];
+      if (!isTrailer) {
+        requests.push(fetch('/api/episode-vtt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ episodeId }),
-        }),
-      ]);
+        }));
+      }
+      const settled = await Promise.allSettled(requests);
+      const gcpSettled = settled[0];
+      const vttSettled = isTrailer ? null : settled[1];
 
       if (gcpSettled.status === 'fulfilled') {
         const r = gcpSettled.value;
@@ -126,23 +133,25 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         setGcpErr264(gcpSettled.reason?.message || 'GCP H.264 request failed');
       }
 
-      if (vttSettled.status === 'fulfilled') {
-        const r = vttSettled.value;
-        let data = {};
-        try {
-          const t = await r.text();
-          if (t) data = JSON.parse(t);
-        } catch { /* ignore */ }
-        if (!r.ok) {
-          setVttErr(data.error || `Thumbnail VTT failed (${r.status})`);
-        } else if (data.skipped) {
-          setVttInfo('VTT file already exists — skipped generation');
+      if (vttSettled) {
+        if (vttSettled.status === 'fulfilled') {
+          const r = vttSettled.value;
+          let data = {};
+          try {
+            const t = await r.text();
+            if (t) data = JSON.parse(t);
+          } catch { /* ignore */ }
+          if (!r.ok) {
+            setVttErr(data.error || `Thumbnail VTT failed (${r.status})`);
+          } else if (data.skipped) {
+            setVttInfo('VTT file already exists — skipped generation');
+          } else {
+            setVttInfo(data.message || 'Thumbnail VTT generation complete');
+            fetchStatus();
+          }
         } else {
-          setVttInfo(data.message || 'Thumbnail VTT generation complete');
-          fetchStatus();
+          setVttErr(vttSettled.reason?.message || 'Thumbnail VTT request failed');
         }
-      } else {
-        setVttErr(vttSettled.reason?.message || 'Thumbnail VTT request failed');
       }
     } finally {
       setPushing(null);
@@ -223,7 +232,9 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
     setSyncError(null);
     setSyncOk(null);
     try {
-      const res = await fetch('/api/sync-showcache-episode', {
+      const isTrailer = typeof episodeId === 'string' && episodeId.startsWith('trailer_');
+      const syncPath = isTrailer ? '/api/sync-showcache-trailer' : '/api/sync-showcache-episode';
+      const res = await fetch(syncPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ episodeId, signedPlaybackUrl: combinedUrl }),
@@ -236,7 +247,11 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         throw new Error(res.ok ? 'Invalid response from server' : `Sync failed (${res.status})`);
       }
       if (!res.ok) throw new Error(data.error || 'Sync failed');
-      setSyncOk('Saved signed_playback_url and download_config on show catalog.');
+      setSyncOk(
+        isTrailer
+          ? 'Saved gcpUrl on showcache trailers_playback_urls.'
+          : 'Saved signed_playback_url and download_config on show catalog.'
+      );
     } catch (err) {
       setSyncError(err.message);
     } finally {
