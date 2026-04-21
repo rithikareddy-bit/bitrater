@@ -15,6 +15,7 @@ export async function POST(request) {
   try {
     const body = await request.json();
     const episodeId = body.episodeId;
+    const force = body.force === true;
     if (!episodeId) {
       return NextResponse.json({ error: 'episodeId is required' }, { status: 400 });
     }
@@ -42,7 +43,7 @@ export async function POST(request) {
     const showId = showWithEp._id;
     const episodeMongoId = ep.id;
     const existingVttOnEpisode = ep.vtt_url;
-    if (existingVttOnEpisode && String(existingVttOnEpisode).trim()) {
+    if (!force && existingVttOnEpisode && String(existingVttOnEpisode).trim()) {
       return NextResponse.json({
         ok: true,
         skipped: true,
@@ -55,7 +56,7 @@ export async function POST(request) {
       { id: episodeId },
       { projection: { vtt_url: 1 } },
     );
-    if (episodeDoc?.vtt_url && String(episodeDoc.vtt_url).trim()) {
+    if (!force && episodeDoc?.vtt_url && String(episodeDoc.vtt_url).trim()) {
       return NextResponse.json({
         ok: true,
         skipped: true,
@@ -73,7 +74,7 @@ export async function POST(request) {
       { video_id: videoId },
       { projection: { vtt_url: 1, sprite_url: 1 } },
     );
-    if (existingVtt) {
+    if (!force && existingVtt) {
       return NextResponse.json({
         ok: true,
         skipped: true,

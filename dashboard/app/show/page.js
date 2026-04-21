@@ -1150,7 +1150,11 @@ function EpisodeActions({ row, onActionDone }) {
         const r = vttSettled.value;
         let data = {};
         try { const t = await r.text(); if (t) data = JSON.parse(t); } catch { /* ignore */ }
-        if (!r.ok) {
+        // 502/503/504 = App Runner edge timeout; worker is still running on Cloud
+        // Run. Treat as in-progress, not a failure — Mongo will pick up new URL.
+        if (r.status === 502 || r.status === 503 || r.status === 504) {
+          setMsg('vtt', 'ok', 'VTT regenerating in background');
+        } else if (!r.ok) {
           setMsg('vtt', 'err', data.error || `VTT failed (${r.status})`);
         } else if (data.skipped) {
           setMsg('vtt', 'ok', 'VTT already exists');

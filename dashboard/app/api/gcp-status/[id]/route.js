@@ -89,12 +89,13 @@ export async function GET(request, { params }) {
         if (videoId) {
           const vttDoc = await masterDb.collection(vttCollection).findOne(
             { video_id: videoId },
-            { projection: { vtt_url: 1, sprite_url: 1 } },
+            { projection: { vtt_url: 1, sprite_url: 1, updated_at: 1 } },
           );
           if (vttDoc) {
             thumb_vtt = {
               vtt_url: vttDoc.vtt_url || null,
               sprite_url: vttDoc.sprite_url || null,
+              updated_at: vttDoc.updated_at || null,
             };
           }
         }

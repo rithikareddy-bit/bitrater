@@ -62,9 +62,10 @@ def generate_webp_vtt_to_dir(
 ) -> Tuple[Path, Path]:
     """
     Stream from URL, generate 5x5 sprite sheets and a single VTT covering the full video.
-    For videos with >25 frames, multiple sprite sheets are generated:
+    Filenames use the stable pattern (video_id is already unique from S3 source naming):
       {video_id}-sprite-0.webp, {video_id}-sprite-1.webp, ...
-    All referenced from one {video_id}-thumbnails.vtt file.
+      {video_id}-thumbnails.vtt
+    Cache-staleness is handled at upload time via Cache-Control on the blobs.
     """
     url = _normalize_url(s3_url)
     out_dir = Path(out_dir)
@@ -167,6 +168,7 @@ def generate_webp_vtt_to_dir(
         t1 = (i + 1) * interval_sec if i < total_frames - 1 else max(duration_sec, t0 + 0.001)
         sprite_file = f"{video_id}-sprite-{sheet_idx}.webp"
         frag = f"{sprite_base_url.rstrip('/')}/{sprite_file}#xywh={x0},{y0},{cell_w},{cell_h}"
+        lines.append(str(i + 1))
         lines.append(f"{fmt_ts(t0)} --> {fmt_ts(t1)}")
         lines.append(frag)
         lines.append("")
@@ -175,13 +177,55 @@ def generate_webp_vtt_to_dir(
     return sprite_paths[0], vtt_path
 
 
+def list_existing_sprite_blob_names(
+    *,
+    bucket_name: str,
+    prefix: str,
+    video_id: str,
+) -> List[str]:
+    """Return GCS blob names for existing sprite/VTT objects of this video_id, so we can
+    safely delete them AFTER the new generation + Mongo write succeeds (no data loss on failure)."""
+    client = gcs_storage.Client()
+    base = prefix.rstrip("/") + "/"
+    names: List[str] = []
+    for pat in (f"{base}{video_id}-sprite", f"{base}{video_id}-thumbnails"):
+        for blob in client.list_blobs(bucket_name.rstrip("/"), prefix=pat):
+            names.append(blob.name)
+    return names
+
+
+def delete_blobs_by_name(
+    *,
+    bucket_name: str,
+    names: List[str],
+) -> int:
+    """Delete GCS blobs by exact name. Returns count successfully deleted."""
+    if not names:
+        return 0
+    client = gcs_storage.Client()
+    bucket = client.bucket(bucket_name.rstrip("/"))
+    deleted = 0
+    for name in names:
+        try:
+            bucket.blob(name).delete()
+            deleted += 1
+        except Exception:
+            pass
+    return deleted
+
+
 def upload_and_make_public(
     out_dir: Path,
     *,
     bucket_name: str,
     prefix: str,
 ) -> List[Tuple[str, str]]:
-    """Upload all files in out_dir to GCS; return [(filename, public_url), ...]."""
+    """Upload all files in out_dir to GCS; return [(filename, public_url), ...].
+
+    Sets `Cache-Control: no-cache, max-age=0` so clients always revalidate with GCS
+    before reusing cached bytes — since filenames are stable across reruns, the URL
+    itself doesn't change, and we rely on ETag revalidation to deliver fresh content.
+    """
     client = gcs_storage.Client()
     bucket = client.bucket(bucket_name.rstrip("/"))
     base = prefix.rstrip("/") + "/"
@@ -191,6 +235,7 @@ def upload_and_make_public(
             continue
         blob_name = base + p.name
         blob = bucket.blob(blob_name)
+        blob.cache_control = "no-cache, max-age=0"
         blob.upload_from_filename(str(p))
         try:
             blob.make_public()
@@ -221,6 +266,18 @@ def process_one_episode(
 ) -> Dict[str, Any]:
     sprite_base_url = f"https://storage.googleapis.com/{bucket_name.rstrip('/')}/{gcs_prefix.rstrip('/')}"
 
+    # Snapshot existing stable-named blobs so we can clean up pre-`c9ace3b` orphans
+    # (`{video_id}-sprite.webp` with no sheet index) and any sheets beyond the new
+    # regeneration's sheet count. Uploading over identical names is an overwrite, so
+    # only files whose names we *don't* regenerate need deletion.
+    try:
+        stale_blob_names = list_existing_sprite_blob_names(
+            bucket_name=bucket_name, prefix=gcs_prefix, video_id=video_id
+        )
+    except Exception as e:
+        print(f"[vtt-worker] stale-blob listing failed (continuing): {e}")
+        stale_blob_names = []
+
     with tempfile.TemporaryDirectory(prefix="webp_vtt_") as tmp:
         out_dir = Path(tmp)
         generate_webp_vtt_to_dir(
@@ -236,6 +293,7 @@ def process_one_episode(
             out_dir, bucket_name=bucket_name, prefix=gcs_prefix
         )
 
+    uploaded_names = {name for name, _ in uploaded}
     vtt_url = None
     sprite_urls = []
     base_url = f"https://storage.googleapis.com/{bucket_name.rstrip('/')}/{gcs_prefix.rstrip('/')}"
@@ -278,5 +336,17 @@ def process_one_episode(
             {"episodes.id": episode_id},
             {"$set": {"episodes.$.vtt_url": vtt_url}},
         )
+
+    # Post-success cleanup: drop any stale blob whose name wasn't overwritten by this
+    # run. With stable filenames, most blobs are overwrites, so we only delete the
+    # diff — e.g. old single-sheet `sprite.webp` or extra sheets left from a longer
+    # previous generation that the new (shorter) run didn't cover.
+    base = gcs_prefix.rstrip("/") + "/"
+    uploaded_blob_names = {base + n for n in uploaded_names}
+    orphan_names = [n for n in stale_blob_names if n not in uploaded_blob_names]
+    try:
+        delete_blobs_by_name(bucket_name=bucket_name, names=orphan_names)
+    except Exception as e:
+        print(f"[vtt-worker] orphan cleanup failed (harmless, extra files remain): {e}")
 
     return {"vtt_url": vtt_url, "sprite_url": sprite_url, "ok": True}

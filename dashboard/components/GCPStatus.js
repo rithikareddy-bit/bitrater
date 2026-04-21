@@ -18,6 +18,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [gcpErr265, setGcpErr265] = useState(null);
   const [vttErr, setVttErr] = useState(null);
   const [vttInfo, setVttInfo] = useState(null);
+  const [rerunningVtt, setRerunningVtt] = useState(false);
   const [combining, setCombining] = useState(false);
   const [combineError, setCombineError] = useState(null);
   const [combinedUrl, setCombinedUrl] = useState(null);
@@ -29,6 +30,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [qcError, setQcError] = useState(null);
   const qcPollRef = useRef(null);
   const pollingRef = useRef(null);
+  const rerunVttCancelRef = useRef(false);
 
   const resolutions = goldenRecipes?.resolutions;
   const labCompleteH264 = hasGoldenForCodec(resolutions, 'h264');
@@ -88,6 +90,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
     return () => {
       clearInterval(pollingRef.current);
       clearInterval(qcPollRef.current);
+      rerunVttCancelRef.current = true;
     };
   }, [fetchStatus, episodeId]);
 
@@ -141,7 +144,12 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
             const t = await r.text();
             if (t) data = JSON.parse(t);
           } catch { /* ignore */ }
-          if (!r.ok) {
+          // 502/503/504 = App Runner edge timeout; the worker is still regenerating
+          // on Cloud Run. GCP job polling (startPolling) will pick up the new
+          // thumb_vtt.vtt_url when Mongo updates. Show a non-error info message.
+          if (r.status === 502 || r.status === 503 || r.status === 504) {
+            setVttInfo('Thumbnail VTT regenerating in background — will refresh when ready');
+          } else if (!r.ok) {
             setVttErr(data.error || `Thumbnail VTT failed (${r.status})`);
           } else if (data.skipped) {
             setVttInfo('VTT file already exists — skipped generation');
@@ -179,6 +187,68 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       setGcpErr265(err.message);
       setPushing(null);
     }
+  };
+
+  const handleRerunVtt = async () => {
+    // Sprite regeneration can run 2–10+ minutes on large videos. App Runner's edge
+    // cuts requests at ~120s → the dashboard route returns 502/504 even though the
+    // worker keeps running. So we fire the POST, ignore edge errors, and poll the
+    // Mongo `episode_vtt.updated_at` for a change. Filenames are stable across
+    // reruns (clean URLs), but `updated_at` is an ISO microsecond timestamp that the
+    // worker rewrites on every Mongo upsert — reliable signal for rerun completion.
+    rerunVttCancelRef.current = false;
+    setRerunningVtt(true);
+    setVttErr(null);
+    setVttInfo('Regenerating… worker is streaming the source and rebuilding sprites.');
+    const initialUpdatedAt = status?.thumb_vtt?.updated_at || '';
+
+    fetch('/api/episode-vtt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeId, force: true }),
+    }).then(async (res) => {
+      if (res.ok) return;
+      // 502/503/504 are App Runner edge errors — the worker is likely still running
+      // on Cloud Run (generation can take 2–10 min). Keep polling Mongo silently.
+      if (res.status === 502 || res.status === 503 || res.status === 504) return;
+      let data = {};
+      try { const t = await res.text(); if (t) data = JSON.parse(t); } catch { /* ignore */ }
+      rerunVttCancelRef.current = true;
+      setVttErr(data.error || `Thumbnail VTT rerun failed (${res.status})`);
+      setVttInfo(null);
+      setRerunningVtt(false);
+    }).catch(() => {
+      // Network/abort — don't fail yet; keep polling.
+    });
+
+    const POLL_MS = 5000;
+    const MAX_POLLS = 180; // 15 minutes at 5s
+    let polls = 0;
+    const tick = async () => {
+      if (rerunVttCancelRef.current) return;
+      polls += 1;
+      try {
+        const r = await fetch(`/api/gcp-status/${episodeId}?_=${Date.now()}`);
+        const d = await r.json();
+        if (rerunVttCancelRef.current) return;
+        const newUpdatedAt = d?.thumb_vtt?.updated_at || '';
+        if (newUpdatedAt && newUpdatedAt !== initialUpdatedAt) {
+          rerunVttCancelRef.current = true;
+          setStatus(d);
+          setVttInfo('Thumbnail VTT regenerated');
+          setRerunningVtt(false);
+          return;
+        }
+      } catch { /* transient */ }
+      if (polls >= MAX_POLLS) {
+        rerunVttCancelRef.current = true;
+        setVttErr('Rerun is still processing — refresh the page in a minute to see the new URL.');
+        setRerunningVtt(false);
+        return;
+      }
+      setTimeout(tick, POLL_MS);
+    };
+    setTimeout(tick, POLL_MS);
   };
 
   const handleCheckQuality = async () => {
@@ -332,6 +402,27 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12, wordBreak: 'break-all' }}>
           <div style={{ fontWeight: 600, color: '#94a3b8', marginBottom: 4 }}>Thumbnail VTT</div>
           <div><strong style={{ color: '#7dd3fc' }}>VTT:</strong> {status.thumb_vtt.vtt_url}</div>
+        </div>
+      )}
+
+      {typeof episodeId === 'string' && !episodeId.startsWith('trailer_') && (
+        <div style={{ marginBottom: 12 }}>
+          <button
+            type="button"
+            onClick={handleRerunVtt}
+            disabled={rerunningVtt}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: rerunningVtt ? '#1e1e1e' : '#0369a1',
+              color: rerunningVtt ? '#555' : '#fff',
+              border: 'none', borderRadius: 8, padding: '10px 20px',
+              fontSize: 14, fontWeight: 600,
+              cursor: rerunningVtt ? 'not-allowed' : 'pointer',
+              transition: 'background 0.2s', width: '100%', justifyContent: 'center',
+            }}
+          >
+            {rerunningVtt ? <><Spinner color="#0369a1" /> Regenerating…</> : '↻ Rerun Thumbnail VTT'}
+          </button>
         </div>
       )}
 
