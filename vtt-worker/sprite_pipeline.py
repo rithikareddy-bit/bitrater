@@ -103,8 +103,8 @@ def generate_webp_vtt_to_dir(
 
         vf = (
             f"trim=start={trim_start},setpts=PTS-STARTPTS,"
-            f"fps=1/{interval_sec},trim=end_frame={sheet_frames},"
-            f"scale=120:-2,tile={cols}x{rows}"
+            f"fps=1/{interval_sec}:round=up,trim=end_frame={sheet_frames},"
+            f"scale=120:-1,tile={cols}x{rows}"
         )
         _run_ffmpeg(
             [

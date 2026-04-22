@@ -3,6 +3,14 @@ import clientPromise from '@/lib/mongodb';
 
 const POLL_MS = 10_000;
 const MAX_RETRIES = 2;
+// Sync is a cheap HTTP write to showcache — allow more retries than the heavy
+// lab/GCP steps so a transient blip doesn't force a full pipeline re-run.
+const MAX_SYNC_RETRIES = 5;
+// Trailer-specific cap: at most this many distinct trailers can have an
+// active GCP codec at once. A new trailer starts only when another trailer
+// has finished BOTH codecs (= left the GCP phase). This differs from max_gcp,
+// which caps raw job count — trailer-level caps are the operator's contract.
+const MAX_ACTIVE_TRAILERS = 5;
 const TIMEOUT_LAB_MS = 2 * 60 * 60 * 1000;   // 2 hours
 const TIMEOUT_GCP_MS = 1 * 60 * 60 * 1000;    // 1 hour
 const TIMEOUT_STARTING_MS = 2 * 60 * 1000;    // 2 min
@@ -623,9 +631,53 @@ export async function orchestrate(runIdStr) {
     const runSnap = await col.findOne({ _id: runId }, { projection: { gcp_paused_until: 1 } });
     const gcpPausedUntil = runSnap?.gcp_paused_until;
 
-    if (!gcpPausedUntil || nowMs() >= new Date(gcpPausedUntil).getTime()) {
+    // Trailer kind only: respect the operator toggle. When disabled, skip all
+    // new GCP dispatches this tick — running jobs continue to completion,
+    // QUEUED eps stay QUEUED and auto-resume when the toggle flips back on.
+    let trailerDispatchAllowed = true;
+    if (run.kind === 'trailer') {
+      const settings = await db.collection('scanner_settings').findOne({ _id: 'trailer_scanner' });
+      trailerDispatchAllowed = Boolean(settings?.enabled);
+      if (!trailerDispatchAllowed) {
+        console.log(`[orchestrate] ${runIdStr}: scanner disabled — skipping GCP dispatches (${gcpActiveCount} still running)`);
+      }
+    }
+
+    if (trailerDispatchAllowed &&
+        (!gcpPausedUntil || nowMs() >= new Date(gcpPausedUntil).getTime())) {
       let seenH264 = 0;
       let seenH265 = 0;
+
+      // For trailer runs, enforce the "5 trailers in flight at a time" rule.
+      //
+      // Definitions:
+      //   "active"      = at least one codec is STARTING or RUNNING right now
+      //                   (consumes a GCP encoding slot).
+      //   "progressing" = either active OR has a SUCCEEDED codec still waiting
+      //                   for its sibling. A progressing trailer MUST be
+      //                   allowed to dispatch its remaining codec — blocking
+      //                   it leaves the trailer stuck forever.
+      //
+      // The trailer cap only defers STARTING a NEW trailer when 5 others are
+      // already active. A QUEUED status (from a failed dispatch attempt)
+      // without any SUCCEEDED codec is treated as "new" — it must respect
+      // the cap on retry.
+      const codecDone = (s) => s === 'STARTING' || s === 'RUNNING' || s === 'SUCCEEDED';
+      const countActiveTrailers = () => {
+        let n = 0;
+        for (const ep of episodes) {
+          if (ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING' ||
+              ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING') {
+            n++;
+          }
+        }
+        return n;
+      };
+      const trailerCap = run.kind === 'trailer' ? MAX_ACTIVE_TRAILERS : Infinity;
+      const isTrailerProgressing = (ep) => {
+        if (!ep) return false;
+        return codecDone(ep.gcp_h264_status) || codecDone(ep.gcp_h265_status);
+      };
 
       while (gcpActiveCount < MAX_GCP &&
              (gcpQueueH264.length > seenH264 || gcpQueueH265.length > seenH265)) {
@@ -641,6 +693,14 @@ export async function orchestrate(runIdStr) {
             const ep = episodesMap.get(job.episodeId);
             if (!ep || ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING' || ep.gcp_h264_status === 'SUCCEEDED') {
               // Discard — already handled
+            } else if (!isTrailerProgressing(ep) && countActiveTrailers() >= trailerCap) {
+              // Starting a NEW trailer would breach the 5-trailer cap.
+              // "Progressing" trailers (active codec OR one codec already
+              // SUCCEEDED) always bypass — blocking them would strand a
+              // half-done trailer.
+              gcpQueueH264.push(job);
+              await persistQueues();
+              seenH264++;
             } else {
               await persistQueues(); // persist queue shift BEFORE marking STARTING
               await updateEp(job.episodeId, { gcp_h264_status: 'STARTING', last_updated_at: nowDate() }, null);
@@ -688,6 +748,14 @@ export async function orchestrate(runIdStr) {
             const ep = episodesMap.get(job.episodeId);
             if (!ep || ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING' || ep.gcp_h265_status === 'SUCCEEDED') {
               // Discard
+            } else if (!isTrailerProgressing(ep) && countActiveTrailers() >= trailerCap) {
+              // Starting a NEW trailer would breach the 5-trailer cap.
+              // "Progressing" trailers (active codec OR one codec already
+              // SUCCEEDED) always bypass — blocking them would strand a
+              // half-done trailer.
+              gcpQueueH265.push(job);
+              await persistQueues();
+              seenH265++;
             } else {
               await persistQueues();
               await updateEp(job.episodeId, { gcp_h265_status: 'STARTING', last_updated_at: nowDate() }, null);
@@ -799,9 +867,10 @@ export async function orchestrate(runIdStr) {
             { step: 'QC', status: 'POST_FAILED (retry)', at: nowDate() });
         } else {
           const finAt = nowDate();
+          const nextStatus = run.kind === 'trailer' ? 'SYNC_PENDING' : 'READY_TO_SYNC';
           await updateEp(ep.episode_id, {
-            status: 'READY_TO_SYNC',
-            current_step: 'DONE',
+            status: nextStatus,
+            current_step: nextStatus === 'SYNC_PENDING' ? 'SYNC' : 'DONE',
             finished_at: finAt,
             duration_ms: ep.started_at ? finAt.getTime() - new Date(ep.started_at).getTime() : null,
             last_updated_at: finAt,
@@ -847,9 +916,13 @@ export async function orchestrate(runIdStr) {
 
       if (overall === 'PASS' || overall === 'ISSUES_FOUND') {
         const finAt = nowDate();
+        // Trailer runs wait in the non-terminal SYNC_PENDING state until Step 6.5
+        // completes the auto-sync. Episode runs keep the historical READY_TO_SYNC
+        // terminal state so the manual Sync Show button remains authoritative.
+        const nextStatus = run.kind === 'trailer' ? 'SYNC_PENDING' : 'READY_TO_SYNC';
         await updateEp(ep.episode_id, {
-          status: 'READY_TO_SYNC',
-          current_step: 'DONE',
+          status: nextStatus,
+          current_step: nextStatus === 'SYNC_PENDING' ? 'SYNC' : 'DONE',
           finished_at: finAt,
           duration_ms: ep.started_at ? finAt.getTime() - new Date(ep.started_at).getTime() : null,
           last_updated_at: finAt,
@@ -865,9 +938,10 @@ export async function orchestrate(runIdStr) {
           } catch { /* retry POST fire-and-forget */ }
         } else {
           const finAt = nowDate();
+          const nextStatus = run.kind === 'trailer' ? 'SYNC_PENDING' : 'READY_TO_SYNC';
           await updateEp(ep.episode_id, {
-            status: 'READY_TO_SYNC',
-            current_step: 'DONE',
+            status: nextStatus,
+            current_step: nextStatus === 'SYNC_PENDING' ? 'SYNC' : 'DONE',
             finished_at: finAt,
             duration_ms: ep.started_at ? finAt.getTime() - new Date(ep.started_at).getTime() : null,
             last_updated_at: finAt,
@@ -875,6 +949,62 @@ export async function orchestrate(runIdStr) {
         }
       } else if (overall !== null && overall !== 'RUNNING') {
         console.warn(`[orchestrate] Unexpected QC status '${overall}' for ${ep.episode_id}`);
+      }
+    }
+
+    // ── STEP 6.5: auto-sync trailers ──────────────────────────────────────────
+    // Trailer runs park in SYNC_PENDING until this step writes gcpUrl back to
+    // showcache. On success → SYNCED (terminal). On failure → increment
+    // retries.sync and stay in SYNC_PENDING (non-terminal) so the next tick
+    // retries. When retries exhaust we fall back to READY_TO_SYNC (terminal)
+    // as a safety net the manual Sync Show button can still resolve.
+    if (run.kind === 'trailer') {
+      for (const ep of episodes) {
+        if (ep.status !== 'SYNC_PENDING') continue;
+        const sr = ep.retries?.sync ?? 0;
+
+        let combinedUrl = ep.combined_master_m3u8_url || null;
+        if (!combinedUrl) {
+          try {
+            const veDoc = await db.collection('video_episodes').findOne(
+              { episode_id: ep.episode_id },
+              { projection: { combined_master_m3u8_url: 1 } },
+            );
+            combinedUrl = veDoc?.combined_master_m3u8_url || null;
+            if (combinedUrl) ep.combined_master_m3u8_url = combinedUrl;
+          } catch { /* retry next tick */ }
+        }
+        if (!combinedUrl) continue; // next tick
+
+        let syncRes;
+        try {
+          syncRes = await internalPost('/api/sync-showcache-trailer', {
+            episodeId: ep.episode_id,
+            signedPlaybackUrl: combinedUrl,
+          });
+        } catch (err) {
+          syncRes = { status: 500, _err: err?.message };
+        }
+
+        if (syncRes.status === 200) {
+          const syncedAt = nowDate();
+          await updateEp(ep.episode_id, {
+            status: 'SYNCED',
+            current_step: 'DONE',
+            synced_at: syncedAt,
+            last_updated_at: syncedAt,
+          }, { step: 'SYNC', status: 'DONE', at: syncedAt });
+        } else if (sr < MAX_SYNC_RETRIES) {
+          ep.retries = { ...(ep.retries || {}), sync: sr + 1 };
+          await updateEp(ep.episode_id, { 'retries.sync': ep.retries.sync },
+            { step: 'SYNC', status: `RETRY (${syncRes.status}) ${sr + 1}/${MAX_SYNC_RETRIES}`, at: nowDate() });
+        } else {
+          await updateEp(ep.episode_id, {
+            status: 'READY_TO_SYNC',
+            current_step: 'DONE',
+            last_updated_at: nowDate(),
+          }, { step: 'SYNC', status: `FAILED_FINAL (${syncRes.status})`, at: nowDate() });
+        }
       }
     }
 
@@ -908,7 +1038,7 @@ export async function orchestrate(runIdStr) {
     // ── STEP 8: updateProgressCounters ────────────────────────────────────────
     const completedCount = episodes.filter(ep => ep.status === 'READY_TO_SYNC' || ep.status === 'SYNCED').length;
     const failedCount   = episodes.filter(ep => ep.status === 'FAILED').length;
-    const runningCount  = episodes.filter(ep => ep.status === 'LAB_RUNNING' || ep.status === 'GCP_RUNNING' || ep.status === 'COMBINING').length;
+    const runningCount  = episodes.filter(ep => ep.status === 'LAB_RUNNING' || ep.status === 'GCP_RUNNING' || ep.status === 'COMBINING' || ep.status === 'SYNC_PENDING').length;
     const skippedCount  = episodes.filter(ep => ep.status === 'SKIPPED').length;
 
     // Circuit breaker: >50% GCP failures in last 10 min → pause 5 min

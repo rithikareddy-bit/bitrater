@@ -190,6 +190,192 @@ function RollChip({ children, color }) {
   );
 }
 
+function TrailerAutomationToggle({ enabled, updatedAt, toggling, onToggle }) {
+  const loading = enabled === null;
+  const on = enabled === true;
+  const label = loading
+    ? 'Loading…'
+    : on
+      ? 'Automation: ON'
+      : 'Automation: OFF';
+  const color = loading ? '#555' : on ? '#22c55e' : '#64748b';
+  const bg = loading ? '#1a1a1a' : on ? 'rgba(34,197,94,0.08)' : '#1a1a1a';
+  const actionLabel = on ? 'Stop' : 'Start';
+
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '6px 10px 6px 12px',
+        borderRadius: 8,
+        border: `1px solid ${on ? '#166534' : '#2a2a2a'}`,
+        background: bg,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: color,
+          boxShadow: on ? `0 0 6px ${color}` : 'none',
+          animation: on ? 'pulse 2s ease-in-out infinite' : 'none',
+        }}
+      />
+      <span style={{ fontSize: 12, fontWeight: 600, color }}>{label}</span>
+      {updatedAt && (
+        <span style={{ fontSize: 10, color: '#64748b' }}>
+          {new Date(updatedAt).toLocaleTimeString()}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={loading || toggling}
+        title={on
+          ? 'Disable the 5-min scanner — new/legacy trailers will stop auto-encoding'
+          : 'Enable the 5-min scanner — trailers will auto-encode indefinitely'}
+        style={{
+          padding: '4px 10px',
+          borderRadius: 5,
+          border: `1px solid ${on ? '#4a1a1a' : '#166534'}`,
+          background: on ? '#2a0f0f' : '#14532d',
+          color: on ? '#f87171' : '#4ade80',
+          fontSize: 11,
+          fontWeight: 600,
+          cursor: (loading || toggling) ? 'not-allowed' : 'pointer',
+          opacity: (loading || toggling) ? 0.5 : 1,
+        }}
+      >
+        {toggling ? '…' : actionLabel}
+      </button>
+    </div>
+  );
+}
+
+const RUN_STATUS_COLOR = {
+  SYNCED: '#22c55e',
+  SYNC_PENDING: '#38bdf8',
+  READY_TO_SYNC: '#38bdf8',
+  COMBINING: '#a855f7',
+  GCP_RUNNING: '#f59e0b',
+  LAB_RUNNING: '#f59e0b',
+  QUEUED: '#64748b',
+  SKIPPED: '#475569',
+  FAILED: '#ef4444',
+  CANCELLED: '#94a3b8',
+};
+
+function RunStatusDot({ status }) {
+  const color = RUN_STATUS_COLOR[status] || '#555';
+  const pulse = status === 'GCP_RUNNING' || status === 'LAB_RUNNING' || status === 'COMBINING' || status === 'SYNC_PENDING';
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: 'inline-block',
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        background: color,
+        boxShadow: pulse ? `0 0 6px ${color}` : 'none',
+        animation: pulse ? 'pulse 2s ease-in-out infinite' : 'none',
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+function formatAbsTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '—';
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${date} ${time}`;
+}
+
+function RecentTrailerRuns({ rows, loading, onSelectShow }) {
+  return (
+    <div>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
+      }}>
+        <div style={{
+          fontSize: 12, fontWeight: 600, color: '#888',
+          textTransform: 'uppercase', letterSpacing: '0.05em',
+        }}>
+          Trailer run history
+        </div>
+        {rows.length > 0 && (
+          <span style={{ fontSize: 10, color: '#475569' }}>
+            {rows.length} record{rows.length === 1 ? '' : 's'} · persisted
+          </span>
+        )}
+      </div>
+      {loading && rows.length === 0 && (
+        <p style={{ color: '#555', fontSize: 12, margin: 0 }}>Loading…</p>
+      )}
+      {!loading && rows.length === 0 && (
+        <p style={{ color: '#555', fontSize: 12, margin: 0, lineHeight: 1.5 }}>
+          No trailer runs yet. The scanner picks up new trailers every 5 minutes.
+        </p>
+      )}
+      {rows.length > 0 && (
+        <div style={{
+          maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column',
+          gap: 6, paddingRight: 4,
+        }}>
+          {rows.map((r) => {
+            const ts = r.syncedAt || r.finishedAt || r.lastUpdatedAt || r.runCreatedAt;
+            return (
+              <button
+                key={`${r.runId}:${r.episodeId}`}
+                type="button"
+                onClick={() => r.showId && onSelectShow && onSelectShow(r.showId)}
+                title={r.error || `${r.status || '—'}${r.currentStep ? ' · ' + r.currentStep : ''}`}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8,
+                  background: '#111', border: '1px solid #222',
+                  borderRadius: 6, padding: '8px 10px',
+                  textAlign: 'left', cursor: r.showId ? 'pointer' : 'default',
+                  color: '#e2e8f0', fontSize: 12, lineHeight: 1.4,
+                }}
+              >
+                <span style={{ marginTop: 4 }}>
+                  <RunStatusDot status={r.status} />
+                </span>
+                <span style={{ flex: '1 1 auto', minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                    <span style={{ color: '#94a3b8', fontWeight: 500 }}>{r.showTitle}</span>
+                    <span style={{ color: '#475569' }}>—</span>
+                    <span style={{ color: '#e2e8f0' }}>{r.trailerTitle}</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: '#64748b', marginTop: 2, fontFamily: 'ui-monospace, monospace' }}>
+                    {formatAbsTime(ts)}
+                    <span style={{ margin: '0 6px', color: '#334155' }}>·</span>
+                    <span>{r.status || '—'}</span>
+                    {r.currentStep && r.status !== 'SYNCED' && r.status !== 'FAILED' && (
+                      <>
+                        <span style={{ margin: '0 6px', color: '#334155' }}>·</span>
+                        <span>{r.currentStep}</span>
+                      </>
+                    )}
+                  </div>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ShowStatsPanel({ stats }) {
   if (!stats) return null;
   const c = stats.consumption;
@@ -449,6 +635,17 @@ export default function ShowOverviewPage() {
   const [pipelineError, setPipelineError]   = useState(null);
   const pipelineTimerRef = useRef(null);
 
+  // ── Recent trailer activity feed ────────────────────────────────────────────
+  const [recentRuns, setRecentRuns] = useState([]);
+  const [recentLoading, setRecentLoading] = useState(true);
+  const recentTimerRef = useRef(null);
+
+  // ── Trailer automation toggle ───────────────────────────────────────────────
+  const [scannerEnabled, setScannerEnabled] = useState(null); // null = loading
+  const [scannerUpdatedAt, setScannerUpdatedAt] = useState(null);
+  const [scannerToggling, setScannerToggling] = useState(false);
+  const scannerTimerRef = useRef(null);
+
   const timerRef = useRef(null);
   const visibleRef = useRef(true);
 
@@ -538,6 +735,72 @@ export default function ShowOverviewPage() {
     };
   }, [selectedId, pollMs, loadLive]);
 
+  // ── Scanner toggle state: fetch on mount + poll every 15 s ────────────────
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/trailer-scanner');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) {
+          setScannerEnabled(Boolean(data?.enabled));
+          setScannerUpdatedAt(data?.updated_at || null);
+        }
+      } catch { /* non-fatal */ }
+    };
+    load();
+    scannerTimerRef.current = setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      if (scannerTimerRef.current) clearInterval(scannerTimerRef.current);
+    };
+  }, []);
+
+  const toggleScanner = useCallback(async () => {
+    if (scannerEnabled === null || scannerToggling) return;
+    setScannerToggling(true);
+    try {
+      const res = await fetch('/api/trailer-scanner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !scannerEnabled }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setScannerEnabled(Boolean(data?.enabled));
+        setScannerUpdatedAt(data?.updated_at || null);
+      }
+    } catch { /* non-fatal */ }
+    finally {
+      setScannerToggling(false);
+    }
+  }, [scannerEnabled, scannerToggling]);
+
+  // ── Recent trailer activity: initial fetch + 15 s poll ────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/trailer-runs?limit=200');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data?.rows)) {
+          setRecentRuns(data.rows);
+        }
+      } catch { /* non-fatal */ }
+      finally {
+        if (!cancelled) setRecentLoading(false);
+      }
+    };
+    load();
+    recentTimerRef.current = setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      if (recentTimerRef.current) clearInterval(recentTimerRef.current);
+    };
+  }, []);
+
   // ── Poll pipeline status every 10 s while a run is known ─────────────────
   useEffect(() => {
     if (!pipelineRunId) return;
@@ -568,6 +831,12 @@ export default function ShowOverviewPage() {
           Trailer overview
           <S3NotificationBell fetchUrl="/api/s3-notifications" />
         </h1>
+        <TrailerAutomationToggle
+          enabled={scannerEnabled}
+          updatedAt={scannerUpdatedAt}
+          toggling={scannerToggling}
+          onToggle={toggleScanner}
+        />
       </div>
 
       <div
@@ -721,6 +990,14 @@ export default function ShowOverviewPage() {
             )}
             {live?.stats && <ShowStatsPanel stats={live.stats} />}
           </div>
+
+          <div className="show-overview-activity" style={{ flex: '1 1 320px', minWidth: 280 }}>
+            <RecentTrailerRuns
+              rows={recentRuns}
+              loading={recentLoading}
+              onSelectShow={(id) => setSelectedId(id)}
+            />
+          </div>
         </div>
       </div>
 
@@ -792,12 +1069,12 @@ export default function ShowOverviewPage() {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.45; }
         }
-        .show-overview-stats {
+        .show-overview-stats, .show-overview-activity {
           border-left: 1px solid #2a2a2a;
           padding-left: 28px;
         }
         @media (max-width: 720px) {
-          .show-overview-stats {
+          .show-overview-stats, .show-overview-activity {
             border-left: none;
             padding-left: 0;
             border-top: 1px solid #2a2a2a;
