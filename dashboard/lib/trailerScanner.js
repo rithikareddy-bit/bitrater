@@ -36,6 +36,35 @@ function batchMax() {
   return Number.isFinite(raw) && raw > 0 ? raw : BATCH_MAX;
 }
 
+function probeConcurrency() {
+  // Cap parallel ffprobes during batch prep. Cross-region S3 fetches (dashboard
+  // in us-east-1, sources in ap-south-2) saturate bandwidth when ~20 probes
+  // run at once, triggering the ffprobe timeout and dumping the whole batch.
+  const raw = parseInt(process.env.TRAILER_PROBE_CONCURRENCY || '5', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 5;
+}
+
+async function probeBatchWithLimit(candidates, probeErrors) {
+  let idx = 0;
+  const worker = async () => {
+    while (true) {
+      const i = idx++;
+      if (i >= candidates.length) return;
+      const c = candidates[i];
+      try {
+        await prepareTrailer({ episodeId: c.episodeId, s3Url: c.s3Url });
+      } catch (err) {
+        probeErrors.set(c.episodeId, err?.message || 'probe failed');
+      }
+    }
+  };
+  const workers = Array.from(
+    { length: Math.min(probeConcurrency(), candidates.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+}
+
 function trailerSyntheticId(showIdHex, key) {
   return `trailer_${showIdHex}_${key}`;
 }
@@ -431,16 +460,12 @@ export async function scanTrailersOnce({ force = false } = {}) {
 
     // Probe + write synthetic golden_recipes for each batched trailer. Per-
     // trailer errors become SKIPPED episodes so one bad source doesn't block
-    // the batch.
+    // the batch. Concurrency is capped (see probeConcurrency) because firing
+    // all probes at once saturates cross-region S3 bandwidth and causes the
+    // ffprobe timeout to fire on most of them.
     const nowDate = new Date();
     const probeErrors = new Map();
-    await Promise.all(slice.map(async (c) => {
-      try {
-        await prepareTrailer({ episodeId: c.episodeId, s3Url: c.s3Url });
-      } catch (err) {
-        probeErrors.set(c.episodeId, err?.message || 'probe failed');
-      }
-    }));
+    await probeBatchWithLimit(slice, probeErrors);
 
     const okCandidates = slice.filter(c => !probeErrors.has(c.episodeId));
     if (okCandidates.length === 0) {

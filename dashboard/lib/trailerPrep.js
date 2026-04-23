@@ -43,23 +43,43 @@ function parseS3Url(url) {
 export async function probeTrailerFps(s3Url) {
   const { bucket, key, region } = parseS3Url(s3Url);
   const s3 = new S3Client({ region: region || process.env.AWS_REGION || 'ap-south-2' });
+  // URL must outlive the ffprobe timeout below — otherwise a slow probe retries
+  // against an already-expired URL and fails with 403.
   const presigned = await getSignedUrl(
     s3,
     new GetObjectCommand({ Bucket: bucket, Key: key }),
-    { expiresIn: 120 },
+    { expiresIn: 300 },
   );
 
-  const { stdout } = await execFileAsync(
-    'ffprobe',
-    [
-      '-v', 'error',
-      '-select_streams', 'v:0',
-      '-show_entries', 'stream=r_frame_rate',
-      '-of', 'json',
-      presigned,
-    ],
-    { timeout: 30000 },
-  );
+  let stdout;
+  try {
+    const result = await execFileAsync(
+      'ffprobe',
+      [
+        '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=r_frame_rate',
+        '-of', 'json',
+        presigned,
+      ],
+      { timeout: 120000, maxBuffer: 1024 * 1024 },
+    );
+    stdout = result.stdout;
+  } catch (err) {
+    // Default err.message is just "Command failed: ffprobe ..." — preserve
+    // signal/exit-code/stderr so the scanner can persist a diagnosable reason.
+    const stderr = String(err?.stderr || '').trim().slice(0, 400);
+    const parts = [
+      err?.killed ? 'killed=true' : null,
+      err?.signal ? `signal=${err.signal}` : null,
+      Number.isInteger(err?.code) ? `exit=${err.code}` : null,
+      stderr ? `stderr=${stderr}` : null,
+    ].filter(Boolean);
+    const suffix = parts.length ? ` (${parts.join(' · ')})` : '';
+    const wrapped = new Error(`ffprobe failed for ${bucket}/${key}${suffix}`);
+    wrapped.cause = err;
+    throw wrapped;
+  }
 
   const data = JSON.parse(stdout);
   const stream = (data.streams || [])[0] || {};

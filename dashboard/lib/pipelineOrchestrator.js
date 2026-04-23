@@ -272,6 +272,11 @@ export async function orchestrate(runIdStr) {
       if (ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING') gcpActiveCount++;
       if (ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING') gcpActiveCount++;
 
+      // Skip terminal episodes on resume — SKIPPED trailers have lab_status
+      // 'COMPLETE' stamped by makeBatchEpisodeDoc but no video_episodes row,
+      // so re-enqueueing them would spin /api/gcp in a 400 retry loop.
+      if (isTerminal(ep)) continue;
+
       // Re-enqueue GCP H.264 if lab complete but not in queue
       const inQ264 = gcpQueueH264.some(j => j.episodeId === ep.episode_id);
       if (ep.lab_h264_status === 'COMPLETE' &&
