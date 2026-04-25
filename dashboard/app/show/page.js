@@ -1197,7 +1197,7 @@ function EpisodeActions({ row, onActionDone }) {
     return apiCall('sync', '/api/sync-showcache-episode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ episodeId: epId, signedPlaybackUrl: localCombinedUrl }),
+      body: JSON.stringify({ episodeId: epId }),
     });
   };
 

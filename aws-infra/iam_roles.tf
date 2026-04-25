@@ -2,7 +2,7 @@
 resource "aws_iam_role" "batch_service_role" {
   name = "chai-q-batch-service-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "batch.amazonaws.com" } }]
   })
 }
@@ -51,7 +51,7 @@ resource "aws_iam_instance_profile" "batch_instance_profile" {
 resource "aws_iam_role" "step_function_role" {
   name = "chai-q-step-function-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "states.amazonaws.com" } }]
   })
 }
@@ -94,8 +94,8 @@ resource "aws_iam_role" "amazon_ec2_spot_fleet_role" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "spotfleet.amazonaws.com" }
     }]
   })
@@ -160,6 +160,12 @@ resource "aws_iam_role_policy" "gcp_lambda_policy" {
         Action   = ["secretsmanager:GetSecretValue"]
         Effect   = "Allow"
         Resource = local.gcp_credentials_secret_arn_effective
+      },
+      {
+        Sid      = "SecretsManagerMediaCdnSigningKey"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Effect   = "Allow"
+        Resource = "arn:aws:secretsmanager:*:*:secret:${var.media_cdn_signing_key_secret_id}-*"
       }
     ]
   })

@@ -176,9 +176,9 @@ resource "aws_lambda_function" "search_orchestrator" {
 
   environment {
     variables = {
-      MONGO_URI                 = var.mongo_uri
-      BATCH_JOB_QUEUE_ARN       = aws_batch_job_queue.chai_q_queue.arn
-      BATCH_JOB_DEFINITION_ARN  = aws_batch_job_definition.chai_q_worker_def.arn
+      MONGO_URI                = var.mongo_uri
+      BATCH_JOB_QUEUE_ARN      = aws_batch_job_queue.chai_q_queue.arn
+      BATCH_JOB_DEFINITION_ARN = aws_batch_job_definition.chai_q_worker_def.arn
     }
   }
 }
@@ -381,19 +381,29 @@ data "archive_file" "ffmpeg_layer_zip" {
 }
 
 # FFmpeg binary zip exceeds Lambda's 70 MB direct-upload limit — upload via S3 first.
+# null_resource.ffmpeg_layer_build gates actual content changes via its `version`
+# trigger. The archive_file's output_md5 fluctuates across re-zips even when the
+# ffmpeg binary is byte-identical (zip header timestamps aren't deterministic), so
+# we ignore `etag` + `source` drift to prevent unnecessary 60 MB re-uploads on
+# every `terraform apply`. Bump the null_resource's `version` trigger to force an
+# actual ffmpeg upgrade.
 resource "aws_s3_object" "ffmpeg_layer_zip" {
   bucket = aws_s3_bucket.raw_input.id
   key    = "lambda-layers/ffmpeg-layer.zip"
   source = data.archive_file.ffmpeg_layer_zip.output_path
   etag   = data.archive_file.ffmpeg_layer_zip.output_md5
+
+  lifecycle {
+    ignore_changes = [etag, source]
+  }
 }
 
 resource "aws_lambda_layer_version" "ffmpeg" {
-  layer_name               = "chai-q-ffmpeg"
-  s3_bucket                = aws_s3_object.ffmpeg_layer_zip.bucket
-  s3_key                   = aws_s3_object.ffmpeg_layer_zip.key
-  source_code_hash         = data.archive_file.ffmpeg_layer_zip.output_base64sha256
-  compatible_runtimes      = ["python3.11"]
+  layer_name          = "chai-q-ffmpeg"
+  s3_bucket           = aws_s3_object.ffmpeg_layer_zip.bucket
+  s3_key              = aws_s3_object.ffmpeg_layer_zip.key
+  source_code_hash    = data.archive_file.ffmpeg_layer_zip.output_base64sha256
+  compatible_runtimes = ["python3.11"]
 }
 
 # --- QualityChecker Lambda ---
@@ -412,7 +422,7 @@ resource "aws_lambda_function" "quality_checker" {
   runtime          = "python3.11"
   timeout          = 600
   memory_size      = 1024
-  layers           = [
+  layers = [
     aws_lambda_layer_version.pymongo.arn,
     aws_lambda_layer_version.ffmpeg.arn,
   ]
@@ -437,4 +447,40 @@ resource "aws_sfn_state_machine" "gcp_orchestrator" {
     gcp_check_status_lambda_arn = aws_lambda_function.gcp_check_status.arn
     gcp_finalize_lambda_arn     = aws_lambda_function.gcp_finalize.arn
   })
+}
+
+# --- Resign Playback URLs Lambda ---
+# Bundles the handler + shared signer helper into one zip so the runtime can import both.
+data "archive_file" "resign_playback_urls_zip" {
+  type        = "zip"
+  output_path = "/tmp/chai-q-resign-playback-urls.zip"
+
+  source {
+    content  = file("../orchestrator/resign_playback_urls.py")
+    filename = "resign_playback_urls.py"
+  }
+  source {
+    content  = file("../orchestrator/media_cdn_signer.py")
+    filename = "media_cdn_signer.py"
+  }
+}
+
+resource "aws_lambda_function" "resign_playback_urls" {
+  filename         = data.archive_file.resign_playback_urls_zip.output_path
+  source_code_hash = data.archive_file.resign_playback_urls_zip.output_base64sha256
+  function_name    = "chai-q-resign-playback-urls"
+  role             = aws_iam_role.gcp_lambda_role.arn
+  handler          = "resign_playback_urls.handler"
+  runtime          = "python3.11"
+  timeout          = 900 # Max allowed. Full sweep across 549 episodes × ~12 files each.
+  memory_size      = 512
+  layers           = [aws_lambda_layer_version.gcp_deps.arn]
+
+  environment {
+    variables = merge(local.gcp_lambda_env, {
+      SIGNING_KEY_SECRET_ID  = var.media_cdn_signing_key_secret_id
+      SIGNED_URL_TTL_SECONDS = tostring(var.signed_url_ttl_seconds)
+      SIGNING_ENABLED        = tostring(var.signing_enabled)
+    })
+  }
 }

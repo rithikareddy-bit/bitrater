@@ -70,9 +70,9 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "ManageStepFunction"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "ManageStepFunction"
+        Effect = "Allow"
+        Action = [
           "states:StartExecution",
           "states:StopExecution",
         ]
@@ -100,12 +100,13 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
         Resource = "*"
       },
       {
-        Sid      = "InvokeLambdas"
-        Effect   = "Allow"
-        Action   = "lambda:InvokeFunction"
+        Sid    = "InvokeLambdas"
+        Effect = "Allow"
+        Action = "lambda:InvokeFunction"
         Resource = [
           aws_lambda_function.gcp_create_combined_master.arn,
           aws_lambda_function.quality_checker.arn,
+          aws_lambda_function.resign_playback_urls.arn,
         ]
       }
     ]
@@ -128,20 +129,27 @@ resource "aws_apprunner_service" "dashboard" {
 
       image_configuration {
         port = "3000"
-        runtime_environment_variables = {
-          MONGO_URI               = var.mongo_uri
-          SFN_ARN                 = aws_sfn_state_machine.research_orchestrator.arn
-          SFN_ARN_H264            = aws_sfn_state_machine.research_orchestrator_h264.arn
-          SFN_ARN_H265            = aws_sfn_state_machine.research_orchestrator_h265.arn
-          GCP_SFN_ARN             = aws_sfn_state_machine.gcp_orchestrator.arn
-          BATCH_JOB_QUEUE         = aws_batch_job_queue.chai_q_queue.name
-          CREATE_COMBINED_MASTER_LAMBDA_ARN = aws_lambda_function.gcp_create_combined_master.arn
-          QUALITY_CHECK_LAMBDA_ARN          = aws_lambda_function.quality_checker.arn
-          NEXT_TELEMETRY_DISABLED           = "1"
-          VTT_WORKER_URL                    = var.vtt_worker_url
-          VTT_WORKER_SECRET                 = var.vtt_worker_secret
-          # AWS_REGION is set automatically by App Runner
-        }
+        # AppRunner silently drops empty-string env vars from its API response, so
+        # declaring VTT_WORKER_URL / VTT_WORKER_SECRET unconditionally as `""` causes
+        # perpetual drift. Emit them only when set to a non-empty value.
+        runtime_environment_variables = merge(
+          {
+            MONGO_URI                         = var.mongo_uri
+            SFN_ARN                           = aws_sfn_state_machine.research_orchestrator.arn
+            SFN_ARN_H264                      = aws_sfn_state_machine.research_orchestrator_h264.arn
+            SFN_ARN_H265                      = aws_sfn_state_machine.research_orchestrator_h265.arn
+            GCP_SFN_ARN                       = aws_sfn_state_machine.gcp_orchestrator.arn
+            BATCH_JOB_QUEUE                   = aws_batch_job_queue.chai_q_queue.name
+            CREATE_COMBINED_MASTER_LAMBDA_ARN = aws_lambda_function.gcp_create_combined_master.arn
+            QUALITY_CHECK_LAMBDA_ARN          = aws_lambda_function.quality_checker.arn
+            RESIGN_PLAYBACK_URLS_LAMBDA_ARN   = aws_lambda_function.resign_playback_urls.arn
+            RESIGN_SCHEDULE_EXPRESSION        = var.resign_schedule_expression
+            SIGNED_URL_TTL_SECONDS            = tostring(var.signed_url_ttl_seconds)
+            NEXT_TELEMETRY_DISABLED           = "1"
+          },
+          var.vtt_worker_url != "" ? { VTT_WORKER_URL = var.vtt_worker_url } : {},
+          var.vtt_worker_secret != "" ? { VTT_WORKER_SECRET = var.vtt_worker_secret } : {},
+        )
       }
     }
 

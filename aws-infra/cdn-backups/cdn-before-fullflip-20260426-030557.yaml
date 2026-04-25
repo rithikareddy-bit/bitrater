@@ -1,0 +1,79 @@
+edgeSslCertificates:
+- projects/623432890759/locations/global/certificates/media-cdn-ssl
+logConfig:
+  enable: true
+  sampleRate: 1.0
+name: projects/media-cdn-poc-466009/locations/global/edgeCacheServices/chai-shorts-media-cdn
+routing:
+  hostRules:
+  - hosts:
+    - cdn.chaishots.in
+    pathMatcher: path-matcher-0
+  pathMatchers:
+  - name: path-matcher-0
+    routeRules:
+    - headerAction:
+        responseHeadersToAdd:
+        - headerName: x-cache-status
+          headerValue: '{cdn_cache_status}'
+      matchRules:
+      - prefixMatch: /952f7ffa-9d21-4016-872f-b9be3ed97009/
+      origin: projects/623432890759/locations/global/edgeCacheOrigins/chai-shots-manifests
+      priority: 1
+      routeAction:
+        cdnPolicy:
+          cacheKeyPolicy:
+            excludeQueryString: true
+          cacheMode: USE_ORIGIN_HEADERS
+          negativeCaching: true
+          signedRequestKeyset: projects/media-cdn-poc-466009/locations/global/edgeCacheKeysets/chaishots-playback-keyset
+          signedRequestMode: REQUIRE_SIGNATURES
+        compressionMode: AUTOMATIC
+        corsPolicy:
+          allowCredentials: true
+          allowHeaders:
+          - '*'
+          allowMethods:
+          - '*'
+          allowOrigins:
+          - '*'
+          exposeHeaders:
+          - '*'
+          maxAge: 86400s
+      routeMethods:
+        allowedMethods:
+        - GET
+        - HEAD
+        - OPTIONS
+    - headerAction:
+        responseHeadersToAdd:
+        - headerName: x-cache-status
+          headerValue: '{cdn_cache_status}'
+      matchRules:
+      - prefixMatch: /
+      origin: projects/623432890759/locations/global/edgeCacheOrigins/chai-shots-manifests
+      priority: 2
+      routeAction:
+        cdnPolicy:
+          cacheKeyPolicy:
+            excludeQueryString: true
+          cacheMode: USE_ORIGIN_HEADERS
+          negativeCaching: true
+          signedRequestMode: DISABLED
+        compressionMode: AUTOMATIC
+        corsPolicy:
+          allowCredentials: true
+          allowHeaders:
+          - '*'
+          allowMethods:
+          - '*'
+          allowOrigins:
+          - '*'
+          exposeHeaders:
+          - '*'
+          maxAge: 86400s
+      routeMethods:
+        allowedMethods:
+        - GET
+        - HEAD
+        - OPTIONS

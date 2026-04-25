@@ -136,7 +136,7 @@ async function trySyncOnly({ episodeId, combinedUrl }) {
     const res = await fetch(`${getBaseUrl()}/api/sync-showcache-trailer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ episodeId, signedPlaybackUrl: combinedUrl }),
+      body: JSON.stringify({ episodeId }),
     });
     if (res.ok) return { ok: true };
     const body = await res.json().catch(() => ({}));

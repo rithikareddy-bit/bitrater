@@ -74,12 +74,11 @@ export async function POST(request) {
     const failed = [];
 
     for (const episodeId of readyIds) {
-      const signedPlaybackUrl = urlMap.get(episodeId);
       try {
         const res = await fetch(`${baseUrl}${syncPath}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ episodeId, signedPlaybackUrl }),
+          body: JSON.stringify({ episodeId }),
         });
         if (res.ok) {
           synced.push(episodeId);

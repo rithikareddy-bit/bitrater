@@ -307,7 +307,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       const res = await fetch(syncPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ episodeId, signedPlaybackUrl: combinedUrl }),
+        body: JSON.stringify({ episodeId }),
       });
       let data = {};
       try {

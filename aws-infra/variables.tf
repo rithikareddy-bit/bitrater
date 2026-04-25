@@ -54,3 +54,33 @@ variable "vtt_worker_secret" {
   sensitive   = true
   default     = ""
 }
+
+variable "media_cdn_signing_key_secret_id" {
+  description = "Secrets Manager secret name (or ARN) holding the Ed25519 private key for Media CDN URL signing. JSON body: {\"key_name\":\"...\",\"private_key_b64url\":\"...\"}."
+  type        = string
+  default     = "chai-q/media-cdn-signing-key"
+}
+
+variable "signed_url_ttl_seconds" {
+  description = "TTL for generated signed URLs in seconds. Production: 36000 (10 h) — gives 8 h guaranteed mid-playback margin against the 2 h rotation."
+  type        = number
+  default     = 36000
+}
+
+variable "resign_schedule_expression" {
+  description = "EventBridge schedule for the full-sweep resigner. Production: rate(2 hours) — paired with 10 h TTL for 8 h mid-playback safety."
+  type        = string
+  default     = "rate(2 hours)"
+}
+
+variable "resign_schedule_enabled" {
+  description = "Whether the resigner EventBridge rule is enabled. Default true (production state). Set false only for emergency disable."
+  type        = bool
+  default     = true
+}
+
+variable "signing_enabled" {
+  description = "Master kill switch for the resigner Lambda. When false, sync-route invocations write canonical URLs as-is (no signing, no GCS rewrite) and clear any stale signed_playback_expires_at. Default true (production state). Set false only for emergency disable."
+  type        = bool
+  default     = true
+}

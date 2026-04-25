@@ -985,7 +985,6 @@ export async function orchestrate(runIdStr) {
         try {
           syncRes = await internalPost('/api/sync-showcache-trailer', {
             episodeId: ep.episode_id,
-            signedPlaybackUrl: combinedUrl,
           });
         } catch (err) {
           syncRes = { status: 500, _err: err?.message };
