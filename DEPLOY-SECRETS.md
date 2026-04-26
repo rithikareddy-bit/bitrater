@@ -106,7 +106,32 @@ gcloud edge-cache services import chai-shorts-media-cdn --source=/tmp/cdn.yaml
 
 ~60 seconds of propagation and viewers are back to unsigned access. Resigner continues writing signed URLs in the background — a no-op from the viewer's perspective while disabled — so re-enabling later is a single `gcloud` apply cycle.
 
-### 6. Key rotation
+### 6. Ownership & access — who is allowed to touch what
+
+The signing system has three components that live **outside** Terraform and break production immediately if changed without coordination. Treat changes to any of these as a deploy event with an announcement.
+
+| Component | Where it lives | Who should touch it | Blast radius if mishandled |
+|---|---|---|---|
+| **AWS Secrets Manager: `chai-q/media-cdn-signing-key`** | AWS console / CLI | Designated signing-key owner only. Rotations follow §6 (now §7). | Every signed URL becomes invalid within ~minutes (cache TTL); all combined-URL playback returns 403 until restored. |
+| **GCP Media CDN keyset: `chaishots-playback-keyset`** | `gcloud edge-cache keysets` | Same person as above + GCP project owner. | Removing the public key from the keyset has the same effect as losing the private key — instant 403 for every signed URL. |
+| **GCP Media CDN service route rules: `chai-shorts-media-cdn`** | `gcloud edge-cache services export/import` | GCP project owner only. Always export → diff → import (never edit live). | Removing the priority-2 `/hls/*` passthrough rule 403s ~2,652 legacy episodes. Removing the catch-all REQUIRE_SIGNATURES rule silently turns off signing protection (worse — viewers don't notice but URLs are no longer enforced). |
+
+**Backups (recovery materials, keep current):**
+
+- **Signing key:** export once and store in 1Password (or equivalent). `aws secretsmanager get-secret-value --secret-id chai-q/media-cdn-signing-key --region us-east-1 --query SecretString --output text > ~/Desktop/chai-q-signing-key-backup.json && chmod 600 $_`. Move to 1Password and delete the local copy.
+- **CDN route-rule snapshots:** committed to `aws-infra/cdn-backups/`. To rollback: `gcloud edge-cache services import chai-shorts-media-cdn --source=aws-infra/cdn-backups/<snapshot>.yaml`. Take a fresh snapshot before any change: `gcloud edge-cache services export chai-shorts-media-cdn --destination=aws-infra/cdn-backups/cdn-before-<change>-$(date -u +%Y%m%d-%H%M%S).yaml`.
+- **GCP keyset / public key:** recoverable from the private key — re-derive with the Python snippet in §1 if needed.
+
+**Things that ARE in Terraform and are safe to change with `terraform plan` review:**
+
+- Resigner Lambda code (`orchestrator/resign_playback_urls.py`, `orchestrator/media_cdn_signer.py`)
+- TTL, schedule, kill switches (`signed_url_ttl_seconds`, `resign_schedule_expression`, `signing_enabled`, `resign_schedule_enabled` in `aws-infra/variables.tf`)
+- Lambda IAM (`aws-infra/iam_roles.tf`)
+- App Runner env vars + IAM (`aws-infra/apprunner.tf`)
+
+For these: a `terraform plan` shows the full diff before apply. Safe by default.
+
+### 7. Key rotation
 
 To rotate the signing key:
 
