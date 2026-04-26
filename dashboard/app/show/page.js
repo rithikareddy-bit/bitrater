@@ -671,8 +671,17 @@ export default function ShowOverviewPage() {
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ showId: selectedId }),
                     });
-                    const data = await res.json();
-                    if (!res.ok) {
+                    const text = await res.text();
+                    let data;
+                    try {
+                      data = text ? JSON.parse(text) : {};
+                    } catch {
+                      data = null;
+                    }
+                    if (!data) {
+                      setPipelineError(`Server timed out or returned non-JSON (HTTP ${res.status}). Sync may have completed — refresh to verify.`);
+                      loadLive(selectedId, true);
+                    } else if (!res.ok) {
                       setPipelineError(data.error || `Sync failed (HTTP ${res.status})`);
                     } else {
                       // Refresh pipeline run status after sync
@@ -1074,7 +1083,18 @@ function EpisodeActions({ row, onActionDone }) {
     clearMsg(key);
     try {
       const res = await fetch(url, opts);
-      const data = await res.json();
+      const text = await res.text();
+      let data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        if (res.ok) {
+          setMsg(key, 'ok', 'Done (server returned non-JSON; refresh to verify)');
+          if (onActionDone) onActionDone();
+          return {};
+        }
+        throw new Error(`Server timed out or returned non-JSON (HTTP ${res.status}). The action may have completed — refresh to verify.`);
+      }
       if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
       setMsg(key, 'ok', data.message || 'Done');
       if (onActionDone) onActionDone();
