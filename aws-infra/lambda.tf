@@ -407,10 +407,20 @@ resource "aws_lambda_layer_version" "ffmpeg" {
 }
 
 # --- QualityChecker Lambda ---
+# Bundles the handler + shared signer helper into one zip so the runtime can
+# sign Media CDN URLs before fetching the combined manifest and variant streams.
 data "archive_file" "quality_checker_zip" {
   type        = "zip"
-  source_file = "../orchestrator/quality_checker.py"
   output_path = "/tmp/chai-q-quality-checker.zip"
+
+  source {
+    content  = file("../orchestrator/quality_checker.py")
+    filename = "quality_checker.py"
+  }
+  source {
+    content  = file("../orchestrator/media_cdn_signer.py")
+    filename = "media_cdn_signer.py"
+  }
 }
 
 resource "aws_lambda_function" "quality_checker" {
@@ -422,16 +432,21 @@ resource "aws_lambda_function" "quality_checker" {
   runtime          = "python3.11"
   timeout          = 600
   memory_size      = 1024
+  # gcp_deps layer provides pymongo + cryptography (Ed25519 for the signer).
+  # ffmpeg layer provides /opt/bin/ffmpeg + ffprobe.
   layers = [
-    aws_lambda_layer_version.pymongo.arn,
+    aws_lambda_layer_version.gcp_deps.arn,
     aws_lambda_layer_version.ffmpeg.arn,
   ]
 
   environment {
     variables = {
-      MONGO_URI    = var.mongo_uri
-      FFMPEG_PATH  = "/opt/bin/ffmpeg"
-      FFPROBE_PATH = "/opt/bin/ffprobe"
+      MONGO_URI              = var.mongo_uri
+      FFMPEG_PATH            = "/opt/bin/ffmpeg"
+      FFPROBE_PATH           = "/opt/bin/ffprobe"
+      CDN_BASE               = var.cdn_base
+      SIGNING_KEY_SECRET_ID  = var.media_cdn_signing_key_secret_id
+      SIGNED_URL_TTL_SECONDS = tostring(var.signed_url_ttl_seconds)
     }
   }
 }
