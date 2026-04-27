@@ -265,11 +265,40 @@ function formatDuration(ms) {
   return `${s}s`;
 }
 
+// Shared handler for both "Run Pipeline" (force=true) and "Continue Lab" (force=false).
+async function startPipelineRun({ selectedId, force, setPipelineLoading, setPipelineError, setPipelineRunId, setPipelineRun }) {
+  setPipelineLoading(true);
+  setPipelineError(null);
+  try {
+    const res = await fetch('/api/auto-pipeline/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ showId: selectedId, force }),
+    });
+    const data = await res.json();
+    if (res.status === 409 && data.runId) {
+      setPipelineRunId(data.runId);
+      const statusRes = await fetch(`/api/auto-pipeline/status/${data.runId}`);
+      if (statusRes.ok) setPipelineRun(await statusRes.json());
+    } else if (!res.ok) {
+      setPipelineError(data.error || `HTTP ${res.status}`);
+    } else {
+      setPipelineRunId(data.runId);
+      const statusRes = await fetch(`/api/auto-pipeline/status/${data.runId}`);
+      if (statusRes.ok) setPipelineRun(await statusRes.json());
+    }
+  } catch (err) {
+    setPipelineError(err.message || 'Failed to start pipeline');
+  } finally {
+    setPipelineLoading(false);
+  }
+}
+
 // ── Pipeline controls (Run Pipeline / Sync Show buttons + status badge) ──────
 
 function PipelineControls({
   selectedId, pipelineRun, pipelineLoading, pipelineSyncing,
-  pipelineError, onRunPipeline, onSyncShow, onCancel,
+  pipelineError, onRunPipeline, onContinueLab, onSyncShow, onCancel,
 }) {
   const status    = pipelineRun?.status;
   const isRunning = status === 'RUNNING';
@@ -287,17 +316,22 @@ function PipelineControls({
     ep.status === 'READY_TO_SYNC' || ep.status === 'SYNCED'
   ) ?? false;
 
-  // "Run Pipeline" button label + disabled state
+  // "Run Pipeline" (force rerun) and "Continue Lab" (resume) share disabled state
   let runLabel = '▶ Run Pipeline';
+  let continueLabel = '▶ Continue Lab';
   let runDisabled = pipelineLoading;
-  let runTitle = '';
+  let runTitle = 'Reruns every episode from scratch — ignores prior completed steps';
+  let continueTitle = 'Runs only what hasn\'t completed yet — keeps prior results';
   if (pipelineLoading) {
     runLabel = 'Starting…';
+    continueLabel = 'Starting…';
     runDisabled = true;
   } else if (isRunning) {
     runLabel = `Pipeline Running… (${done + failed}/${eligible})`;
+    continueLabel = 'Pipeline Running…';
     runDisabled = true;
     runTitle = 'Pipeline already running';
+    continueTitle = 'Pipeline already running';
   } else if (isDone && done === eligible && eligible > 0) {
     runDisabled = false; // allow re-run
   }
@@ -317,7 +351,7 @@ function PipelineControls({
   return (
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 14 }}>
-        {/* Run Pipeline */}
+        {/* Run Pipeline — force rerun from scratch */}
         <button
           type="button"
           onClick={onRunPipeline}
@@ -337,6 +371,27 @@ function PipelineControls({
           }}
         >
           {runLabel}
+        </button>
+
+        {/* Continue Lab — resume only what hasn't completed */}
+        <button
+          type="button"
+          onClick={onContinueLab}
+          disabled={runDisabled}
+          title={continueTitle}
+          style={{
+            padding: '8px 16px',
+            borderRadius: 6,
+            border: `1px solid ${runDisabled ? '#2a2a3a' : '#3730a3'}`,
+            background: runDisabled ? '#0f0f1f' : '#1e1b4b',
+            color: runDisabled ? '#4a4a6a' : '#a5b4fc',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: runDisabled ? 'not-allowed' : 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {continueLabel}
         </button>
 
         {/* Sync Show */}
@@ -634,33 +689,25 @@ export default function ShowOverviewPage() {
                 pipelineSyncing={pipelineSyncing}
                 pipelineError={pipelineError}
                 onRunPipeline={async () => {
-                  setPipelineLoading(true);
-                  setPipelineError(null);
-                  try {
-                    const res = await fetch('/api/auto-pipeline/start', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ showId: selectedId }),
-                    });
-                    const data = await res.json();
-                    if (res.status === 409 && data.runId) {
-                      // Already running — attach to that run
-                      setPipelineRunId(data.runId);
-                      const statusRes = await fetch(`/api/auto-pipeline/status/${data.runId}`);
-                      if (statusRes.ok) setPipelineRun(await statusRes.json());
-                    } else if (!res.ok) {
-                      setPipelineError(data.error || `HTTP ${res.status}`);
-                    } else {
-                      setPipelineRunId(data.runId);
-                      // Fetch initial status
-                      const statusRes = await fetch(`/api/auto-pipeline/status/${data.runId}`);
-                      if (statusRes.ok) setPipelineRun(await statusRes.json());
-                    }
-                  } catch (err) {
-                    setPipelineError(err.message || 'Failed to start pipeline');
-                  } finally {
-                    setPipelineLoading(false);
-                  }
+                  if (!confirm('Run Pipeline reruns every episode from scratch and ignores any prior completed steps. Continue?')) return;
+                  await startPipelineRun({
+                    selectedId,
+                    force: true,
+                    setPipelineLoading,
+                    setPipelineError,
+                    setPipelineRunId,
+                    setPipelineRun,
+                  });
+                }}
+                onContinueLab={async () => {
+                  await startPipelineRun({
+                    selectedId,
+                    force: false,
+                    setPipelineLoading,
+                    setPipelineError,
+                    setPipelineRunId,
+                    setPipelineRun,
+                  });
                 }}
                 onSyncShow={async () => {
                   setPipelineSyncing(true);

@@ -11,6 +11,7 @@ export async function POST(request) {
     const body = await request.json();
     const { showId } = body || {};
     const kind = body?.kind === 'trailer' ? 'trailer' : 'episode';
+    const force = body?.force === true;
     if (!showId || typeof showId !== 'string') {
       return NextResponse.json({ error: 'showId is required' }, { status: 400 });
     }
@@ -64,12 +65,15 @@ export async function POST(request) {
       // A trailer is "already combined" only when its gcpUrl ends with
       // _combined.m3u8 AND the current s3Url matches the one we last encoded.
       // Drift forces a re-run even if the old gcpUrl happens to be combined.
-      await Promise.all(allItems.map(async ep => {
-        if (!isCombinedUrl(ep._gcpUrl)) return;
-        if (!ep.s3_url) return;
-        const drifted = await hasS3UrlDrifted({ episodeId: String(ep.id), s3Url: ep.s3_url });
-        if (!drifted) alreadyCombinedIds.add(String(ep.id));
-      }));
+      // force=true (Run Pipeline) skips this entirely — rerun no matter what.
+      if (!force) {
+        await Promise.all(allItems.map(async ep => {
+          if (!isCombinedUrl(ep._gcpUrl)) return;
+          if (!ep.s3_url) return;
+          const drifted = await hasS3UrlDrifted({ episodeId: String(ep.id), s3Url: ep.s3_url });
+          if (!drifted) alreadyCombinedIds.add(String(ep.id));
+        }));
+      }
     } else {
       allItems = Array.isArray(show.episodes) ? show.episodes : [];
     }
@@ -116,29 +120,55 @@ export async function POST(request) {
 
     const nowDate = new Date();
 
-    // Check video_episodes for already-completed lab results so we skip re-running lab
+    // For "Continue Lab" (force=false), read every persistent stage marker from
+    // video_episodes so we can resume past whatever already finished —
+    // lab → GCP → combine → QC. For "Run Pipeline" (force=true) we ignore all
+    // prior state and start fresh.
+    const QC_DONE = new Set(['PASS', 'ISSUES_FOUND']);
     const eligibleIds = eligible.map(ep => String(ep.id));
-    const existingLabDocs = await labDb.collection('video_episodes')
-      .find(
-        { episode_id: { $in: eligibleIds } },
-        { projection: { episode_id: 1, lab_status_h264: 1, lab_status_h265: 1 } },
-      )
-      .toArray();
-    const labStatusMap = new Map(existingLabDocs.map(d => [d.episode_id, d]));
+    const existingDocs = force
+      ? []
+      : await labDb.collection('video_episodes')
+          .find(
+            { episode_id: { $in: eligibleIds } },
+            {
+              projection: {
+                episode_id: 1,
+                lab_status_h264: 1,
+                lab_status_h265: 1,
+                h264_master_m3u8_url: 1,
+                h265_master_m3u8_url: 1,
+                combined_master_m3u8_url: 1,
+                quality_check: 1,
+              },
+            },
+          )
+          .toArray();
+    const epStateMap = new Map(existingDocs.map(d => [d.episode_id, d]));
 
     // Trailer fast path: probe FPS + write synthetic golden_recipes so the lab
     // step is skipped entirely. Per-trailer probe errors get captured here and
     // converted to SKIPPED docs below so one broken source doesn't block the batch.
+    // Trailers have no real lab — lab_status_h*='COMPLETE' is synthetic and must
+    // hold for both force=true and force=false.
     const probeErrors = new Map();
     if (kind === 'trailer') {
       await Promise.all(eligible.map(async ep => {
         try {
-          await prepareTrailer({ episodeId: String(ep.id), s3Url: ep.s3_url });
-          labStatusMap.set(String(ep.id), {
-            episode_id: String(ep.id),
-            lab_status_h264: 'COMPLETE',
-            lab_status_h265: 'COMPLETE',
-          });
+          const result = await prepareTrailer({ episodeId: String(ep.id), s3Url: ep.s3_url });
+          const prev = epStateMap.get(String(ep.id)) || { episode_id: String(ep.id) };
+          prev.lab_status_h264 = 'COMPLETE';
+          prev.lab_status_h265 = 'COMPLETE';
+          // Drift = source file was replaced. Any prior GCP/combine outputs
+          // came from the old source and must be re-encoded — drop them from
+          // the resume map so makeEpDoc seeds gcp/combine as not-done.
+          if (result?.driftDetected) {
+            prev.h264_master_m3u8_url = null;
+            prev.h265_master_m3u8_url = null;
+            prev.combined_master_m3u8_url = null;
+            prev.quality_check = null;
+          }
+          epStateMap.set(String(ep.id), prev);
         } catch (err) {
           probeErrors.set(String(ep.id), err?.message || 'probe failed');
         }
@@ -149,31 +179,82 @@ export async function POST(request) {
     const runnable = eligible.filter(ep => !probeErrors.has(String(ep.id)));
 
     const makeEpDoc = (ep, { skipped, skipReason } = {}) => {
-      const existing = labStatusMap.get(String(ep.id));
-      const labH264Done = !skipped && existing?.lab_status_h264 === 'COMPLETE';
-      const labH265Done = !skipped && existing?.lab_status_h265 === 'COMPLETE';
+      const state = !skipped ? epStateMap.get(String(ep.id)) : null;
+      const labH264Done = state?.lab_status_h264 === 'COMPLETE';
+      const labH265Done = state?.lab_status_h265 === 'COMPLETE';
+      const gcpH264Done = !!state?.h264_master_m3u8_url;
+      const gcpH265Done = !!state?.h265_master_m3u8_url;
+      const combineDone = !!state?.combined_master_m3u8_url;
+      const qcDone = QC_DONE.has(state?.quality_check?.overall);
+      const allDone = labH264Done && labH265Done && gcpH264Done && gcpH265Done && combineDone && qcDone;
+
+      // Map the per-stage flags to a seeded run-doc state. The orchestrator
+      // already has separate paths for each stage; we just need to set the
+      // statuses + URLs so each stage's gate sees "done" for prior work.
+      let status;
+      let currentStep;
+      let finishedAt = null;
+      if (skipped) {
+        status = 'SKIPPED';
+        currentStep = 'LAB_H264';
+      } else if (allDone) {
+        // Trailers auto-sync at step 6.5; episodes terminate at READY_TO_SYNC
+        // and wait for the manual Sync Show button.
+        if (kind === 'trailer') {
+          status = 'SYNC_PENDING';
+          currentStep = 'SYNC';
+        } else {
+          status = 'READY_TO_SYNC';
+          currentStep = 'DONE';
+          finishedAt = nowDate;
+        }
+      } else if (combineDone) {
+        // Combine done but QC pending (or QC FAILED/RUNNING) — pollQC picks up.
+        status = 'COMBINING';
+        currentStep = 'QC';
+      } else if (gcpH264Done && gcpH265Done) {
+        // Both GCP done, combine pending — combine step picks up.
+        status = 'QUEUED';
+        currentStep = 'COMBINE';
+      } else if (labH264Done && labH265Done) {
+        status = 'QUEUED';
+        currentStep = 'GCP_H264';
+      } else {
+        status = 'QUEUED';
+        currentStep = 'LAB_H264';
+      }
+
+      const anyPriorWork = labH264Done || labH265Done || gcpH264Done || gcpH265Done || combineDone || qcDone;
+
       return {
         episode_id: String(ep.id),
         trailer_key: ep.trailer_key ?? null,
         title: ep.title || String(ep.id) || '',
         s3_url: ep.s3_url || '',
-        status: skipped ? 'SKIPPED' : 'QUEUED',
-        lab_h264_status: labH264Done ? 'COMPLETE' : 'QUEUED',
-        lab_h265_status: labH265Done ? 'COMPLETE' : 'QUEUED',
-        gcp_h264_status: null,
-        gcp_h265_status: null,
+        status,
+        lab_h264_status: !skipped && labH264Done ? 'COMPLETE' : 'QUEUED',
+        lab_h265_status: !skipped && labH265Done ? 'COMPLETE' : 'QUEUED',
+        gcp_h264_status: !skipped && gcpH264Done ? 'SUCCEEDED' : null,
+        gcp_h265_status: !skipped && gcpH265Done ? 'SUCCEEDED' : null,
+        // Cache GCP/combine URLs on the run doc so combine + auto-sync don't
+        // need an extra /api/gcp-status fetch on the first tick.
+        h264_master_m3u8_url: !skipped ? state?.h264_master_m3u8_url ?? null : null,
+        h265_master_m3u8_url: !skipped ? state?.h265_master_m3u8_url ?? null : null,
+        combined_master_m3u8_url: !skipped ? state?.combined_master_m3u8_url ?? null : null,
         retries: { lab_h264: 0, lab_h265: 0, gcp_h264: 0, gcp_h265: 0, combine: 0, qc: 0, sync: 0 },
         retry_after_lab_h264: null,
         retry_after_lab_h265: null,
         retry_after_h264: null,
         retry_after_h265: null,
-        gcp_enqueued_h264: false,
-        gcp_enqueued_h265: false,
-        combined: false,
-        current_step: labH264Done && labH265Done ? 'GCP_H264' : 'LAB_H264',
+        // gcp_enqueued_h*=true on resume prevents the orchestrator's fresh-start
+        // GCP enqueue path from queueing a job for a codec that's already done.
+        gcp_enqueued_h264: !skipped && gcpH264Done,
+        gcp_enqueued_h265: !skipped && gcpH265Done,
+        combined: !skipped && combineDone,
+        current_step: currentStep,
         error: skipped ? skipReason : null,
-        started_at: labH264Done || labH265Done ? nowDate : null,
-        finished_at: null,
+        started_at: !skipped && anyPriorWork ? nowDate : null,
+        finished_at: finishedAt,
         duration_ms: null,
         last_updated_at: nowDate,
         synced_at: null,
@@ -192,6 +273,19 @@ export async function POST(request) {
 
     const episodeDocs = [...runnableDocs, ...ineligibleDocs, ...combinedSkipDocs, ...activeSkipDocs, ...probeFailedDocs];
     const skippedCount = ineligibleDocs.length + combinedSkipDocs.length + activeSkipDocs.length + probeFailedDocs.length;
+
+    // Continue Lab can seed episodes as already-completed (READY_TO_SYNC / SYNCED)
+    // or already-in-progress (COMBINING / SYNC_PENDING). The orchestrator's step 8
+    // recomputes these counters in the poll loop, but the fresh-start early-exit
+    // (when every episode is terminal) skips that loop. Seed the counters here so
+    // the run doc is accurate from insert and during the brief window before the
+    // orchestrator's first tick.
+    const completedCount = episodeDocs.filter(d => d.status === 'READY_TO_SYNC' || d.status === 'SYNCED').length;
+    const failedCount    = episodeDocs.filter(d => d.status === 'FAILED').length;
+    const runningCount   = episodeDocs.filter(d =>
+      d.status === 'LAB_RUNNING' || d.status === 'GCP_RUNNING' ||
+      d.status === 'COMBINING'   || d.status === 'SYNC_PENDING'
+    ).length;
 
     if (runnable.length === 0) {
       return NextResponse.json(
@@ -222,9 +316,9 @@ export async function POST(request) {
       total_episodes: allItems.length,
       skipped_episodes: skippedCount,
       episodes: episodeDocs,
-      completed_count: 0,
-      failed_count: 0,
-      running_count: 0,
+      completed_count: completedCount,
+      failed_count: failedCount,
+      running_count: runningCount,
       skipped_count: skippedCount,
       eta_ms: null,
       gcp_queue_h264: [],

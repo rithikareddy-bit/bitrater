@@ -235,7 +235,10 @@ export async function orchestrate(runIdStr) {
 
   // ── FRESH START: check for early-exit if nothing to do ───────────────────────
   if (isFreshStart) {
-    const eligible = episodes.filter(ep => ep.s3_url && ep.s3_url.trim() !== '' && ep.status === 'QUEUED');
+    // "Continue Lab" can seed episodes as COMBINING / SYNC_PENDING when they
+    // were previously done up to that stage. Treat any non-terminal episode as
+    // eligible — the per-stage checks below skip work that's already done.
+    const eligible = episodes.filter(ep => ep.s3_url && ep.s3_url.trim() !== '' && !isTerminal(ep));
     if (eligible.length === 0) {
       await col.updateOne(
         { _id: runId, locked_by: instanceId },
@@ -244,7 +247,9 @@ export async function orchestrate(runIdStr) {
       return;
     }
 
-    // Enqueue GCP immediately for episodes whose lab is already done (pre-populated by start route)
+    // Enqueue GCP immediately for episodes whose lab is already done (pre-populated by start route).
+    // gcp_enqueued_h*=true is also set by start route when GCP is already done, so we won't
+    // re-enqueue a codec that has h*_master_m3u8_url cached from a prior run.
     for (const ep of eligible) {
       if (ep.lab_h264_status === 'COMPLETE' && !ep.gcp_enqueued_h264) {
         gcpQueueH264.push({ episodeId: ep.episode_id, codec: 'h264', withVtt: withVttDefault });
