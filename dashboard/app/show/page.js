@@ -4,8 +4,29 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import S3NotificationBell from '@/components/S3NotificationBell';
 
-/** Must match `/api/shows` max limit — only the latest N shows (catalog sort: updated/created). */
-const LATEST_SHOWS_LIMIT = 100;
+/** Fetch every show in the catalog. `/api/shows` MAX_LIMIT is 500 (>> current ~165 shows). */
+const ALL_SHOWS_LIMIT = 500;
+
+const LANG_LABELS = {
+  te: 'Telugu',
+  hi: 'Hindi',
+  kn: 'Kannada',
+  ta: 'Tamil',
+  ml: 'Malayalam',
+  en: 'English',
+};
+function languageLabel(code) {
+  if (!code) return 'Unknown';
+  const c = String(code).toLowerCase();
+  return LANG_LABELS[c] || c.toUpperCase();
+}
+function normalizeLang(code) {
+  if (code == null) return null;
+  const c = String(code).trim().toLowerCase();
+  if (!c) return null;
+  if (c === 'kan') return 'kn';
+  return c;
+}
 
 const RES_ORDER = ['1080p', '720p', '480p'];
 
@@ -22,6 +43,28 @@ const QC_STYLES = {
   running: { color: '#f59e0b', border: '#f59e0b', bg: 'rgba(245,158,11,0.08)' },
   none: { color: '#666', border: '#444', bg: 'transparent' },
 };
+
+function LangPill({ label, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        padding: '4px 10px',
+        borderRadius: 999,
+        border: `1px solid ${active ? '#4da6ff' : '#333'}`,
+        background: active ? '#1c2c44' : '#111',
+        color: active ? '#bfdbfe' : '#aaa',
+        fontSize: 11,
+        fontWeight: 600,
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </button>
+  );
+}
 
 function LabPill({ status }) {
   const label =
@@ -487,8 +530,19 @@ export default function ShowOverviewPage() {
   const [shows, setShows] = useState([]);
   const [showsLoading, setShowsLoading] = useState(true);
   const [showsError, setShowsError] = useState(null);
+  const [activeLang, setActiveLang] = useState('all'); // 'all' | 'te' | 'hi' | 'kn' | 'unknown'
+  const [search, setSearch] = useState('');
 
   const [selectedId, setSelectedId] = useState('');
+
+  // Hydrate from ?selected=<id> on first mount so deep-links from /show-status
+  // (and other pages) pre-select the show.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const sel = params.get('selected');
+    if (sel) setSelectedId(sel);
+  }, []);
   const [live, setLive] = useState(null);
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveError, setLiveError] = useState(null);
@@ -518,20 +572,49 @@ export default function ShowOverviewPage() {
 
   useEffect(() => {
     setShowsLoading(true);
-    fetch(`/api/shows?limit=${LATEST_SHOWS_LIMIT}&skip=0`)
+    fetch(`/api/shows?limit=${ALL_SHOWS_LIMIT}&skip=0`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
       .then((data) => {
         if (data.error) throw new Error(data.error);
-        const list = data.shows || [];
+        const list = (data.shows || []).map((s) => ({
+          ...s,
+          language: normalizeLang(s.language),
+        }));
         setShows(list);
         setShowsError(null);
       })
       .catch(() => setShowsError('Failed to load shows'))
       .finally(() => setShowsLoading(false));
   }, []);
+
+  // Build language buckets + counts from all loaded shows
+  const langCounts = shows.reduce((acc, s) => {
+    const key = s.language || 'unknown';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const langOrder = ['te', 'hi', 'kn', 'ta', 'ml', 'en'];
+  const presentLangs = [
+    ...langOrder.filter((c) => langCounts[c]),
+    ...Object.keys(langCounts).filter((c) => c !== 'unknown' && !langOrder.includes(c)).sort(),
+  ];
+  if (langCounts.unknown) presentLangs.push('unknown');
+
+  const filteredShows = shows.filter((s) => {
+    if (activeLang !== 'all') {
+      const key = s.language || 'unknown';
+      if (key !== activeLang) return false;
+    }
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      const t = (s.title || '').toLowerCase();
+      if (!t.includes(q)) return false;
+    }
+    return true;
+  });
 
   const loadLive = useCallback(async (showId, quiet) => {
     if (!showId) return;
@@ -642,9 +725,9 @@ export default function ShowOverviewPage() {
             alignItems: 'flex-start',
           }}
         >
-          <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+          <div style={{ flex: '1 1 260px', minWidth: 0, maxWidth: 460 }}>
             <label
-              htmlFor="show-select"
+              htmlFor="show-search"
               style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#888', marginBottom: 8 }}
             >
               Select show
@@ -652,33 +735,92 @@ export default function ShowOverviewPage() {
             {showsLoading && <p style={{ color: '#888', margin: 0 }}>Loading shows…</p>}
             {showsError && <p style={{ color: '#f87171', margin: 0 }}>{showsError}</p>}
             {!showsLoading && !showsError && (
-              <select
-                id="show-select"
-                value={selectedId}
-                onChange={(e) => setSelectedId(e.target.value)}
-                style={{
-                  width: '100%',
-                  maxWidth: 440,
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: '1px solid #333',
-                  background: '#111',
-                  color: '#e8e8e8',
-                  fontSize: 14,
-                }}
-              >
-                <option value="">— Choose a show —</option>
-                {shows.map((s) => (
-                  <option key={String(s._id)} value={String(s._id)}>
-                    {s.title || 'Untitled'} ({s.episodeCount ?? '?'} ep)
-                  </option>
-                ))}
-              </select>
+              <>
+                {/* Language pills */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                  <LangPill
+                    label={`All (${shows.length})`}
+                    active={activeLang === 'all'}
+                    onClick={() => setActiveLang('all')}
+                  />
+                  {presentLangs.map((code) => (
+                    <LangPill
+                      key={code}
+                      label={`${code === 'unknown' ? 'Unknown' : languageLabel(code)} (${langCounts[code]})`}
+                      active={activeLang === code}
+                      onClick={() => setActiveLang(code)}
+                    />
+                  ))}
+                </div>
+
+                {/* Search input */}
+                <input
+                  id="show-search"
+                  type="search"
+                  placeholder="Search shows…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #333',
+                    background: '#111',
+                    color: '#e8e8e8',
+                    fontSize: 14,
+                    marginBottom: 8,
+                  }}
+                />
+
+                {/* Filtered show list */}
+                <div
+                  style={{
+                    maxHeight: 280,
+                    overflowY: 'auto',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: 8,
+                    background: '#0e0e0e',
+                  }}
+                >
+                  {filteredShows.length === 0 && (
+                    <div style={{ padding: '12px 14px', color: '#666', fontSize: 12 }}>
+                      No shows match this filter.
+                    </div>
+                  )}
+                  {filteredShows.map((s) => {
+                    const id = String(s._id);
+                    const isActive = id === selectedId;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setSelectedId(id)}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '8px 12px',
+                          background: isActive ? '#1c2c44' : 'transparent',
+                          color: isActive ? '#bfdbfe' : '#e8e8e8',
+                          border: 'none',
+                          borderBottom: '1px solid #1a1a1a',
+                          fontSize: 13,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <span style={{ fontWeight: 500 }}>{s.title || 'Untitled'}</span>
+                        <span style={{ color: '#64748b', fontSize: 11, marginLeft: 8 }}>
+                          {languageLabel(s.language)} · {s.episodeCount ?? '?'} ep
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
             )}
             {!showsLoading && !showsError && shows.length > 0 && (
-              <p style={{ margin: '10px 0 0', fontSize: 11, color: '#555', maxWidth: 440 }}>
-                Latest {LATEST_SHOWS_LIMIT} shows from the catalog, most recently updated first (same order as
-                the home page list API).
+              <p style={{ margin: '10px 0 0', fontSize: 11, color: '#555' }}>
+                {filteredShows.length} of {shows.length} shows shown · most recently updated first.
               </p>
             )}
             {selectedId && (

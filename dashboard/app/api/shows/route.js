@@ -3,7 +3,15 @@ import clientPromise from '@/lib/mongodb';
 import { resolveShowPosterUrl } from '@/lib/posterUrl';
 
 const DEFAULT_LIMIT = 24;
-const MAX_LIMIT = 100;
+const MAX_LIMIT = 500;
+
+const LANG_ALIAS = { kan: 'kn' }; // canonicalize Kannada (legacy "kan" → "kn")
+function normalizeLang(value) {
+  if (value == null) return null;
+  const s = String(value).trim().toLowerCase();
+  if (!s) return null;
+  return LANG_ALIAS[s] || s;
+}
 
 function toIsoString(value) {
   if (value == null) return null;
@@ -25,13 +33,28 @@ export async function GET(request) {
       MAX_LIMIT
     );
     const skip = Math.max(parseIntParam(searchParams.get('skip'), 0), 0);
+    const langParam = searchParams.get('language');
+    const wantLang = langParam != null ? langParam.toLowerCase() : null;
 
     const client = await clientPromise();
     const db = client.db('master');
 
+    // Build language match — Kannada has both "kan" (legacy) and "kn"; treat as one bucket.
+    let langMatch = null;
+    if (wantLang) {
+      if (wantLang === 'unknown' || wantLang === 'null' || wantLang === 'none') {
+        langMatch = { $or: [{ language: { $exists: false } }, { language: null }, { language: '' }] };
+      } else if (wantLang === 'kn' || wantLang === 'kan') {
+        langMatch = { language: { $in: ['kn', 'kan', 'KN', 'KAN'] } };
+      } else {
+        langMatch = { language: wantLang };
+      }
+    }
+
     const [facet] = await db
       .collection('showcache')
       .aggregate([
+        ...(langMatch ? [{ $match: langMatch }] : []),
         {
           $addFields: {
             _updatedSort: {
@@ -82,6 +105,7 @@ export async function GET(request) {
                 $project: {
                   _id: 1,
                   title: 1,
+                  language: 1,
                   thumbnail: 1,
                   s3_primary_poster_id: 1,
                   s3_primary_poster_ids: 1,
@@ -111,6 +135,7 @@ export async function GET(request) {
       return {
         _id: s._id,
         title: s.title,
+        language: normalizeLang(s.language),
         episodeCount: s.episodeCount,
         posterUrl,
         updatedAt: toIsoString(s.updated_at),
