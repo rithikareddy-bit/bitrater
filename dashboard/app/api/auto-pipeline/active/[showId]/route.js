@@ -24,10 +24,14 @@ export async function GET(request, { params }) {
       ? { $or: [{ kind: 'episode' }, { kind: { $exists: false } }] }
       : { kind: 'trailer' };
 
+    // prior_state is bulky and only used by /api/auto-pipeline/cancel — keep it
+    // out of payloads polled by the UI.
+    const projection = { locked_by: 0, locked_at: 0, 'episodes.prior_state': 0 };
+
     // First try to find a RUNNING run
     let run = await col.findOne(
       { show_id: showId, status: 'RUNNING', ...kindMatch },
-      { projection: { locked_by: 0, locked_at: 0 } },
+      { projection },
     );
 
     // Fall back to most recently completed/failed/cancelled run
@@ -40,7 +44,7 @@ export async function GET(request, { params }) {
         })
         .sort({ created_at: -1 })
         .limit(1)
-        .project({ locked_by: 0, locked_at: 0 })
+        .project(projection)
         .next();
     }
 

@@ -78,9 +78,13 @@ export async function orchestrate(runIdStr) {
   const col = db.collection('pipeline_runs');
 
   // ── ACQUIRE LOCK ─────────────────────────────────────────────────────────────
+  // status='RUNNING' guard: a Cancel can fire BEFORE setImmediate(orchestrate)
+  // — without this, the orchestrator would still grab the lock and proceed to
+  // destroy video_episodes after Cancel had already restored from snapshot.
   const lockResult = await col.updateOne(
     {
       _id: runId,
+      status: 'RUNNING',
       $or: [
         { locked_by: null },
         { locked_at: { $lt: new Date(nowMs() - 5 * 60 * 1000) } },
@@ -90,13 +94,23 @@ export async function orchestrate(runIdStr) {
   );
 
   if (lockResult.matchedCount === 0) {
-    console.log(`[orchestrate] Could not acquire lock for ${runIdStr} — another instance running`);
+    console.log(`[orchestrate] Could not acquire lock for ${runIdStr} — another instance running or run not RUNNING`);
     return;
   }
 
   let run = await col.findOne({ _id: runId });
   if (!run) {
     console.error(`[orchestrate] Run ${runIdStr} not found after acquiring lock`);
+    return;
+  }
+  // Re-check status post-acquire: a Cancel that landed BETWEEN our updateOne
+  // and findOne would not be caught by the lock filter, so re-read and bail.
+  if (run.status !== 'RUNNING') {
+    console.log(`[orchestrate] Run ${runIdStr} is ${run.status} after lock acquire — releasing and exiting`);
+    await col.updateOne(
+      { _id: runId, locked_by: instanceId },
+      { $set: { locked_by: null, locked_at: null } },
+    );
     return;
   }
 
@@ -202,6 +216,20 @@ export async function orchestrate(runIdStr) {
     }
   }
 
+  // ── HELPER: cheap mid-tick cancel check ──────────────────────────────────────
+  // The renewal check at the top of each poll-loop iteration only catches
+  // BETWEEN ticks. fillLabSlots/startGCP loops can run for many seconds in
+  // one tick (each dispatch is an HTTP call), so a Cancel mid-tick would
+  // continue clobbering video_episodes. Hot loops call this and bail early.
+  async function isCancelled() {
+    try {
+      const r = await col.findOne({ _id: runId }, { projection: { status: 1 } });
+      return r?.status === 'CANCELLED';
+    } catch {
+      return false;
+    }
+  }
+
   // ── HELPER: fill available lab slots ─────────────────────────────────────────
   // Flat pool of MAX_LAB concurrent jobs across all episodes. H.264 has strict
   // priority: H.265 dispatches only once h264Queue is fully drained.
@@ -215,6 +243,9 @@ export async function orchestrate(runIdStr) {
         seen264++;
         continue;
       }
+      // Bail if Cancel landed since the last dispatch — startLabH264 calls
+      // /api/push, which destroys video_episodes for this episode.
+      if (await isCancelled()) return;
       await startLabH264(ep);
     }
 
@@ -229,6 +260,7 @@ export async function orchestrate(runIdStr) {
         seen265++;
         continue;
       }
+      if (await isCancelled()) return;
       await startLabH265(ep);
     }
   }
@@ -576,6 +608,11 @@ export async function orchestrate(runIdStr) {
       const stillActive265 = ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING';
       if (!stillActive264 && !stillActive265) continue;
 
+      // Mid-tick cancel guard: /api/gcp-status writes
+      // video_episodes.gcp_job_status='FAILED' for ABORTED SFNs, which would
+      // override Cancel's restore.
+      if (await isCancelled()) return;
+
       // Fetch GCP status once per episode
       let gcpData = null;
       try {
@@ -691,6 +728,10 @@ export async function orchestrate(runIdStr) {
 
       while (gcpActiveCount < MAX_GCP &&
              (gcpQueueH264.length > seenH264 || gcpQueueH265.length > seenH265)) {
+
+        // Mid-tick cancel guard — /api/gcp clears h*_master_m3u8_url and starts
+        // a new transcoder; we must not start new GCP jobs after Cancel landed.
+        if (await isCancelled()) return;
 
         // H.264 slot
         if (gcpQueueH264.length > seenH264 && gcpActiveCount < MAX_GCP) {
@@ -839,6 +880,10 @@ export async function orchestrate(runIdStr) {
       }
       if (!h264Url || !h265Url) continue; // wait for eventual consistency
 
+      // Mid-tick cancel guard: combine + QC POST both write to video_episodes
+      // (combined_master_m3u8_url, quality_check.overall). Skip if cancelled.
+      if (await isCancelled()) return;
+
       const combineRes = await internalPost('/api/create-combined-master', { episodeId: ep.episode_id });
       if (combineRes.status !== 200) {
         const cr = (ep.retries?.combine ?? 0) + 1;
@@ -903,6 +948,9 @@ export async function orchestrate(runIdStr) {
 
       // Crash recovery: re-trigger if combined=true but no QC result yet
       if (overall === null && ep.combined === true) {
+        // Mid-tick cancel guard: re-trigger writes quality_check.overall='RUNNING'
+        // and invokes the QC Lambda — both would clobber Cancel's restore.
+        if (await isCancelled()) return;
         const qcRes = await internalPost(`/api/quality-check/${ep.episode_id}`, {});
         if (qcRes.status !== 200) {
           const qr = ep.retries?.qc ?? 0;
@@ -943,6 +991,8 @@ export async function orchestrate(runIdStr) {
           ep.retries = { ...(ep.retries || {}), qc: qr + 1 };
           await updateEp(ep.episode_id, { 'retries.qc': ep.retries.qc },
             { step: 'QC', status: 'RETRY', at: nowDate() });
+          // Mid-tick cancel guard: same reason as the re-trigger above.
+          if (await isCancelled()) return;
           try {
             await internalPost(`/api/quality-check/${ep.episode_id}`, {});
           } catch { /* retry POST fire-and-forget */ }

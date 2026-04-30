@@ -123,28 +123,39 @@ export async function POST(request) {
     // For "Continue Lab" (force=false), read every persistent stage marker from
     // video_episodes so we can resume past whatever already finished —
     // lab → GCP → combine → QC. For "Run Pipeline" (force=true) we ignore all
-    // prior state and start fresh.
+    // prior state for SEEDING the run, but we still snapshot it into
+    // prior_state so cancel can restore if the rerun is aborted mid-flight.
     const QC_DONE = new Set(['PASS', 'ISSUES_FOUND']);
     const eligibleIds = eligible.map(ep => String(ep.id));
-    const existingDocs = force
-      ? []
-      : await labDb.collection('video_episodes')
-          .find(
-            { episode_id: { $in: eligibleIds } },
-            {
-              projection: {
-                episode_id: 1,
-                lab_status_h264: 1,
-                lab_status_h265: 1,
-                h264_master_m3u8_url: 1,
-                h265_master_m3u8_url: 1,
-                combined_master_m3u8_url: 1,
-                quality_check: 1,
-              },
-            },
-          )
-          .toArray();
-    const epStateMap = new Map(existingDocs.map(d => [d.episode_id, d]));
+    // Fields restored by /api/auto-pipeline/cancel when prior_state exists.
+    // Keep this in sync with the projection below and the cancel route.
+    const PRIOR_STATE_PROJECTION = {
+      episode_id: 1,
+      lab_status_h264: 1,
+      lab_status_h265: 1,
+      golden_recipes: 1,
+      gcp_job_status_h264: 1,
+      gcp_job_status_h265: 1,
+      h264_master_m3u8_url: 1,
+      h265_master_m3u8_url: 1,
+      combined_master_m3u8_url: 1,
+      quality_check: 1,
+    };
+    const existingDocs = await labDb.collection('video_episodes')
+      .find(
+        { episode_id: { $in: eligibleIds } },
+        { projection: PRIOR_STATE_PROJECTION },
+      )
+      .toArray();
+    // Continue Lab uses the full doc as resume input; Run Pipeline ignores it.
+    const epStateMap = force ? new Map() : new Map(existingDocs.map(d => [d.episode_id, d]));
+    // Snapshot for cancel-restore — only populated for force=true runs.
+    const priorStateMap = force
+      ? new Map(existingDocs.map(d => {
+          const { _id, episode_id, ...rest } = d;
+          return [episode_id, rest];
+        }))
+      : new Map();
 
     // Trailer fast path: probe FPS + write synthetic golden_recipes so the lab
     // step is skipped entirely. Per-trailer probe errors get captured here and
@@ -259,6 +270,12 @@ export async function POST(request) {
         last_updated_at: nowDate,
         synced_at: null,
         transition_log: [],
+        // Snapshot of video_episodes BEFORE this force-rerun started destroying
+        // it. /api/auto-pipeline/cancel restores from this so a cancelled rerun
+        // returns to its pre-run state instead of leaving labs marked FAILED
+        // and golden_recipes wiped. Null when force=false (resume is non-
+        // destructive) or when the episode is skipped.
+        prior_state: !skipped ? (priorStateMap.get(String(ep.id)) || null) : null,
       };
     };
 
@@ -305,6 +322,11 @@ export async function POST(request) {
       show_slug: show.slug || null,
       show_title: show.title || '',
       kind,
+      // force_rerun=true means this run destroys video_episodes (via /api/push,
+      // /api/gcp, etc.) and the per-episode prior_state holds the snapshot to
+      // restore on cancel. Continue Lab (force=false) is non-destructive, no
+      // snapshot, and cancel does not restore.
+      force_rerun: force,
       status: 'RUNNING',
       lab_workers: 30,
       max_gcp: maxGcpForThisRun,

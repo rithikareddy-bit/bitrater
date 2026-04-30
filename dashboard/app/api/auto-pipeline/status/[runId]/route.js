@@ -16,7 +16,17 @@ export async function GET(request, { params }) {
     const client = await clientPromise();
     const run = await client.db('chai_q_lab').collection('pipeline_runs').findOne(
       { _id: oid },
-      { projection: { locked_by: 0, locked_at: 0 } }, // hide internal lock fields
+      {
+        projection: {
+          locked_by: 0,
+          locked_at: 0,
+          // prior_state is the full pre-rerun video_episodes snapshot used by
+          // /api/auto-pipeline/cancel. It's several KB per episode (golden
+          // recipes + quality_check) and the UI never reads it — keep it out
+          // of the polled status payload.
+          'episodes.prior_state': 0,
+        },
+      },
     );
 
     if (!run) return NextResponse.json({ error: 'Pipeline run not found' }, { status: 404 });

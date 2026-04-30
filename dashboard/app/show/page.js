@@ -867,7 +867,7 @@ export default function ShowOverviewPage() {
                     } catch {
                       data = null;
                     }
-                    if (!data) {
+                    if (!data || res.status === 502 || res.status === 504) {
                       setPipelineError(`Server timed out or returned non-JSON (HTTP ${res.status}). Sync may have completed — refresh to verify.`);
                       loadLive(selectedId, true);
                     } else if (!res.ok) {

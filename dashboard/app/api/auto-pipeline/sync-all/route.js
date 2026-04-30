@@ -73,23 +73,29 @@ export async function POST(request) {
     const synced = [];
     const failed = [];
 
-    for (const episodeId of readyIds) {
-      try {
-        const res = await fetch(`${baseUrl}${syncPath}`, {
+    const results = await Promise.allSettled(
+      readyIds.map(episodeId =>
+        fetch(`${baseUrl}${syncPath}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ episodeId }),
-        });
-        if (res.ok) {
-          synced.push(episodeId);
-        } else {
+        }).then(async res => {
+          if (res.ok) return { episodeId, ok: true };
           const errData = await res.json().catch(() => ({}));
-          failed.push({ episodeId, error: errData.error || `HTTP ${res.status}` });
-        }
-      } catch (err) {
-        failed.push({ episodeId, error: err.message || 'Network error' });
+          return { episodeId, ok: false, error: errData.error || `HTTP ${res.status}` };
+        }),
+      ),
+    );
+
+    results.forEach((r, i) => {
+      const episodeId = readyIds[i];
+      if (r.status === 'fulfilled') {
+        if (r.value.ok) synced.push(episodeId);
+        else failed.push({ episodeId, error: r.value.error });
+      } else {
+        failed.push({ episodeId, error: r.reason?.message || 'Network error' });
       }
-    }
+    });
 
     // 5. Update pipeline_run episode status → SYNCED (best-effort)
     if (synced.length > 0) {
