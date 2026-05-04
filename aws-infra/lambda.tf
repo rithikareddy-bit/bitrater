@@ -464,6 +464,44 @@ resource "aws_sfn_state_machine" "gcp_orchestrator" {
   })
 }
 
+# --- URL Health Checker Lambda ---
+data "archive_file" "url_health_checker_zip" {
+  type        = "zip"
+  output_path = "/tmp/chai-q-url-health-checker.zip"
+
+  source {
+    content  = file("../orchestrator/url_health_checker.py")
+    filename = "url_health_checker.py"
+  }
+  source {
+    content  = file("../orchestrator/media_cdn_signer.py")
+    filename = "media_cdn_signer.py"
+  }
+}
+
+resource "aws_lambda_function" "url_health_checker" {
+  filename         = data.archive_file.url_health_checker_zip.output_path
+  source_code_hash = data.archive_file.url_health_checker_zip.output_base64sha256
+  function_name    = "chai-q-url-health-checker"
+  role             = aws_iam_role.gcp_lambda_role.arn
+  handler          = "url_health_checker.handler"
+  runtime          = "python3.11"
+  timeout          = 600
+  memory_size      = 512
+  layers           = [aws_lambda_layer_version.gcp_deps.arn]
+
+  environment {
+    variables = {
+      MONGO_URI              = var.mongo_uri
+      CDN_BASE               = var.cdn_base
+      SIGNING_KEY_SECRET_ID  = var.media_cdn_signing_key_secret_id
+      SIGNED_URL_TTL_SECONDS = tostring(var.signed_url_ttl_seconds)
+      SIGNING_ENABLED        = tostring(var.signing_enabled)
+      URL_HEALTH_WORKERS     = "50"
+    }
+  }
+}
+
 # --- Resign Playback URLs Lambda ---
 # Bundles the handler + shared signer helper into one zip so the runtime can import both.
 data "archive_file" "resign_playback_urls_zip" {

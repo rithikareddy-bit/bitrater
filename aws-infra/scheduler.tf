@@ -22,3 +22,26 @@ resource "aws_lambda_permission" "eventbridge_invoke_resign_playback_urls" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.resign_playback_urls.arn
 }
+
+# --- URL Health Checker — runs every hour ---
+resource "aws_cloudwatch_event_rule" "url_health_checker" {
+  name                = "chai-q-url-health-checker"
+  description         = "Check every h264/h265 and combined playback URL for HTTP reachability."
+  schedule_expression = "rate(1 hour)"
+  state               = "ENABLED"
+}
+
+resource "aws_cloudwatch_event_target" "url_health_checker" {
+  rule      = aws_cloudwatch_event_rule.url_health_checker.name
+  target_id = "invoke-url-health-checker"
+  arn       = aws_lambda_function.url_health_checker.arn
+  input     = "{}"
+}
+
+resource "aws_lambda_permission" "eventbridge_invoke_url_health_checker" {
+  statement_id  = "AllowEventBridgeInvokeUrlHealthChecker"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.url_health_checker.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.url_health_checker.arn
+}

@@ -41,6 +41,7 @@ export default function RootLayout({ children }) {
             <Link href="/show" style={{ color: '#4da6ff' }}>Show overview</Link>
             <Link href="/show-status" style={{ color: '#4da6ff' }}>Show status</Link>
             <Link href="/trailers" style={{ color: '#4da6ff' }}>Trailer overview</Link>
+            <Link href="/url-health" style={{ color: '#4da6ff' }}>URL Health</Link>
           </nav>
         </header>
         <main style={{ padding: '24px' }}>
