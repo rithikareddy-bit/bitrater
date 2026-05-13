@@ -132,6 +132,13 @@ export default function SigningPage() {
 
   const lastRunErrored = (latestRun?.errors?.length || 0) > 0;
 
+  const lastUpdateIso = latestRun?.finished_at || latestRun?.started_at || null;
+  const lastUpdateAgeSec = lastUpdateIso
+    ? Math.max(0, Math.floor((Date.now() - new Date(lastUpdateIso).getTime()) / 1000))
+    : null;
+  const staleThresholdSec = config?.stale_threshold_seconds ?? 12600;
+  const isStale = !loading && (lastUpdateAgeSec == null || lastUpdateAgeSec > staleThresholdSec);
+
   return (
     <div style={{ background: '#0a0a0a', color: '#e5e5e5', minHeight: '100vh', padding: '24px' }}>
       <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -139,6 +146,23 @@ export default function SigningPage() {
           <h1 style={{ fontSize: 20, margin: 0 }}>Signing</h1>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center' }}>
             <Link href="/" style={{ color: '#888', textDecoration: 'none', fontSize: 13 }}>← Home</Link>
+            <button
+              onClick={refresh}
+              title={lastUpdateIso ? `Last cron finished: ${formatTs(lastUpdateIso)}` : 'No runs found'}
+              style={{
+                padding: '8px 14px',
+                background: isStale ? '#dc2626' : '#1f1f1f',
+                color: isStale ? 'white' : '#aaa',
+                border: `1px solid ${isStale ? '#dc2626' : '#444'}`,
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Last update: {lastUpdateAgeSec != null ? `${formatDuration(lastUpdateAgeSec)} ago` : 'never'}
+              {isStale && <span style={{ marginLeft: 6 }}>● STALE</span>}
+            </button>
             <button
               onClick={fullSweep}
               disabled={sweeping}
