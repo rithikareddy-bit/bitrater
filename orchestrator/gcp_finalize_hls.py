@@ -168,11 +168,83 @@ def _inject_gap_separators(vtt_content: str, video_duration: float = 0) -> str:
     return out.strip()
 
 
-SUBTITLE_LANGS = {
-    "english_translation_final": ("en", "English"),
-    "native_script_final":       ("te", "Telugu"),
-    "reviewed_romanized":        ("tlg", "Tinglish"),
+# BCP-47 codes + display names for the show's source language. The romanized
+# track uses the {code}-Latn suffix (BCP-47 script subtag for Latin script).
+LANG_CODE_NAMES = {
+    "kn": "Kannada",
+    "te": "Telugu",
+    "hi": "Hindi",
+    "ta": "Tamil",
+    "ml": "Malayalam",
+    "bn": "Bengali",
+    "mr": "Marathi",
+    "gu": "Gujarati",
+    "pa": "Punjabi",
+    "ur": "Urdu",
+    "or": "Odia",
+    "as": "Assamese",
+    "en": "English",
 }
+LANG_NAME_TO_CODE = {v.lower(): k for k, v in LANG_CODE_NAMES.items()}
+
+ROMANIZED_DISPLAY_NAMES = {
+    "kn": "Kanglish",
+    "te": "Tinglish",
+    "hi": "Hinglish",
+    "ta": "Tanglish",
+    "ml": "Manglish",
+    "bn": "Banglish",
+}
+
+
+def _normalize_lang_code(source_language: str) -> str:
+    """Normalize a free-form language hint to a BCP-47 2-letter code.
+
+    Accepts: 'kannada', 'Kannada', 'kn', 'KAN' → 'kn'.
+    Falls back to the first two lowercased chars when unknown.
+    """
+    s = (source_language or "").strip().lower()
+    if not s:
+        return "xx"
+    if s in LANG_CODE_NAMES:
+        return s
+    if s in LANG_NAME_TO_CODE:
+        return LANG_NAME_TO_CODE[s]
+    if s == "kan":
+        return "kn"
+    return s[:2]
+
+
+def build_subtitle_langs(source_language: str) -> dict:
+    """Per-episode mapping from subtitle Mongo VTT field name to
+    (LANGUAGE code, HLS display NAME). LANGUAGE codes must match the
+    player's per-show displayLanguages config:
+
+        English   → "en-<showcode>"   e.g. en-kn for a Kannada show
+        Native    → "<showcode>"      e.g. kn
+        Romanized → "<romanized_name>" e.g. kanglish, tinglish, hinglish
+
+    These are NOT pure BCP-47 tags — they're application-specific codes the
+    front-end uses to look up display labels in its per-show language config.
+    """
+    code = _normalize_lang_code(source_language)
+    native_name = LANG_CODE_NAMES.get(code, code.title() if code != "xx" else "Native")
+    rom_name = ROMANIZED_DISPLAY_NAMES.get(code, f"{native_name} (Latin)")
+    # Use the romanized display name (lowercased) as the LANGUAGE code so the
+    # player can match it directly against its config (e.g. "kanglish").
+    rom_code = rom_name.lower() if code in ROMANIZED_DISPLAY_NAMES else f"{code}-latn"
+    english_code = f"en-{code}" if code not in ("xx", "en") else "en"
+    return {
+        "english_translation_final": (english_code, "English"),
+        "native_script_final":       (code, native_name),
+        "reviewed_romanized":        (rom_code, rom_name),
+    }
+
+
+# Back-compat re-export. NOTE: this is a *Telugu-defaulted* mapping retained
+# only so older imports don't crash. Production code paths must call
+# build_subtitle_langs(source_language) per episode instead.
+SUBTITLE_LANGS = build_subtitle_langs("telugu")
 
 SUBTITLE_PLAYLIST_TEMPLATE = """\
 #EXTM3U
@@ -243,33 +315,38 @@ def _get_episode_meta(db, episode_id):
 # ---------------------------------------------------------------------------
 
 def _get_subtitle_vtt_urls(episode_id):
-    """Query the subtitle MongoDB for VTT S3 URLs keyed by language."""
+    """Return ({vtt_field: url}, source_language) for the episode.
+
+    `source_language` comes from the subtitle Mongo doc's top-level field;
+    callers feed it into build_subtitle_langs() to emit correct LANGUAGE/NAME
+    per show (e.g. "kannada" → LANGUAGE="kn", NAME="Kannada").
+    """
     subtitle_uri = os.environ.get("SUBTITLE_MONGO_URI")
     if not subtitle_uri:
         print("[SUBS] SUBTITLE_MONGO_URI not configured, skipping subtitles")
-        return {}
+        return {}, ""
 
     client = pymongo.MongoClient(subtitle_uri)
     try:
         db = client["gld2sqs"]
         doc = db["subtitles"].find_one(
             {"episodes.episode_id": episode_id},
-            {"episodes.$": 1},
+            {"episodes.$": 1, "source_language": 1},
         )
         if not doc or not doc.get("episodes"):
             print(f"[SUBS] No subtitle record for episode {episode_id}")
-            return {}
+            return {}, ""
 
-        vtt_files = doc["episodes"][0].get("vtt_files", {})
-        result = {}
-        for lang_key, (lang_code, _) in SUBTITLE_LANGS.items():
-            url = vtt_files.get(lang_key)
-            if url:
-                result[lang_key] = url
-            else:
-                print(f"[SUBS] Missing {lang_key} VTT for episode {episode_id}")
-        print(f"[SUBS] Found {len(result)} subtitle URLs for {episode_id}")
-        return result
+        source_language = doc.get("source_language") or ""
+        vtt_files = doc["episodes"][0].get("vtt_files", {}) or {}
+        # We look at the three known VTT field names; missing ones are just skipped.
+        result = {k: v for k, v in vtt_files.items()
+                  if k in ("english_translation_final", "native_script_final", "reviewed_romanized") and v}
+        for k in ("english_translation_final", "native_script_final", "reviewed_romanized"):
+            if k not in result:
+                print(f"[SUBS] Missing {k} VTT for episode {episode_id}")
+        print(f"[SUBS] Found {len(result)} subtitle URLs for {episode_id} (source_language={source_language!r})")
+        return result, source_language
     finally:
         client.close()
 
@@ -290,15 +367,29 @@ def _download_vtt(url):
     return text
 
 
-def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls, video_duration=0):
+def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls, video_duration=0, subtitle_langs=None):
     """Download VTTs, upload to GCS, and create subtitle .m3u8 playlists.
-    Returns list of (lang_code, display_name, playlist_filename) for uploaded languages."""
+
+    `subtitle_langs` is the per-episode mapping from build_subtitle_langs(); if
+    None we fall back to the legacy module-level SUBTITLE_LANGS (Telugu) for
+    backward compat with any old caller.
+
+    Returns list of (lang_code, display_name, playlist_filename) for uploaded languages.
+    """
+    if subtitle_langs is None:
+        subtitle_langs = SUBTITLE_LANGS
     client = gcs.Client(credentials=creds)
     bucket = client.bucket(CDN_BUCKET)
     uploaded = []
 
-    for lang_key, url in vtt_urls.items():
-        lang_code, display_name = SUBTITLE_LANGS[lang_key]
+    # Iterate over subtitle_langs (canonical order: english → native → romanized)
+    # rather than vtt_urls (Mongo's arbitrary key order). This makes the
+    # resulting subtitle_tracks list deterministic so DEFAULT=YES always lands
+    # on English first.
+    for lang_key, (lang_code, display_name) in subtitle_langs.items():
+        url = vtt_urls.get(lang_key)
+        if not url:
+            continue
         vtt_filename = f"subtitle_{lang_code}.vtt"
         playlist_filename = f"subtitle_{lang_code}.m3u8"
 
@@ -592,11 +683,12 @@ def handler(event, context):
     _reorder_streams_in_manifest(creds, cdn_prefix, master_filename)
 
     # --- Subtitle pipeline (only for this codec's manifest) ---
-    vtt_urls = _get_subtitle_vtt_urls(episode_id)
+    vtt_urls, source_language = _get_subtitle_vtt_urls(episode_id)
     subtitle_tracks = []
     if vtt_urls:
         try:
-            subtitle_tracks = _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls, video_duration)
+            subtitle_langs = build_subtitle_langs(source_language)
+            subtitle_tracks = _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls, video_duration, subtitle_langs)
             _patch_master_manifest(creds, cdn_prefix, master_filename, subtitle_tracks)
         except Exception as e:
             print(f"[SUBS] Subtitle injection failed (non-fatal): {e}")

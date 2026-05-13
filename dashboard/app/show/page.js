@@ -931,11 +931,15 @@ export default function ShowOverviewPage() {
                   disabled={subsResyncing || subsEligibleCount === 0}
                   title={
                     subsResyncing ? 'Resync in progress'
-                    : subsEligibleCount === 0 ? 'All episodes already have subtitles injected'
-                    : `Inject subtitles into ${subsEligibleCount} episode(s) and re-sign`
+                    : subsEligibleCount === 0 ? 'No episodes have a combined master yet'
+                    : `Force-resync subtitles on ${subsEligibleCount} episode(s) — strips and rewrites existing entries`
                   }
                   onClick={async () => {
-                    if (!confirm(`Queue ${subsEligibleCount} episode(s) for subtitle resync? This runs in the background.`)) return;
+                    if (!confirm(
+                      `OVERWRITE subtitles on ${subsEligibleCount} episode(s) in this show? `
+                      + `Each episode's existing subtitle tracks will be stripped from the master and `
+                      + `replaced with a fresh canonical set from the subtitle DB. Runs in the background. Continue?`
+                    )) return;
                     setSubsResyncing(true);
                     setSubsResyncError(null);
                     setSubsResyncMsg(null);
@@ -947,23 +951,18 @@ export default function ShowOverviewPage() {
                       });
                       const data = await res.json();
                       if (!res.ok) throw new Error(data.error || 'Show resync failed');
-                      setSubsResyncMsg(`Queued ${data.queued} episode(s) — running in background. Count below updates as they finish.`);
-                      const startedAt = Date.now();
-                      const tick = async () => {
-                        const remaining = await refreshSubsEligibility(selectedId);
-                        if (remaining === 0) {
-                          setSubsResyncMsg(`All ${data.queued} episode(s) resynced.`);
-                          setSubsResyncing(false);
-                          return;
-                        }
-                        if (Date.now() - startedAt >= 10 * 60 * 1000) {
-                          setSubsResyncMsg(`${remaining} episode(s) still pending — check back later.`);
-                          setSubsResyncing(false);
-                          return;
-                        }
-                        setTimeout(tick, 15000);
-                      };
-                      tick();
+                      // Lambdas run async in the background. We can't tell from
+                      // eligibility count when they're done (it stays at total
+                      // episodes-with-combined-master). Just message the user
+                      // and clear the spinner after an estimated completion
+                      // window. Per-episode mongo state is the source of truth.
+                      const estimatedSeconds = Math.min(600, Math.max(60, data.queued * 30));
+                      setSubsResyncMsg(
+                        `Queued ${data.queued} episode(s). Running in background — `
+                        + `expected to finish in ~${Math.round(estimatedSeconds / 60)} min. `
+                        + `Verify per-episode via the dashboard.`
+                      );
+                      setTimeout(() => setSubsResyncing(false), estimatedSeconds * 1000);
                     } catch (err) {
                       setSubsResyncError(err.message);
                       setSubsResyncing(false);
@@ -983,8 +982,8 @@ export default function ShowOverviewPage() {
                   {subsResyncing
                     ? `Resyncing subtitles…`
                     : subsEligibleCount > 0
-                      ? `⊕ Resync Subtitles (${subsEligibleCount} pending)`
-                      : '✓ All subtitles synced'}
+                      ? `⟳ Resync Subtitles (${subsEligibleCount} episodes — overwrites)`
+                      : '— No combined masters yet'}
                 </button>
                 {subsResyncMsg && (
                   <div style={{ color: '#22c55e', fontSize: 12, marginTop: 6 }}>{subsResyncMsg}</div>

@@ -32,8 +32,13 @@ async function listMissingForShow(showId) {
     )
     .toArray();
 
+  // Eligibility = has a combined master. We do NOT filter by
+  // subtitles_injected because re-running on an already-synced episode is a
+  // valid operation (e.g. to correct mislabeled tracks or pick up new VTTs).
+  // The Lambda's cleanup is idempotent: strips old subtitle EXT-X-MEDIA
+  // entries and rewrites the canonical set from the current source_language.
   return docs
-    .filter((d) => d.combined_master_m3u8_url && !d.subtitles_injected)
+    .filter((d) => d.combined_master_m3u8_url)
     .map((d) => d.episode_id);
 }
 
@@ -110,7 +115,7 @@ export async function POST(request) {
         return NextResponse.json({ error: 'Show not found' }, { status: 404 });
       }
       if (targets.length === 0) {
-        return NextResponse.json({ showId, queued: 0, message: 'No episodes need subtitle resync' });
+        return NextResponse.json({ showId, queued: 0, message: 'No episodes have a combined master yet — nothing to resync' });
       }
       // Async fan-out: AppRunner edge cuts at ~120s; per-episode Lambda is
       // 300s. Queue all invocations in parallel then return — UI polls GET
@@ -148,8 +153,10 @@ export async function GET(request) {
       );
       const hasCombined = Boolean(doc?.combined_master_m3u8_url);
       const subs = doc?.subtitles_injected ?? null;
+      // Eligible whenever a combined master exists. Resync is force-overwrite:
+      // strips existing entries and rewrites from the current source_language.
       return NextResponse.json({
-        eligible: hasCombined && !subs,
+        eligible: hasCombined,
         hasCombined,
         subtitlesInjected: subs,
       });

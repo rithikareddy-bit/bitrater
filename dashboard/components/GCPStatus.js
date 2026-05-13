@@ -314,6 +314,9 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
   useEffect(() => { fetchSubsEligibility(); }, [fetchSubsEligibility]);
 
   const handleResyncSubtitles = async () => {
+    if (subsInjected && !confirm(
+      `This episode already has ${subsInjected} subtitle track(s) in the master. Resync will OVERWRITE them with a fresh set built from the subtitle DB's current source_language. Continue?`
+    )) return;
     setResyncing(true);
     setResyncError(null);
     setResyncOk(null);
@@ -615,7 +618,9 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         </div>
       )}
 
-      {/* Resync Subtitles — visible when combined master exists, enabled when subs not yet injected */}
+      {/* Resync Subtitles — enabled whenever a combined master exists.
+          Always force-overwrites: strips existing subtitle entries from the
+          master and rewrites the canonical set from current source_language. */}
       {combinedUrl && (
         <div style={{ marginTop: 12 }}>
           <button
@@ -624,9 +629,11 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
             disabled={!subsEligible || resyncing}
             title={
               resyncing ? 'Resync in progress' :
-              subsEligible ? 'Inject subtitle tracks into the combined master and re-sign' :
-              subsInjected ? `Subtitles already injected (${subsInjected})` :
-              'No combined master URL'
+              subsEligible
+                ? (subsInjected
+                    ? `Overwrites existing ${subsInjected} subtitle track(s) with a fresh set from the subtitle DB`
+                    : 'Inject subtitle tracks into the combined master and re-sign')
+                : 'No combined master URL'
             }
             style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -638,9 +645,11 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
               transition: 'background 0.2s', width: '100%', justifyContent: 'center',
             }}
           >
-            {resyncing ? <><Spinner color="#7c2d12" /> Resyncing subtitles…</>
-              : subsInjected ? `✓ Subtitles injected (${subsInjected})`
-              : '⊕ Resync Subtitles'}
+            {resyncing
+              ? <><Spinner color="#7c2d12" /> Resyncing subtitles…</>
+              : subsInjected
+                ? `⟳ Resync Subtitles (${subsInjected} tracks live — will overwrite)`
+                : '⊕ Resync Subtitles'}
           </button>
           {resyncError && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>{resyncError}</div>}
           {resyncOk && <div style={{ color: '#22c55e', fontSize: 12, marginTop: 6 }}>{resyncOk}</div>}

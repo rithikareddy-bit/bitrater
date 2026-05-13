@@ -43,7 +43,7 @@ from google.cloud import storage as gcs
 from gcp_finalize_hls import (
     CDN_BASE,
     CONTENT_TYPE_M3U8,
-    SUBTITLE_LANGS,
+    build_subtitle_langs,
     _get_episode_meta,
     _get_gcp_credentials,
     _get_subtitle_vtt_urls,
@@ -142,12 +142,16 @@ def _presign_subtitle_playlist(creds, cdn_prefix: str, playlist_filename: str, e
 
 
 def _patch_combined_master(creds, cdn_prefix: str, master_filename: str, subtitle_tracks, episode_id: str):
-    """Patch combined master in place with ABSOLUTE subtitle URIs and dedupe.
+    """Patch combined master in place: STRIP all existing entries in our
+    subtitle group and rewrite the canonical set from `subtitle_tracks`.
 
-    Idempotent — running twice on the same master does NOT duplicate
-    EXT-X-MEDIA lines or SUBTITLES="subtitles" attributes. Absolute URIs let
-    `resign_playback_urls._collect_child_m3u8_paths` discover the subtitle
-    playlists so they get signed alongside h264/h265 children.
+    Why strip-and-rewrite instead of dedupe-by-LANGUAGE: an earlier version of
+    this code hardcoded `LANGUAGE="te"` for any non-Telugu show, so historical
+    masters carry mislabeled entries (e.g. Kannada labeled "te"). We own the
+    GROUP-ID="subtitles" group, so wiping ours and rewriting is safe.
+    Other groups (audio etc.) are untouched.
+
+    Absolute subtitle URIs let resign_playback_urls discover and sign them.
     """
     if not subtitle_tracks:
         return False
@@ -162,18 +166,26 @@ def _patch_combined_master(creds, cdn_prefix: str, master_filename: str, subtitl
     text = blob.download_as_text(encoding="utf-8")
     lines = text.replace("\r\n", "\n").split("\n")
 
-    existing_langs = set()
-    for line in lines:
-        if line.startswith("#EXT-X-MEDIA") and 'TYPE=SUBTITLES' in line and f'GROUP-ID={SUBTITLE_GROUP_ID}' in line:
-            m = re.search(r'LANGUAGE="([^"]+)"', line)
-            if m:
-                existing_langs.add(m.group(1))
+    # Strip every existing EXT-X-MEDIA line in OUR subtitle group. Lines for
+    # other groups (audio, other subtitle groups if any) are preserved.
+    def _is_our_subtitle_media(line: str) -> bool:
+        return (
+            line.startswith("#EXT-X-MEDIA")
+            and "TYPE=SUBTITLES" in line
+            and f"GROUP-ID={SUBTITLE_GROUP_ID}" in line
+        )
 
+    stripped_count = sum(1 for l in lines if _is_our_subtitle_media(l))
+    if stripped_count:
+        print(f"[PATCH] Stripping {stripped_count} existing subtitle entries from {master_filename}")
+
+    # Build the fresh canonical set with absolute pre-signed URIs.
     new_subtitle_lines = []
+    en_seen = False
     for lang_code, display_name, playlist_filename in subtitle_tracks:
-        if lang_code in existing_langs:
-            continue
-        default = "YES" if lang_code == "en" and "en" not in existing_langs else "NO"
+        default = "YES" if (lang_code == "en" and not en_seen) else "NO"
+        if lang_code == "en":
+            en_seen = True
         absolute_uri_unsigned = f"{CDN_BASE}/{cdn_prefix}/{playlist_filename}"
         absolute_uri = _presign_subtitle_uri(absolute_uri_unsigned, episode_id)
         new_subtitle_lines.append(
@@ -186,8 +198,10 @@ def _patch_combined_master(creds, cdn_prefix: str, master_filename: str, subtitl
     patched = []
     inserted = False
     for line in lines:
+        if _is_our_subtitle_media(line):
+            continue  # drop old entries
         if line.startswith("#EXT-X-STREAM-INF"):
-            if not inserted and new_subtitle_lines:
+            if not inserted:
                 patched.extend(new_subtitle_lines)
                 inserted = True
             if 'SUBTITLES=' not in line:
@@ -196,13 +210,6 @@ def _patch_combined_master(creds, cdn_prefix: str, master_filename: str, subtitl
         else:
             patched.append(line)
 
-    if not new_subtitle_lines and not any(
-        ('SUBTITLES=' not in l and l.startswith('#EXT-X-STREAM-INF')) for l in lines
-    ):
-        # Nothing to add and every STREAM-INF already references the group → no-op
-        print(f"[PATCH] {master_filename} already has all subtitle tracks; skipping upload")
-        return True
-
     new_text = "\n".join(patched).rstrip() + "\n"
     if new_text == text.rstrip() + "\n":
         print(f"[PATCH] {master_filename} unchanged after patch; skipping upload")
@@ -210,8 +217,8 @@ def _patch_combined_master(creds, cdn_prefix: str, master_filename: str, subtitl
 
     blob.cache_control = "no-store"
     blob.upload_from_string(new_text, content_type=CONTENT_TYPE_M3U8)
-    added = [t[0] for t in subtitle_tracks if t[0] not in existing_langs]
-    print(f"[PATCH] {master_filename}: added langs={added}, existing={sorted(existing_langs)}")
+    print(f"[PATCH] {master_filename}: stripped={stripped_count}, "
+          f"wrote langs={[t[0] for t in subtitle_tracks]}")
     return True
 
 
@@ -279,14 +286,15 @@ def _resync_one(db, episode_id: str) -> dict:
     canonical = combined_url.split("?", 1)[0]
     cdn_prefix, master_filename = _split_cdn_url(canonical)
 
-    vtt_urls = _get_subtitle_vtt_urls(episode_id)
+    vtt_urls, source_language = _get_subtitle_vtt_urls(episode_id)
     if not vtt_urls:
         return {"episode_id": episode_id, "status": "skipped", "reason": "no-vtts-available"}
 
     _, _, _, _, video_duration = _get_episode_meta(db, episode_id)
     creds = _get_gcp_credentials()
+    subtitle_langs = build_subtitle_langs(source_language)
 
-    tracks = _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls, video_duration)
+    tracks = _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls, video_duration, subtitle_langs)
     if not tracks:
         return {"episode_id": episode_id, "status": "skipped", "reason": "no-tracks-uploaded"}
 
