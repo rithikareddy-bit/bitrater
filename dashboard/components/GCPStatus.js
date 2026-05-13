@@ -25,6 +25,11 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
   const [syncOk, setSyncOk] = useState(null);
+  const [subsEligible, setSubsEligible] = useState(false);
+  const [subsInjected, setSubsInjected] = useState(null);
+  const [resyncing, setResyncing] = useState(false);
+  const [resyncError, setResyncError] = useState(null);
+  const [resyncOk, setResyncOk] = useState(null);
   const [qcResult, setQcResult] = useState(null);
   const [qcRunning, setQcRunning] = useState(false);
   const [qcError, setQcError] = useState(null);
@@ -293,6 +298,46 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       setCombineError(err.message);
     } finally {
       setCombining(false);
+    }
+  };
+
+  const fetchSubsEligibility = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/resync-subtitles?episodeId=${encodeURIComponent(episodeId)}`);
+      if (!r.ok) return;
+      const d = await r.json();
+      setSubsEligible(Boolean(d?.eligible));
+      setSubsInjected(d?.subtitlesInjected ?? null);
+    } catch { /* non-fatal */ }
+  }, [episodeId]);
+
+  useEffect(() => { fetchSubsEligibility(); }, [fetchSubsEligibility]);
+
+  const handleResyncSubtitles = async () => {
+    setResyncing(true);
+    setResyncError(null);
+    setResyncOk(null);
+    try {
+      const res = await fetch('/api/resync-subtitles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodeId }),
+      });
+      let data = {};
+      try { const t = await res.text(); if (t) data = JSON.parse(t); } catch { /* ignore */ }
+      if (!res.ok || data?.status === 'error') {
+        throw new Error(data?.error || data?.reason || `Resync failed (${res.status})`);
+      }
+      if (data?.status === 'skipped') {
+        setResyncError(`Skipped: ${data.reason}`);
+      } else {
+        setResyncOk(`Subtitles resynced (${(data.tracks || []).join(', ') || 'no langs'})`);
+      }
+      fetchSubsEligibility();
+    } catch (err) {
+      setResyncError(err.message);
+    } finally {
+      setResyncing(false);
     }
   };
 
@@ -567,6 +612,38 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
           {syncOk && (
             <div style={{ color: '#22c55e', fontSize: 12, marginTop: 8 }}>{syncOk}</div>
           )}
+        </div>
+      )}
+
+      {/* Resync Subtitles — visible when combined master exists, enabled when subs not yet injected */}
+      {combinedUrl && (
+        <div style={{ marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={handleResyncSubtitles}
+            disabled={!subsEligible || resyncing}
+            title={
+              resyncing ? 'Resync in progress' :
+              subsEligible ? 'Inject subtitle tracks into the combined master and re-sign' :
+              subsInjected ? `Subtitles already injected (${subsInjected})` :
+              'No combined master URL'
+            }
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: (subsEligible && !resyncing) ? '#7c2d12' : '#1e1e1e',
+              color: (subsEligible && !resyncing) ? '#fed7aa' : '#555',
+              border: 'none', borderRadius: 8, padding: '10px 20px',
+              fontSize: 14, fontWeight: 600,
+              cursor: (subsEligible && !resyncing) ? 'pointer' : 'not-allowed',
+              transition: 'background 0.2s', width: '100%', justifyContent: 'center',
+            }}
+          >
+            {resyncing ? <><Spinner color="#7c2d12" /> Resyncing subtitles…</>
+              : subsInjected ? `✓ Subtitles injected (${subsInjected})`
+              : '⊕ Resync Subtitles'}
+          </button>
+          {resyncError && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>{resyncError}</div>}
+          {resyncOk && <div style={{ color: '#22c55e', fontSize: 12, marginTop: 6 }}>{resyncOk}</div>}
         </div>
       )}
 

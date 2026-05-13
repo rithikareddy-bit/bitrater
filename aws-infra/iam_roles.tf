@@ -166,6 +166,14 @@ resource "aws_iam_role_policy" "gcp_lambda_policy" {
         Action   = ["secretsmanager:GetSecretValue"]
         Effect   = "Allow"
         Resource = "arn:aws:secretsmanager:*:*:secret:${var.media_cdn_signing_key_secret_id}-*"
+      },
+      {
+        # resync_subtitles Lambda invokes the resign Lambda for the just-patched
+        # episode (re-signs combined master + every absolute child .m3u8).
+        Sid      = "InvokeResignFromResync"
+        Action   = ["lambda:InvokeFunction"]
+        Effect   = "Allow"
+        Resource = "arn:aws:lambda:*:*:function:chai-q-resign-playback-urls"
       }
     ]
   })

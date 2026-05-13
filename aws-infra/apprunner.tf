@@ -107,6 +107,7 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
           aws_lambda_function.gcp_create_combined_master.arn,
           aws_lambda_function.quality_checker.arn,
           aws_lambda_function.resign_playback_urls.arn,
+          aws_lambda_function.resync_subtitles.arn,
         ]
       }
     ]
@@ -143,6 +144,7 @@ resource "aws_apprunner_service" "dashboard" {
             CREATE_COMBINED_MASTER_LAMBDA_ARN = aws_lambda_function.gcp_create_combined_master.arn
             QUALITY_CHECK_LAMBDA_ARN          = aws_lambda_function.quality_checker.arn
             RESIGN_PLAYBACK_URLS_LAMBDA_ARN   = aws_lambda_function.resign_playback_urls.arn
+            RESYNC_SUBTITLES_LAMBDA_ARN       = aws_lambda_function.resync_subtitles.arn
             RESIGN_SCHEDULE_EXPRESSION        = var.resign_schedule_expression
             SIGNED_URL_TTL_SECONDS            = tostring(var.signed_url_ttl_seconds)
             NEXT_TELEMETRY_DISABLED           = "1"

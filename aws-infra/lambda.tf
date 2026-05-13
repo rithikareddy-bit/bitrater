@@ -502,6 +502,48 @@ resource "aws_lambda_function" "url_health_checker" {
   }
 }
 
+# --- Resync Subtitles Lambda (on-demand from dashboard buttons) ---
+# Imports gcp_finalize_hls helpers (subtitle Mongo lookup, VTT upload), so we
+# bundle both files into the zip.
+data "archive_file" "resync_subtitles_zip" {
+  type        = "zip"
+  output_path = "/tmp/chai-q-resync-subtitles.zip"
+
+  source {
+    content  = file("../orchestrator/resync_subtitles.py")
+    filename = "resync_subtitles.py"
+  }
+  source {
+    content  = file("../orchestrator/gcp_finalize_hls.py")
+    filename = "gcp_finalize_hls.py"
+  }
+  source {
+    content  = file("../orchestrator/media_cdn_signer.py")
+    filename = "media_cdn_signer.py"
+  }
+}
+
+resource "aws_lambda_function" "resync_subtitles" {
+  filename         = data.archive_file.resync_subtitles_zip.output_path
+  source_code_hash = data.archive_file.resync_subtitles_zip.output_base64sha256
+  function_name    = "chai-q-resync-subtitles"
+  role             = aws_iam_role.gcp_lambda_role.arn
+  handler          = "resync_subtitles.handler"
+  runtime          = "python3.11"
+  timeout          = 300
+  memory_size      = 512
+  layers           = [aws_lambda_layer_version.gcp_deps.arn]
+
+  environment {
+    variables = merge(local.gcp_lambda_env, {
+      RESIGN_PLAYBACK_URLS_LAMBDA_ARN = aws_lambda_function.resign_playback_urls.arn
+      SIGNING_KEY_SECRET_ID           = var.media_cdn_signing_key_secret_id
+      SIGNED_URL_TTL_SECONDS          = tostring(var.signed_url_ttl_seconds)
+      SIGNING_ENABLED                 = tostring(var.signing_enabled)
+    })
+  }
+}
+
 # --- Resign Playback URLs Lambda ---
 # Bundles the handler + shared signer helper into one zip so the runtime can import both.
 data "archive_file" "resign_playback_urls_zip" {

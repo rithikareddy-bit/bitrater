@@ -244,11 +244,15 @@ def handler(event, context):
     combined_url = f"{CDN_BASE}/{cdn_prefix}/{combined_filename}"
 
     try:
+        # Reset subtitles_injected: a fresh combined at a new prefix only
+        # carries subs propagated from per-codec masters. Resync coverage
+        # for THIS new combined must be re-asserted via the dashboard button.
         mongo_client["chai_q_lab"].video_episodes.update_one(
             {"episode_id": episode_id},
             {"$set": {
                 "combined_master_m3u8_url": combined_url,
                 "combined_master_created_at": now_iso,
+                "subtitles_injected": 0,
             }},
         )
     finally:

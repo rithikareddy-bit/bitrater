@@ -558,6 +558,28 @@ export default function ShowOverviewPage() {
   const [pipelineError, setPipelineError]   = useState(null);
   const pipelineTimerRef = useRef(null);
 
+  // ── Resync subtitles state (show-wide) ──────────────────────────────────────
+  const [subsEligibleCount, setSubsEligibleCount] = useState(0);
+  const [subsResyncing, setSubsResyncing] = useState(false);
+  const [subsResyncMsg, setSubsResyncMsg] = useState(null);
+  const [subsResyncError, setSubsResyncError] = useState(null);
+
+  const refreshSubsEligibility = useCallback(async (showId) => {
+    if (!showId) return 0;
+    try {
+      const r = await fetch(`/api/resync-subtitles?showId=${showId}`);
+      if (!r.ok) return 0;
+      const d = await r.json();
+      const total = Number(d?.total) || 0;
+      setSubsEligibleCount(total);
+      return total;
+    } catch { return 0; }
+  }, []);
+
+  useEffect(() => {
+    refreshSubsEligibility(selectedId);
+  }, [selectedId, refreshSubsEligibility]);
+
   const timerRef = useRef(null);
   const visibleRef = useRef(true);
 
@@ -901,6 +923,76 @@ export default function ShowOverviewPage() {
                   } catch { /* non-fatal */ }
                 }}
               />
+            )}
+            {selectedId && (
+              <div style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  disabled={subsResyncing || subsEligibleCount === 0}
+                  title={
+                    subsResyncing ? 'Resync in progress'
+                    : subsEligibleCount === 0 ? 'All episodes already have subtitles injected'
+                    : `Inject subtitles into ${subsEligibleCount} episode(s) and re-sign`
+                  }
+                  onClick={async () => {
+                    if (!confirm(`Queue ${subsEligibleCount} episode(s) for subtitle resync? This runs in the background.`)) return;
+                    setSubsResyncing(true);
+                    setSubsResyncError(null);
+                    setSubsResyncMsg(null);
+                    try {
+                      const res = await fetch('/api/resync-subtitles', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ showId: selectedId }),
+                      });
+                      const data = await res.json();
+                      if (!res.ok) throw new Error(data.error || 'Show resync failed');
+                      setSubsResyncMsg(`Queued ${data.queued} episode(s) — running in background. Count below updates as they finish.`);
+                      const startedAt = Date.now();
+                      const tick = async () => {
+                        const remaining = await refreshSubsEligibility(selectedId);
+                        if (remaining === 0) {
+                          setSubsResyncMsg(`All ${data.queued} episode(s) resynced.`);
+                          setSubsResyncing(false);
+                          return;
+                        }
+                        if (Date.now() - startedAt >= 10 * 60 * 1000) {
+                          setSubsResyncMsg(`${remaining} episode(s) still pending — check back later.`);
+                          setSubsResyncing(false);
+                          return;
+                        }
+                        setTimeout(tick, 15000);
+                      };
+                      tick();
+                    } catch (err) {
+                      setSubsResyncError(err.message);
+                      setSubsResyncing(false);
+                    }
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 6,
+                    border: `1px solid ${(subsResyncing || subsEligibleCount === 0) ? '#3a2a1a' : '#7c2d12'}`,
+                    background: (subsResyncing || subsEligibleCount === 0) ? '#1f140f' : '#7c2d12',
+                    color: (subsResyncing || subsEligibleCount === 0) ? '#6a4a3a' : '#fed7aa',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: (subsResyncing || subsEligibleCount === 0) ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {subsResyncing
+                    ? `Resyncing subtitles…`
+                    : subsEligibleCount > 0
+                      ? `⊕ Resync Subtitles (${subsEligibleCount} pending)`
+                      : '✓ All subtitles synced'}
+                </button>
+                {subsResyncMsg && (
+                  <div style={{ color: '#22c55e', fontSize: 12, marginTop: 6 }}>{subsResyncMsg}</div>
+                )}
+                {subsResyncError && (
+                  <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>{subsResyncError}</div>
+                )}
+              </div>
             )}
           </div>
 
