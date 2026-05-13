@@ -152,7 +152,7 @@ def _collect_urls(mongo_client) -> list[dict]:
     ep_meta = {}   # episode_id → {show_title, episode_name, episode_number}
 
     for show in showcache.find(
-        {},
+        {"active": True},
         {"title": 1,
          "episodes.id": 1, "episodes.title": 1,
          "episodes.episode_number": 1, "episodes.episodeNumber": 1,
@@ -196,8 +196,12 @@ def _collect_urls(mongo_client) -> list[dict]:
 
     # Per-codec master manifests from chai_q_lab.video_episodes
     q_lab = mongo_client["chai_q_lab"]
+    active_episode_ids = list(ep_meta.keys())
+    if not active_episode_ids:
+        return entries
     for ep in q_lab.video_episodes.find(
-        {"$or": [
+        {"episode_id": {"$in": active_episode_ids},
+         "$or": [
             {"h264_master_m3u8_url": {"$exists": True, "$ne": None}},
             {"h265_master_m3u8_url": {"$exists": True, "$ne": None}},
         ]},
