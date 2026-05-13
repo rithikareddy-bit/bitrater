@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+import { findEpisodeInShowcache, findTrailerInShowcase } from '@/lib/showcacheLookup';
 import { resolveDurationForLabEpisode } from '@/lib/labEpisodeDuration';
 
 export const dynamic = 'force-dynamic';
@@ -28,9 +29,11 @@ export async function GET(request, { params }) {
     let videoUrl = null;
     if (trailerMatch) {
       const [, showIdHex, trailerKey] = trailerMatch;
-      const showDoc = await masterDb.collection('showcache').findOne(
-        { _id: new ObjectId(showIdHex), 'trailers_playback_urls._key': trailerKey },
-        { projection: { 'trailers_playback_urls.$': 1, title: 1, slug: 1 } },
+      const showDoc = await findTrailerInShowcase(
+        masterDb,
+        new ObjectId(showIdHex),
+        trailerKey,
+        { 'trailers_playback_urls.$': 1, title: 1, slug: 1 },
       );
       const trailer = showDoc?.trailers_playback_urls?.[0] ?? null;
       if (trailer) {
@@ -48,9 +51,10 @@ export async function GET(request, { params }) {
         };
       }
     } else {
-      const showWithEp = await masterDb.collection('showcache').findOne(
-        { 'episodes.id': id },
-        { projection: { 'episodes.$': 1, title: 1 } },
+      const showWithEp = await findEpisodeInShowcache(
+        masterDb,
+        id,
+        { 'episodes.$': 1, title: 1 },
       );
       episodeMeta = showWithEp?.episodes?.[0] ?? null;
       videoUrl = episodeMeta?.s3_url ?? null;

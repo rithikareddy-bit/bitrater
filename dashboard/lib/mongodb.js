@@ -1,6 +1,7 @@
 import { MongoClient } from 'mongodb';
 
 let clientPromise;
+let devClientPromise;
 
 // Lazy init — deferred until first request so Next.js build phase doesn't fail
 export default function getClientPromise() {
@@ -21,4 +22,32 @@ export default function getClientPromise() {
   }
 
   return clientPromise;
+}
+
+// Fallback dev Mongo (same URI as SUBTITLE_MONGO_URI). Returns null when unset
+// so callers can short-circuit instead of throwing.
+export function getDevClientPromise() {
+  if (devClientPromise) return devClientPromise;
+
+  const uri = process.env.SUBTITLE_MONGO_URI;
+  if (!uri) return null;
+
+  const client = new MongoClient(uri);
+  const promise = client.connect().catch((err) => {
+    // Drop the cached rejection so the next request retries instead of being
+    // permanently stuck on a transient connect failure.
+    if (devClientPromise === promise) devClientPromise = null;
+    if (process.env.NODE_ENV === 'development' && global._mongoDevClientPromise === promise) {
+      global._mongoDevClientPromise = null;
+    }
+    throw err;
+  });
+  if (process.env.NODE_ENV === 'development') {
+    if (!global._mongoDevClientPromise) global._mongoDevClientPromise = promise;
+    devClientPromise = global._mongoDevClientPromise;
+  } else {
+    devClientPromise = promise;
+  }
+
+  return devClientPromise;
 }

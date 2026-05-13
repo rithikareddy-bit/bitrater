@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+import { findEpisodeInShowcache, findTrailerInShowcase } from '@/lib/showcacheLookup';
 
 const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
@@ -72,9 +73,11 @@ export async function POST(request) {
       itemKind = 'trailer';
       const [, showIdHex, key] = trailerMatch;
       trailerKey = key;
-      const showDoc = await masterDb.collection('showcache').findOne(
-        { _id: new ObjectId(showIdHex), 'trailers_playback_urls._key': key },
-        { projection: { slug: 1, 'trailers_playback_urls.$': 1 } },
+      const showDoc = await findTrailerInShowcase(
+        masterDb,
+        new ObjectId(showIdHex),
+        key,
+        { slug: 1, 'trailers_playback_urls.$': 1 },
       );
       const trailer = showDoc?.trailers_playback_urls?.[0];
       s3Url = trailer?.s3Url || trailer?.s3_url;
@@ -83,10 +86,7 @@ export async function POST(request) {
         return NextResponse.json({ error: 'No s3Url found for this trailer' }, { status: 400 });
       }
     } else {
-      const showWithEp = await masterDb.collection('showcache').findOne(
-        { 'episodes.id': episodeId },
-        { projection: { 'episodes.$': 1 } },
-      );
+      const showWithEp = await findEpisodeInShowcache(masterDb, episodeId);
       s3Url = showWithEp?.episodes?.[0]?.s3_url;
       if (!s3Url) {
         return NextResponse.json({ error: 'No s3_url found for this episode' }, { status: 400 });

@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import { videoIdFromS3Url } from '@/lib/videoId';
+import { findEpisodeInShowcache } from '@/lib/showcacheLookup';
 
 const DEFAULT_DB = process.env.MONGO_DATABASE || 'master';
-const SHOWCACHE = process.env.MONGO_SHOWCACHE_COLLECTION || 'showcache';
 const EPISODE_COLLECTION = process.env.MONGO_EPISODE_COLLECTION || 'episode';
 const VTT_COLLECTION = process.env.MONGO_VTT_COLLECTION || 'episode_vtt';
 
@@ -23,10 +23,7 @@ export async function POST(request) {
     const client = await clientPromise();
     const masterDb = client.db(DEFAULT_DB);
 
-    const showWithEp = await masterDb.collection(SHOWCACHE).findOne(
-      { 'episodes.id': episodeId },
-      { projection: { 'episodes.$': 1 } },
-    );
+    const showWithEp = await findEpisodeInShowcache(masterDb, episodeId);
     const ep = showWithEp?.episodes?.[0];
     if (!ep) {
       return NextResponse.json(

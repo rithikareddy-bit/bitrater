@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { SFNClient, DescribeExecutionCommand } from '@aws-sdk/client-sfn';
 import clientPromise from '@/lib/mongodb';
 import { videoIdFromS3Url } from '@/lib/videoId';
+import { findEpisodeInShowcache } from '@/lib/showcacheLookup';
 
 const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
@@ -79,10 +80,7 @@ export async function GET(request, { params }) {
 
     let thumb_vtt = null;
     try {
-      const showWithEp = await masterDb.collection('showcache').findOne(
-        { 'episodes.id': id },
-        { projection: { 'episodes.$': 1 } },
-      );
+      const showWithEp = await findEpisodeInShowcache(masterDb, id);
       const s3Url = showWithEp?.episodes?.[0]?.s3_url;
       if (s3Url) {
         const videoId = videoIdFromS3Url(s3Url);

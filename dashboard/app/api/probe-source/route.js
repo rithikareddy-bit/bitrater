@@ -5,6 +5,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+import { findEpisodeInShowcache, findTrailerInShowcase } from '@/lib/showcacheLookup';
 
 const TRAILER_ID_RE = /^trailer_([a-f0-9]{24})_(.+)$/;
 
@@ -46,9 +47,10 @@ export async function POST(request) {
     let s3Url;
     if (trailerMatch) {
       const [, showIdHex, key] = trailerMatch;
-      const showDoc = await masterDb.collection('showcache').findOne(
-        { _id: new ObjectId(showIdHex), 'trailers_playback_urls._key': key },
-        { projection: { 'trailers_playback_urls.$': 1 } },
+      const showDoc = await findTrailerInShowcase(
+        masterDb,
+        new ObjectId(showIdHex),
+        key,
       );
       const trailer = showDoc?.trailers_playback_urls?.[0];
       s3Url = trailer?.s3Url || trailer?.s3_url;
@@ -56,10 +58,7 @@ export async function POST(request) {
         return NextResponse.json({ error: 'No s3Url found for this trailer' }, { status: 400 });
       }
     } else {
-      const showWithEp = await masterDb.collection('showcache').findOne(
-        { 'episodes.id': episodeId },
-        { projection: { 'episodes.$': 1 } },
-      );
+      const showWithEp = await findEpisodeInShowcache(masterDb, episodeId);
       s3Url = showWithEp?.episodes?.[0]?.s3_url;
       if (!s3Url) {
         return NextResponse.json({ error: 'No s3_url found for this episode' }, { status: 400 });
