@@ -162,7 +162,19 @@ export async function orchestrate(runIdStr) {
     if (logEntry) {
       update.$push = { 'episodes.$.transition_log': logEntry };
     }
-    await col.updateOne({ _id: runId, 'episodes.episode_id': episodeId }, update);
+    // Guard against mid-tick writes after Cancel: if the run was just cancelled,
+    // or this specific episode was already marked CANCELLED by /api/auto-pipeline/cancel,
+    // the positional match will miss and the stale write is dropped. Without
+    // this, COMBINING / RUNNING / lab status writes inside a hot loop can land
+    // AFTER Cancel and resurrect the episode as "running" or "finalizing".
+    await col.updateOne(
+      {
+        _id: runId,
+        status: 'RUNNING',
+        episodes: { $elemMatch: { episode_id: episodeId, status: { $ne: 'CANCELLED' } } },
+      },
+      update,
+    );
   }
 
   // ── HELPER: is episode in terminal state ──────────────────────────────────────
@@ -273,7 +285,7 @@ export async function orchestrate(runIdStr) {
     const eligible = episodes.filter(ep => ep.s3_url && ep.s3_url.trim() !== '' && !isTerminal(ep));
     if (eligible.length === 0) {
       await col.updateOne(
-        { _id: runId, locked_by: instanceId },
+        { _id: runId, locked_by: instanceId, status: 'RUNNING' },
         { $set: { status: 'COMPLETED', finished_at: nowDate(), locked_by: null, locked_at: null } },
       );
       return;
@@ -1154,8 +1166,10 @@ export async function orchestrate(runIdStr) {
   }
 
   // ── DONE ──────────────────────────────────────────────────────────────────────
+  // Filter on status:'RUNNING' so a Cancel that landed between the poll-loop's
+  // last renewal and here doesn't get clobbered back to COMPLETED.
   await col.updateOne(
-    { _id: runId, locked_by: instanceId },
+    { _id: runId, locked_by: instanceId, status: 'RUNNING' },
     { $set: { status: 'COMPLETED', finished_at: nowDate(), locked_by: null, locked_at: null } },
   );
   console.log(`[orchestrate] Pipeline ${runIdStr} completed`);

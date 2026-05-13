@@ -38,6 +38,7 @@ export function gcpShort(status) {
   if (status === 'SUCCEEDED' || status === 'COMPLETE') return 'Done';
   if (status === 'RUNNING' || status === 'PENDING') return '…';
   if (status === 'FAILED') return 'Fail';
+  if (status === 'CANCELLED') return 'Cancelled';
   return status;
 }
 

@@ -68,8 +68,8 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
   };
 
   useEffect(() => {
-    const h264Complete = golden?.lab_status_h264 === 'COMPLETE' || golden?.lab_status_h264 === 'FAILED';
-    const h265Complete = golden?.lab_status_h265 === 'COMPLETE' || golden?.lab_status_h265 === 'FAILED';
+    const h264Complete = golden?.lab_status_h264 === 'COMPLETE' || golden?.lab_status_h264 === 'FAILED' || golden?.lab_status_h264 === 'CANCELLED';
+    const h265Complete = golden?.lab_status_h265 === 'COMPLETE' || golden?.lab_status_h265 === 'FAILED' || golden?.lab_status_h265 === 'CANCELLED';
     if (h264Complete && h265Complete) {
       stopGoldenPoll();
     }
@@ -159,7 +159,7 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
         const labFinishedKey = `lab_finished_at_${codec}`;
         const labStartedKey = `lab_run_started_at_${codec}`;
         const serverComplete = golden?.[labStatusKey] === 'COMPLETE';
-        const serverFailed = s.labStatus === 'FAILED' || golden?.[labStatusKey] === 'FAILED';
+        const serverFailed = s.labStatus === 'FAILED' || golden?.[labStatusKey] === 'FAILED' || golden?.[labStatusKey] === 'CANCELLED';
         const hasGolden = hasGoldenForCodec(golden, codec);
         const showLabSpinner = pushing === codec || (!isDone && (running > 0 || serverRunning));
         const isPartialFailure = (isDone && failed > 0 && !hasGolden) || (serverFailed && !hasGolden);

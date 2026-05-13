@@ -34,6 +34,7 @@ const LAB_COLORS = {
   COMPLETE: '#22c55e',
   RUNNING: '#f59e0b',
   FAILED: '#ef4444',
+  CANCELLED: '#94a3b8',
   'NOT RUN': '#555',
 };
 
@@ -74,7 +75,9 @@ function LabPill({ status }) {
         ? 'Run…'
         : status === 'FAILED'
           ? 'Fail'
-          : '—';
+          : status === 'CANCELLED'
+            ? 'Cancl'
+            : '—';
   const color = LAB_COLORS[status] || LAB_COLORS['NOT RUN'];
   return (
     <span

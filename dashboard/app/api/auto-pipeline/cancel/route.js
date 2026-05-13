@@ -99,6 +99,17 @@ export async function POST(request) {
     let stoppedLabs = 0;
     let stoppedGcp = 0;
     let restoredEpisodes = 0;
+    // Per-episode video_episodes field writes for in-flight codecs. The episode
+    // table reads lab_status_${codec} / gcp_job_status_${codec} from
+    // video_episodes — stop-lab only writes 'FAILED' when an execution ARN
+    // exists, and SFN stop doesn't write gcp_job_status at all. Without these
+    // writes the UI keeps spinning even though the backend is stopped.
+    const veWrites = new Map(); // episode_id -> { $set: {...} }
+    const addVeSet = (episodeId, field, value) => {
+      let plan = veWrites.get(episodeId);
+      if (!plan) { plan = { $set: {} }; veWrites.set(episodeId, plan); }
+      plan.$set[field] = value;
+    };
 
     // Pre-fetch GCP execution ARNs from video_episodes for episodes whose GCP
     // is in-flight in pipeline_runs. We need these because cancel must stop
@@ -136,21 +147,37 @@ export async function POST(request) {
       // Stop running lab Step Functions + Batch jobs
       if (ep.lab_h264_status === 'STARTING' || ep.lab_h264_status === 'RUNNING') {
         stopPromises.push(stopLabForEpisode(ep.episode_id, 'h264').then(ok => { if (ok) stoppedLabs++; }));
+        addVeSet(ep.episode_id, 'lab_status_h264', 'CANCELLED');
       }
       if (ep.lab_h265_status === 'STARTING' || ep.lab_h265_status === 'RUNNING') {
         stopPromises.push(stopLabForEpisode(ep.episode_id, 'h265').then(ok => { if (ok) stoppedLabs++; }));
+        addVeSet(ep.episode_id, 'lab_status_h265', 'CANCELLED');
       }
 
       // Stop running GCP Step Functions per codec (their completion writes
       // h*_master_m3u8_url to video_episodes, which would clobber the restore).
       const gcpDoc = gcpArnByEp.get(ep.episode_id);
-      if (gcpDoc?.gcp_execution_arn_h264 &&
-          (ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING')) {
-        stopPromises.push(stopGcpExecution(gcpDoc.gcp_execution_arn_h264).then(ok => { if (ok) stoppedGcp++; }));
+      if (ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING') {
+        if (gcpDoc?.gcp_execution_arn_h264) {
+          stopPromises.push(stopGcpExecution(gcpDoc.gcp_execution_arn_h264).then(ok => { if (ok) stoppedGcp++; }));
+        }
+        addVeSet(ep.episode_id, 'gcp_job_status_h264', 'CANCELLED');
       }
-      if (gcpDoc?.gcp_execution_arn_h265 &&
-          (ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING')) {
-        stopPromises.push(stopGcpExecution(gcpDoc.gcp_execution_arn_h265).then(ok => { if (ok) stoppedGcp++; }));
+      if (ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING') {
+        if (gcpDoc?.gcp_execution_arn_h265) {
+          stopPromises.push(stopGcpExecution(gcpDoc.gcp_execution_arn_h265).then(ok => { if (ok) stoppedGcp++; }));
+        }
+        addVeSet(ep.episode_id, 'gcp_job_status_h265', 'CANCELLED');
+      }
+
+      // If this episode was in the COMBINING step (between create-combined-master
+      // and QC verdict), video_episodes.quality_check.overall is left as 'RUNNING'
+      // by /api/quality-check. The UI's qcLabel('RUNNING') renders 'Checking…'
+      // forever after cancel. Clear it so the row falls back to '—'. The async
+      // QC Lambda may still write a real verdict later, which is fine — it
+      // overwrites the null with PASS / ISSUES_FOUND / FAILED.
+      if (ep.status === 'COMBINING') {
+        addVeSet(ep.episode_id, 'quality_check', null);
       }
 
       // Update episode status + all sub-statuses in the pipeline_runs doc
@@ -211,6 +238,20 @@ export async function POST(request) {
     // restore must run AFTER to overwrite that FAILED with the snapshotted
     // pre-Run-Pipeline status (typically 'COMPLETE' or null).
     await Promise.allSettled(stopPromises);
+
+    // For Continue Lab (non-force) runs, write CANCELLED to video_episodes so
+    // the episode table flips immediately. Force-rerun's restorePlans below
+    // overwrite these same fields with the pre-run snapshot, so skip the write
+    // there to avoid a transient flicker.
+    if (!isForceRun && veWrites.size > 0) {
+      await Promise.allSettled(
+        Array.from(veWrites.entries()).map(([episodeId, update]) =>
+          videoEpisodesCol.updateOne({ episode_id: episodeId }, update).catch(err => {
+            console.warn(`[auto-pipeline/cancel] video_episodes cancel write failed for ${episodeId}:`, err?.message);
+          }),
+        ),
+      );
+    }
 
     await Promise.allSettled(restorePlans.map(({ episodeId, update }) =>
       videoEpisodesCol.updateOne({ episode_id: episodeId }, update)
