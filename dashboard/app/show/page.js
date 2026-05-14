@@ -268,14 +268,34 @@ function ShowStatsPanel({ stats }) {
         color="#FF5733"
       />
 
-      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 14, lineHeight: 1.45 }}>
-        <div>
-          <span style={{ color: '#3380FF', fontWeight: 600 }}>1080p only</span> (one rung):{' '}
-          {c.h264_1080_only_display}
-        </div>
-        <div style={{ marginTop: 4 }}>
-          <span style={{ color: '#FF5733', fontWeight: 600 }}>1080p only</span>: {c.h265_1080_only_display}
-        </div>
+      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 14, lineHeight: 1.5 }}>
+        <div style={{ color: '#94a3b8', fontWeight: 600, marginBottom: 4 }}>Per-resolution (one rung)</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left', color: '#64748b', padding: '2px 6px' }}>Res</th>
+              <th style={{ textAlign: 'right', color: '#3380FF', padding: '2px 6px' }}>H.264</th>
+              <th style={{ textAlign: 'right', color: '#FF5733', padding: '2px 6px' }}>H.265</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={{ padding: '2px 6px', color: '#cbd5e1' }}>1080p</td>
+              <td style={{ padding: '2px 6px', textAlign: 'right' }}>{c.h264_1080_only_display}</td>
+              <td style={{ padding: '2px 6px', textAlign: 'right' }}>{c.h265_1080_only_display}</td>
+            </tr>
+            <tr>
+              <td style={{ padding: '2px 6px', color: '#cbd5e1' }}>720p</td>
+              <td style={{ padding: '2px 6px', textAlign: 'right' }}>{c.h264_720_only_display}</td>
+              <td style={{ padding: '2px 6px', textAlign: 'right' }}>{c.h265_720_only_display}</td>
+            </tr>
+            <tr>
+              <td style={{ padding: '2px 6px', color: '#cbd5e1' }}>480p</td>
+              <td style={{ padding: '2px 6px', textAlign: 'right' }}>{c.h264_480_only_display}</td>
+              <td style={{ padding: '2px 6px', textAlign: 'right' }}>{c.h265_480_only_display}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <div style={{ fontSize: 11, color: '#888', marginBottom: 6 }}>Pipeline</div>

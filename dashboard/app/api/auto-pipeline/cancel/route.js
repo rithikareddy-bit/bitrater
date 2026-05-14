@@ -9,23 +9,6 @@ const STOP_LAB_BASE = typeof process !== 'undefined'
 
 const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
-// Fields the Run Pipeline snapshot stores per episode. Must stay in sync with
-// PRIOR_STATE_PROJECTION in /api/auto-pipeline/start. We enumerate explicitly
-// (instead of Object.entries(prior)) so a snapshot field that was ABSENT in
-// the original video_episodes doc still gets $unset on restore — otherwise
-// /api/push's writes (e.g. lab_status='RUNNING') would persist forever.
-const RESTORE_FIELDS = [
-  'lab_status_h264',
-  'lab_status_h265',
-  'golden_recipes',
-  'gcp_job_status_h264',
-  'gcp_job_status_h265',
-  'h264_master_m3u8_url',
-  'h265_master_m3u8_url',
-  'combined_master_m3u8_url',
-  'quality_check',
-];
-
 export const dynamic = 'force-dynamic';
 
 async function stopLabForEpisode(episodeId, codec) {
@@ -93,12 +76,8 @@ export async function POST(request) {
     }
 
     const nowDate = new Date();
-    // Only force-rerun (Run Pipeline) runs are destructive and need restore.
-    // Continue Lab (force=false) is read-only on prior video_episodes state.
-    const isForceRun = run.force_rerun === true;
     let stoppedLabs = 0;
     let stoppedGcp = 0;
-    let restoredEpisodes = 0;
     // Per-episode video_episodes field writes for in-flight codecs. The episode
     // table reads lab_status_${codec} / gcp_job_status_${codec} from
     // video_episodes — stop-lab only writes 'FAILED' when an execution ARN
@@ -135,38 +114,46 @@ export async function POST(request) {
 
     // 3. Stop all running labs and mark all non-terminal episodes as CANCELLED
     const stopPromises = [];
-    // Build restore plans as we iterate; execute them only AFTER stop-lab
-    // completes so the restore overwrites stop-lab's FAILED writeback.
-    const restorePlans = [];
 
     for (const ep of run.episodes) {
       const isTerminal = ep.status === 'READY_TO_SYNC' || ep.status === 'SYNCED' ||
                          ep.status === 'SKIPPED' || ep.status === 'FAILED';
       if (isTerminal) continue;
 
-      // Stop running lab Step Functions + Batch jobs
+      // Stop in-flight lab SFN/Batch only when there's actually a running job
+      // to stop. Mark CANCELLED for every non-COMPLETE codec — including
+      // QUEUED — because the run is dead and they'll never execute. Codecs
+      // that already finished (COMPLETE) are preserved.
       if (ep.lab_h264_status === 'STARTING' || ep.lab_h264_status === 'RUNNING') {
         stopPromises.push(stopLabForEpisode(ep.episode_id, 'h264').then(ok => { if (ok) stoppedLabs++; }));
+      }
+      if (ep.lab_h264_status !== 'COMPLETE') {
         addVeSet(ep.episode_id, 'lab_status_h264', 'CANCELLED');
       }
       if (ep.lab_h265_status === 'STARTING' || ep.lab_h265_status === 'RUNNING') {
         stopPromises.push(stopLabForEpisode(ep.episode_id, 'h265').then(ok => { if (ok) stoppedLabs++; }));
+      }
+      if (ep.lab_h265_status !== 'COMPLETE') {
         addVeSet(ep.episode_id, 'lab_status_h265', 'CANCELLED');
       }
 
-      // Stop running GCP Step Functions per codec (their completion writes
-      // h*_master_m3u8_url to video_episodes, which would clobber the restore).
+      // Same rule for GCP: stop only when in-flight, mark every non-SUCCEEDED
+      // codec as CANCELLED.
       const gcpDoc = gcpArnByEp.get(ep.episode_id);
       if (ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING') {
         if (gcpDoc?.gcp_execution_arn_h264) {
           stopPromises.push(stopGcpExecution(gcpDoc.gcp_execution_arn_h264).then(ok => { if (ok) stoppedGcp++; }));
         }
+      }
+      if (ep.gcp_h264_status !== 'SUCCEEDED') {
         addVeSet(ep.episode_id, 'gcp_job_status_h264', 'CANCELLED');
       }
       if (ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING') {
         if (gcpDoc?.gcp_execution_arn_h265) {
           stopPromises.push(stopGcpExecution(gcpDoc.gcp_execution_arn_h265).then(ok => { if (ok) stoppedGcp++; }));
         }
+      }
+      if (ep.gcp_h265_status !== 'SUCCEEDED') {
         addVeSet(ep.episode_id, 'gcp_job_status_h265', 'CANCELLED');
       }
 
@@ -191,7 +178,8 @@ export async function POST(request) {
           : null,
       };
 
-      // Cancel all non-complete lab/GCP sub-statuses so UI shows everything as cancelled
+      // Mirror the video_episodes logic: cancel every non-finished codec
+      // (including QUEUED), preserve only COMPLETE / SUCCEEDED.
       if (ep.lab_h264_status !== 'COMPLETE') cancelFields['episodes.$.lab_h264_status'] = 'CANCELLED';
       if (ep.lab_h265_status !== 'COMPLETE') cancelFields['episodes.$.lab_h265_status'] = 'CANCELLED';
       if (ep.gcp_h264_status !== 'SUCCEEDED') cancelFields['episodes.$.gcp_h264_status'] = 'CANCELLED';
@@ -201,49 +189,14 @@ export async function POST(request) {
         { _id: oid, 'episodes.episode_id': ep.episode_id },
         { $set: cancelFields },
       );
-
-      // Plan a restore for force-rerun runs. Run Pipeline destroys lab status,
-      // golden_recipes, GCP/combine URLs, and quality_check via /api/push,
-      // /api/gcp, /api/create-combined-master, /api/quality-check. Restoring
-      // here means the show looks exactly as it did before Run Pipeline.
-      // - prior is an object → $set its fields, $unset any missing canonical field.
-      // - prior is null/missing (force-rerun on a never-before-run episode):
-      //   /api/push upserted a doc with lab_status='RUNNING' + cleared recipes;
-      //   $unset every RESTORE_FIELD so the doc returns to "as if never run".
-      // Continue Lab (force=false) skips this entire block.
-      if (isForceRun) {
-        const prior = ep.prior_state;
-        const priorIsObject = prior && typeof prior === 'object';
-        const setFields = {};
-        const unsetFields = {};
-        for (const key of RESTORE_FIELDS) {
-          const val = priorIsObject ? prior[key] : undefined;
-          if (val === undefined || val === null) {
-            unsetFields[key] = '';
-          } else {
-            setFields[key] = val;
-          }
-        }
-        const update = {};
-        if (Object.keys(setFields).length > 0) update.$set = setFields;
-        if (Object.keys(unsetFields).length > 0) update.$unset = unsetFields;
-        if (Object.keys(update).length > 0) {
-          restorePlans.push({ episodeId: ep.episode_id, update });
-        }
-      }
     }
 
-    // Wait for stop-lab to finish FIRST. /api/stop-lab writes
-    // video_episodes.lab_status_${codec}='FAILED' for the labs it stops, so the
-    // restore must run AFTER to overwrite that FAILED with the snapshotted
-    // pre-Run-Pipeline status (typically 'COMPLETE' or null).
+    // Wait for stop-lab to finish before writing CANCELLED markers, so
+    // stop-lab's FAILED writeback (only fired when an exec ARN exists) doesn't
+    // land AFTER our CANCELLED write.
     await Promise.allSettled(stopPromises);
 
-    // For Continue Lab (non-force) runs, write CANCELLED to video_episodes so
-    // the episode table flips immediately. Force-rerun's restorePlans below
-    // overwrite these same fields with the pre-run snapshot, so skip the write
-    // there to avoid a transient flicker.
-    if (!isForceRun && veWrites.size > 0) {
+    if (veWrites.size > 0) {
       await Promise.allSettled(
         Array.from(veWrites.entries()).map(([episodeId, update]) =>
           videoEpisodesCol.updateOne({ episode_id: episodeId }, update).catch(err => {
@@ -253,15 +206,7 @@ export async function POST(request) {
       );
     }
 
-    await Promise.allSettled(restorePlans.map(({ episodeId, update }) =>
-      videoEpisodesCol.updateOne({ episode_id: episodeId }, update)
-        .then(() => { restoredEpisodes++; })
-        .catch(err => {
-          console.warn(`[auto-pipeline/cancel] restore failed for ${episodeId}:`, err?.message);
-        }),
-    ));
-
-    return NextResponse.json({ ok: true, stoppedLabs, stoppedGcp, restoredEpisodes });
+    return NextResponse.json({ ok: true, stoppedLabs, stoppedGcp });
   } catch (err) {
     console.error('[POST /api/auto-pipeline/cancel]', err);
     return NextResponse.json({ error: 'Failed to cancel pipeline' }, { status: 500 });

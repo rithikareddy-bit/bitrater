@@ -172,6 +172,9 @@ export default function EpisodePage() {
           fetchUrl={`/api/s3-notifications/episode/${encodeURIComponent(id)}`}
           label="Episode"
         />
+        <div style={{ marginLeft: 'auto' }}>
+          <ApplyDefaultBitratesButton episodeId={id} onApplied={fetchData} />
+        </div>
       </div>
 
       {/* Resolution tab selector */}
@@ -291,6 +294,68 @@ export default function EpisodePage() {
           </ErrorBoundary>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ApplyDefaultBitratesButton({ episodeId, onApplied }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const handleClick = async () => {
+    if (!window.confirm(
+      'Apply default bitrates? This probes source FPS and writes the recommended ladder ' +
+      '(H.264/H.265 × 1080p/720p/480p) as golden recipes. Skip this if you plan to run Labs.'
+    )) return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch('/api/apply-default-bitrates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodeId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setResult(data);
+      if (onApplied) onApplied();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {result && (
+        <span style={{ fontSize: 11, color: '#22c55e' }}>
+          Applied · fps {result.fps} ({result.tier === 'high' ? '≥60' : '<60'})
+        </span>
+      )}
+      {error && (
+        <span style={{ fontSize: 11, color: '#ef4444', maxWidth: 280 }}>{error}</span>
+      )}
+      <button
+        onClick={handleClick}
+        disabled={busy}
+        title="Probe FPS and write the recommended H.264/H.265 ladder as golden recipes"
+        style={{
+          background: busy ? '#1e1e1e' : '#0f766e',
+          color: busy ? '#555' : '#fff',
+          border: '1px solid ' + (busy ? '#333' : '#0f766e'),
+          borderRadius: 8,
+          padding: '8px 14px',
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: busy ? 'not-allowed' : 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {busy ? 'Applying…' : '⚡ Apply default bitrates'}
+      </button>
     </div>
   );
 }

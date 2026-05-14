@@ -161,9 +161,11 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
         const serverComplete = golden?.[labStatusKey] === 'COMPLETE';
         const serverFailed = s.labStatus === 'FAILED' || golden?.[labStatusKey] === 'FAILED' || golden?.[labStatusKey] === 'CANCELLED';
         const hasGolden = hasGoldenForCodec(golden, codec);
+        const defaultsApplied = Boolean(golden?.lab_defaults_applied);
         const showLabSpinner = pushing === codec || (!isDone && (running > 0 || serverRunning));
         const isPartialFailure = (isDone && failed > 0 && !hasGolden) || (serverFailed && !hasGolden);
-        const labComplete = isDone && !isPartialFailure && (hasGolden || serverComplete);
+        const labComplete = (isDone && !isPartialFailure && (hasGolden || serverComplete))
+          || (defaultsApplied && hasGolden && serverComplete);
 
         const labDuration = (() => {
           const start = golden?.[labStartedKey];
@@ -178,16 +180,21 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
           return { text: `${m}m ${s_}s`, avgText: `~${avgSec}s avg per encode` };
         })();
 
+        const displayTotal = labComplete && defaultsApplied ? Math.max(total, 1) : total;
+        const displaySucceeded = labComplete && defaultsApplied ? displayTotal : succeeded;
+        const displayPct = labComplete && defaultsApplied ? 100 : pct;
+
         return (
           <LabSection
             key={codec}
             codec={codec}
             label={cfg.label}
-            total={total}
-            succeeded={succeeded}
+            total={displayTotal}
+            succeeded={displaySucceeded}
             failed={failed}
             running={running}
-            pct={pct}
+            pct={displayPct}
+            defaultsApplied={defaultsApplied}
             isPartialFailure={isPartialFailure}
             labComplete={labComplete}
             batchAllSucceeded={batchAllSucceeded}
@@ -250,6 +257,7 @@ function LabSection({
   onPush,
   onRerun,
   onStop,
+  defaultsApplied,
 }) {
   const isDone = succeeded + failed >= total && total > 0;
 
@@ -312,8 +320,10 @@ function LabSection({
           color: '#22c55e',
           marginBottom: 14,
         }}>
-          {label} lab complete — {succeeded}/{total} encodes succeeded
-          {labDuration && (
+          {defaultsApplied
+            ? `${label} default bitrates applied — skipped lab, using recommended ladder`
+            : `${label} lab complete — ${succeeded}/${total} encodes succeeded`}
+          {!defaultsApplied && labDuration && (
             <span style={{ color: '#6ee7b7', marginLeft: 8 }}>
               ({labDuration.text}, {labDuration.avgText})
             </span>

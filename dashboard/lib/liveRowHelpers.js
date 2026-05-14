@@ -97,8 +97,10 @@ export function buildShowStats(rows, durationById) {
   let withDuration = 0;
   let h264LadderMb = 0;
   let h265LadderMb = 0;
-  let h264_1080_only_mb = 0;
-  let h265_1080_only_mb = 0;
+  const perResMb = {
+    h264: { '1080p': 0, '720p': 0, '480p': 0 },
+    h265: { '1080p': 0, '720p': 0, '480p': 0 },
+  };
   let episodesWithH264Recipe = 0;
   let episodesWithH265Recipe = 0;
 
@@ -137,10 +139,12 @@ export function buildShowStats(rows, durationById) {
     if (d > 0) {
       if (sum264 > 0) h264LadderMb += kbpsSecondsToEpisodePageMb(sum264, d);
       if (sum265 > 0) h265LadderMb += kbpsSecondsToEpisodePageMb(sum265, d);
-      const b1080a = singleResKbps(row.golden_h264, '1080p');
-      const b1080b = singleResKbps(row.golden_h265, '1080p');
-      if (b1080a > 0) h264_1080_only_mb += kbpsSecondsToEpisodePageMb(b1080a, d);
-      if (b1080b > 0) h265_1080_only_mb += kbpsSecondsToEpisodePageMb(b1080b, d);
+      for (const res of ['1080p', '720p', '480p']) {
+        const a = singleResKbps(row.golden_h264, res);
+        const b = singleResKbps(row.golden_h265, res);
+        if (a > 0) perResMb.h264[res] += kbpsSecondsToEpisodePageMb(a, d);
+        if (b > 0) perResMb.h265[res] += kbpsSecondsToEpisodePageMb(b, d);
+      }
     }
   }
 
@@ -157,10 +161,19 @@ export function buildShowStats(rows, durationById) {
       h265_full_ladder_mb: Math.round(h265LadderMb * 10) / 10,
       h264_full_ladder_display: fmtMb(h264LadderMb),
       h265_full_ladder_display: fmtMb(h265LadderMb),
-      h264_1080_only_mb: Math.round(h264_1080_only_mb * 10) / 10,
-      h265_1080_only_mb: Math.round(h265_1080_only_mb * 10) / 10,
-      h264_1080_only_display: fmtMb(h264_1080_only_mb),
-      h265_1080_only_display: fmtMb(h265_1080_only_mb),
+      h264_1080_only_mb: Math.round(perResMb.h264['1080p'] * 10) / 10,
+      h265_1080_only_mb: Math.round(perResMb.h265['1080p'] * 10) / 10,
+      h264_1080_only_display: fmtMb(perResMb.h264['1080p']),
+      h265_1080_only_display: fmtMb(perResMb.h265['1080p']),
+      h264_720_only_display: fmtMb(perResMb.h264['720p']),
+      h265_720_only_display: fmtMb(perResMb.h265['720p']),
+      h264_480_only_display: fmtMb(perResMb.h264['480p']),
+      h265_480_only_display: fmtMb(perResMb.h265['480p']),
+      per_res: {
+        '1080p': { h264_mb: perResMb.h264['1080p'], h265_mb: perResMb.h265['1080p'] },
+        '720p':  { h264_mb: perResMb.h264['720p'],  h265_mb: perResMb.h265['720p'] },
+        '480p':  { h264_mb: perResMb.h264['480p'],  h265_mb: perResMb.h265['480p'] },
+      },
       episodesCountedH264: episodesWithH264Recipe,
       episodesCountedH265: episodesWithH265Recipe,
     },

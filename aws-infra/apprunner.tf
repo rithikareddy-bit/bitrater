@@ -136,6 +136,7 @@ resource "aws_apprunner_service" "dashboard" {
         runtime_environment_variables = merge(
           {
             MONGO_URI                         = var.mongo_uri
+            SUBTITLE_MONGO_URI                = var.subtitle_mongo_uri
             SFN_ARN                           = aws_sfn_state_machine.research_orchestrator.arn
             SFN_ARN_H264                      = aws_sfn_state_machine.research_orchestrator_h264.arn
             SFN_ARN_H265                      = aws_sfn_state_machine.research_orchestrator_h265.arn
