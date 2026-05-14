@@ -293,8 +293,8 @@ orchestrate(runId):
   if isFreshStart AND eligible is empty → mark run COMPLETED (all episodes skipped)
   
   MAX_RETRIES = 2               // per step per episode
-  TIMEOUT_LAB = 2 * 60 * 60    // 2 hours — stuck lab guard
-  TIMEOUT_GCP = 1 * 60 * 60    // 1 hour — stuck GCP guard
+  TIMEOUT_LAB = 15 * 60 * 60   // 15 hours — stuck lab guard
+  TIMEOUT_GCP = 5 * 60 * 60    // 5 hours — stuck GCP guard
   TIMEOUT_STARTING = 2 * 60    // 2 min — STARTING state not confirmed → treat as failed
   RETRY_BACKOFF_BASE = 30      // seconds — retry_delay = RETRY_BACKOFF_BASE * retries (avoids hammering APIs)
 
@@ -1137,8 +1137,8 @@ Per pipeline run:
 | One codec lab/GCP fails, other succeeds | Episode FAILED — combined URL requires both codecs |
 | Both codec labs/GCPs fail | Episode FAILED — no playback URL possible |
 | Transient lab/GCP/QC failure | Retry up to 2 times per step before marking permanent failure |
-| Lab running > 2 hours | Timeout guard → mark FAILED_FINAL (no retry — protects against stuck jobs; STEP 7 marks episode FAILED same tick) |
-| GCP running > 1 hour | Timeout guard → mark FAILED_FINAL (no retry; STEP 5/STEP 7 marks episode FAILED same tick) |
+| Lab running > 15 hours | Timeout guard → mark FAILED_FINAL (no retry — protects against stuck jobs; STEP 7 marks episode FAILED same tick) |
+| GCP running > 5 hours | Timeout guard → mark FAILED_FINAL (no retry; STEP 5/STEP 7 marks episode FAILED same tick) |
 | GCP slots full (gcpActiveCount >= MAX_GCP) | Jobs stay in persistent gcpQueueH264/gcpQueueH265, start on next tick via round-robin when slots free up |
 | Orchestrator crashes / server restarts mid-run | Resume logic rebuilds h264Active, h265Active, gcpQueueH264, gcpQueueH265, gcpActiveCount from DB state |
 | sync-showcache-episode: signedPlaybackUrl mismatch | Route validates URL matches combined_master_m3u8_url — sync-all must read it fresh from DB |
@@ -1207,7 +1207,7 @@ Every 30s tick:
     │
     ├── STEP 1: POLL LABS ─────────────────────────────────
     │   For each active H.264 lab:
-    │     Timeout check: if running > 2 hours → FAILED_FINAL (STEP 7 marks episode FAILED same tick)
+    │     Timeout check: if running > 15 hours → FAILED_FINAL (STEP 7 marks episode FAILED same tick)
     │     GET /api/status/{episodeId}?codec=h264
     │     │
     │     ├── COMPLETE → lab_h264_status: COMPLETE
@@ -1227,7 +1227,7 @@ Every 30s tick:
     ├── STEP 3: POLL GCP (BEFORE starting new jobs!) ──────
     │   ⚠️ Poll FIRST so freed slots are available for Step 4
     │   For each episode with gcp_h264 or gcp_h265 RUNNING:
-    │     Timeout check: if running > 1 hour → FAILED_FINAL (STEP 5/7 marks episode FAILED same tick)
+    │     Timeout check: if running > 5 hours → FAILED_FINAL (STEP 5/7 marks episode FAILED same tick)
     │     GET /api/gcp-status/{episodeId}
     │     │
     │     ├── SUCCEEDED → mark status, gcpActiveCount recalibrated from DB

@@ -11,8 +11,8 @@ const MAX_SYNC_RETRIES = 5;
 // has finished BOTH codecs (= left the GCP phase). This differs from max_gcp,
 // which caps raw job count — trailer-level caps are the operator's contract.
 const MAX_ACTIVE_TRAILERS = 5;
-const TIMEOUT_LAB_MS = 2 * 60 * 60 * 1000;   // 2 hours
-const TIMEOUT_GCP_MS = 1 * 60 * 60 * 1000;    // 1 hour
+const TIMEOUT_LAB_MS = 15 * 60 * 60 * 1000;   // 15 hours
+const TIMEOUT_GCP_MS = 5 * 60 * 60 * 1000;    // 5 hours
 const TIMEOUT_STARTING_MS = 2 * 60 * 1000;    // 2 min
 const RETRY_BACKOFF_BASE_MS = 30_000;          // 30s × retries
 
