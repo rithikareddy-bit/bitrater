@@ -98,6 +98,27 @@ export default function ShowStatusPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // all | partial | none | full | empty
   const [expandedId, setExpandedId] = useState(null);
+  const [activeRuns, setActiveRuns] = useState(null);
+  const [activeLoading, setActiveLoading] = useState(false);
+  const [activeError, setActiveError] = useState(null);
+  const [activeOpen, setActiveOpen] = useState(false);
+
+  const checkAll = () => {
+    setActiveOpen(true);
+    setActiveLoading(true);
+    setActiveError(null);
+    fetch('/api/show-status/active-runs')
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((d) => {
+        if (d.error) throw new Error(d.error);
+        setActiveRuns(d);
+      })
+      .catch((e) => setActiveError(e.message || 'Failed to load active runs'))
+      .finally(() => setActiveLoading(false));
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -135,7 +156,34 @@ export default function ShowStatusPage() {
         <span style={{ color: '#666', fontSize: 13 }}>
           Combined-link coverage by language
         </span>
+        <button
+          type="button"
+          onClick={checkAll}
+          style={{
+            marginLeft: 'auto',
+            padding: '8px 14px',
+            borderRadius: 8,
+            border: '1px solid #4da6ff',
+            background: '#1c2c44',
+            color: '#bfdbfe',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Check all
+        </button>
       </div>
+
+      {activeOpen && (
+        <ActiveRunsPanel
+          data={activeRuns}
+          loading={activeLoading}
+          error={activeError}
+          onClose={() => setActiveOpen(false)}
+          onRefresh={checkAll}
+        />
+      )}
 
       <div
         style={{
@@ -273,6 +321,158 @@ export default function ShowStatusPage() {
               <strong>Partial</strong> = some episodes combined. <strong>None</strong> = zero combined episodes.
             </div>
           </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
+  const shows = data?.shows || [];
+  const workers = data?.workers;
+  const cellTh = {
+    textAlign: 'left',
+    padding: '8px 12px',
+    borderBottom: '1px solid #2a2a2a',
+    color: '#888',
+    fontSize: 11,
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  };
+  const cellTd = { padding: '8px 12px', fontSize: 13, color: '#cbd5e1', borderBottom: '1px solid #1e1e1e' };
+
+  return (
+    <div
+      style={{
+        background: '#161616',
+        border: '1px solid #2a2a2a',
+        borderRadius: 10,
+        padding: '16px 18px',
+        marginBottom: 18,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#e2e8f0' }}>
+          Active pipeline runs
+        </div>
+        <span style={{ color: '#666', fontSize: 12 }}>
+          {data ? `${data.active_runs} run(s), ${shows.length} show(s)` : ''}
+        </span>
+        <button
+          type="button"
+          onClick={onRefresh}
+          style={{
+            marginLeft: 'auto',
+            padding: '4px 10px',
+            borderRadius: 6,
+            border: '1px solid #333',
+            background: '#111',
+            color: '#aaa',
+            fontSize: 12,
+            cursor: 'pointer',
+          }}
+        >
+          Refresh
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            padding: '4px 10px',
+            borderRadius: 6,
+            border: '1px solid #333',
+            background: '#111',
+            color: '#aaa',
+            fontSize: 12,
+            cursor: 'pointer',
+          }}
+        >
+          Close
+        </button>
+      </div>
+
+      {loading && <p style={{ color: '#888', fontSize: 13 }}>Loading active runs…</p>}
+      {error && <p style={{ color: '#f87171', fontSize: 13 }}>{error}</p>}
+
+      {!loading && !error && data && (
+        <>
+          <div style={{ overflowX: 'auto', marginBottom: 18 }}>
+            <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: '#111' }}>
+                  <th style={cellTh}>Show</th>
+                  <th style={cellTh}>Kind</th>
+                  <th style={cellTh}>AWS running</th>
+                  <th style={cellTh}>GCP running</th>
+                  <th style={cellTh}>In run</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shows.length === 0 && (
+                  <tr>
+                    <td colSpan={5} style={{ ...cellTd, color: '#666', textAlign: 'center' }}>
+                      No active pipeline runs.
+                    </td>
+                  </tr>
+                )}
+                {shows.map((s) => (
+                  <tr key={s.show_id}>
+                    <td style={{ ...cellTd, color: '#e2e8f0', fontWeight: 500 }}>
+                      {s.show_title}
+                      <div style={{ color: '#555', fontSize: 11, marginTop: 2 }}>{s.show_slug || s.show_id}</div>
+                    </td>
+                    <td style={cellTd}>{s.kind}</td>
+                    <td style={{ ...cellTd, color: s.aws_running ? '#fbbf24' : '#cbd5e1', fontWeight: 600 }}>
+                      {s.aws_running}
+                    </td>
+                    <td style={{ ...cellTd, color: s.gcp_running ? '#4da6ff' : '#cbd5e1', fontWeight: 600 }}>
+                      {s.gcp_running}
+                    </td>
+                    <td style={cellTd}>{s.total_in_run}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {workers && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#888', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Workers left
+              </div>
+              <table style={{ borderCollapse: 'collapse', minWidth: 360 }}>
+                <thead>
+                  <tr style={{ background: '#111' }}>
+                    <th style={cellTh}>Pool</th>
+                    <th style={cellTh}>Used</th>
+                    <th style={cellTh}>Capacity</th>
+                    <th style={cellTh}>Left</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={cellTd}>AWS (Lab)</td>
+                    <td style={cellTd}>{workers.aws.used}</td>
+                    <td style={cellTd}>{workers.aws.total}</td>
+                    <td style={{ ...cellTd, color: '#22c55e', fontWeight: 600 }}>{workers.aws.left}</td>
+                  </tr>
+                  <tr>
+                    <td style={cellTd}>GCP</td>
+                    <td style={cellTd}>{workers.gcp.used}</td>
+                    <td style={cellTd}>{workers.gcp.total}</td>
+                    <td style={{ ...cellTd, color: '#22c55e', fontWeight: 600 }}>{workers.gcp.left}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style={{ fontSize: 11, color: '#555', marginTop: 8, lineHeight: 1.5 }}>
+                Capacity is the sum of <code>lab_workers</code> / <code>max_gcp</code> across all{' '}
+                <code>pipeline_runs</code> with <code>status=RUNNING</code> in <code>chai_q_lab</code>.
+                Used counts episodes currently in <code>LAB_RUNNING</code> (AWS) or{' '}
+                <code>GCP_RUNNING</code>/<code>COMBINING</code> (GCP).
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
