@@ -7,6 +7,9 @@ export const revalidate = 0;
 const AWS_STATUSES = new Set(['LAB_RUNNING']);
 const GCP_STATUSES = new Set(['GCP_RUNNING', 'COMBINING']);
 
+const AWS_WORKER_CAPACITY = 128;
+const GCP_WORKER_CAPACITY = 45;
+
 export async function GET() {
   try {
     const client = await clientPromise();
@@ -33,13 +36,8 @@ export async function GET() {
     const perShow = new Map();
     let awsUsed = 0;
     let gcpUsed = 0;
-    let awsTotal = 0;
-    let gcpTotal = 0;
 
     for (const run of runs) {
-      awsTotal += Number(run.lab_workers || 0);
-      gcpTotal += Number(run.max_gcp || 0);
-
       const key = String(run.show_id || run._id);
       let row = perShow.get(key);
       if (!row) {
@@ -73,8 +71,8 @@ export async function GET() {
     );
 
     const workers = {
-      aws: { used: awsUsed, total: awsTotal, left: Math.max(0, awsTotal - awsUsed) },
-      gcp: { used: gcpUsed, total: gcpTotal, left: Math.max(0, gcpTotal - gcpUsed) },
+      aws: { used: awsUsed, total: AWS_WORKER_CAPACITY, left: Math.max(0, AWS_WORKER_CAPACITY - awsUsed) },
+      gcp: { used: gcpUsed, total: GCP_WORKER_CAPACITY, left: Math.max(0, GCP_WORKER_CAPACITY - gcpUsed) },
     };
 
     return NextResponse.json(
