@@ -329,6 +329,7 @@ export default function ShowStatusPage() {
 
 function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
   const shows = data?.shows || [];
+  const reruns = data?.reruns || [];
   const workers = data?.workers;
   const cellTh = {
     textAlign: 'left',
@@ -403,15 +404,18 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
                 <tr style={{ background: '#111' }}>
                   <th style={cellTh}>Show</th>
                   <th style={cellTh}>Kind</th>
-                  <th style={cellTh}>AWS running</th>
-                  <th style={cellTh}>GCP running</th>
-                  <th style={cellTh}>In run</th>
+                  <th style={cellTh}>AWS H264</th>
+                  <th style={cellTh}>AWS H265</th>
+                  <th style={cellTh}>AWS total</th>
+                  <th style={cellTh}>GCP H264</th>
+                  <th style={cellTh}>GCP H265</th>
+                  <th style={cellTh}>GCP total</th>
                 </tr>
               </thead>
               <tbody>
                 {shows.length === 0 && (
                   <tr>
-                    <td colSpan={5} style={{ ...cellTd, color: '#666', textAlign: 'center' }}>
+                    <td colSpan={8} style={{ ...cellTd, color: '#666', textAlign: 'center' }}>
                       No active pipeline runs.
                     </td>
                   </tr>
@@ -423,18 +427,58 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
                       <div style={{ color: '#555', fontSize: 11, marginTop: 2 }}>{s.show_slug || s.show_id}</div>
                     </td>
                     <td style={cellTd}>{s.kind}</td>
-                    <td style={{ ...cellTd, color: s.aws_running ? '#fbbf24' : '#cbd5e1', fontWeight: 600 }}>
+                    <td style={{ ...cellTd, color: s.aws_h264 ? '#fbbf24' : '#555' }}>{s.aws_h264 || 0}</td>
+                    <td style={{ ...cellTd, color: s.aws_h265 ? '#fbbf24' : '#555' }}>{s.aws_h265 || 0}</td>
+                    <td style={{ ...cellTd, color: s.aws_running ? '#fbbf24' : '#cbd5e1', fontWeight: 700 }}>
                       {s.aws_running}
                     </td>
-                    <td style={{ ...cellTd, color: s.gcp_running ? '#4da6ff' : '#cbd5e1', fontWeight: 600 }}>
+                    <td style={{ ...cellTd, color: s.gcp_h264 ? '#4da6ff' : '#555' }}>{s.gcp_h264 || 0}</td>
+                    <td style={{ ...cellTd, color: s.gcp_h265 ? '#4da6ff' : '#555' }}>{s.gcp_h265 || 0}</td>
+                    <td style={{ ...cellTd, color: s.gcp_running ? '#4da6ff' : '#cbd5e1', fontWeight: 700 }}>
                       {s.gcp_running}
                     </td>
-                    <td style={cellTd}>{s.total_in_run}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+
+          {reruns.length > 0 && (
+            <div style={{ overflowX: 'auto', marginBottom: 18 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#888', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Per-episode reruns (no wrapping pipeline_runs doc)
+              </div>
+              <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#111' }}>
+                    <th style={cellTh}>Show</th>
+                    <th style={cellTh}>AWS H264</th>
+                    <th style={cellTh}>AWS H265</th>
+                    <th style={cellTh}>AWS total</th>
+                    <th style={cellTh}>GCP H264</th>
+                    <th style={cellTh}>GCP H265</th>
+                    <th style={cellTh}>GCP total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reruns.map((s) => (
+                    <tr key={`rerun-${s.show_id}`}>
+                      <td style={{ ...cellTd, color: '#e2e8f0', fontWeight: 500 }}>
+                        {s.show_title}
+                        <div style={{ color: '#555', fontSize: 11, marginTop: 2 }}>{s.show_slug || s.show_id}</div>
+                      </td>
+                      <td style={{ ...cellTd, color: s.aws_h264 ? '#fbbf24' : '#555' }}>{s.aws_h264 || 0}</td>
+                      <td style={{ ...cellTd, color: s.aws_h265 ? '#fbbf24' : '#555' }}>{s.aws_h265 || 0}</td>
+                      <td style={{ ...cellTd, color: s.aws_running ? '#fbbf24' : '#cbd5e1', fontWeight: 700 }}>{s.aws_running}</td>
+                      <td style={{ ...cellTd, color: s.gcp_h264 ? '#4da6ff' : '#555' }}>{s.gcp_h264 || 0}</td>
+                      <td style={{ ...cellTd, color: s.gcp_h265 ? '#4da6ff' : '#555' }}>{s.gcp_h265 || 0}</td>
+                      <td style={{ ...cellTd, color: s.gcp_running ? '#4da6ff' : '#cbd5e1', fontWeight: 700 }}>{s.gcp_running}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {workers && (
             <div>
@@ -466,10 +510,12 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
                 </tbody>
               </table>
               <div style={{ fontSize: 11, color: '#555', marginTop: 8, lineHeight: 1.5 }}>
-                Capacity is the sum of <code>lab_workers</code> / <code>max_gcp</code> across all{' '}
-                <code>pipeline_runs</code> with <code>status=RUNNING</code> in <code>chai_q_lab</code>.
-                Used counts episodes currently in <code>LAB_RUNNING</code> (AWS) or{' '}
-                <code>GCP_RUNNING</code>/<code>COMBINING</code> (GCP).
+                Used counts per-codec worker slots in flight: each episode with{' '}
+                <code>lab_h264_status</code> or <code>lab_h265_status</code> in{' '}
+                <code>STARTING</code>/<code>RUNNING</code> consumes one AWS slot (so an episode
+                running both codecs = 2 slots). GCP counts the same way, plus{' '}
+                <code>COMBINING</code> as one slot. Capacity is the fixed pool size{' '}
+                (AWS=128, GCP=45).
               </div>
             </div>
           )}
