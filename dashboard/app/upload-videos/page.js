@@ -53,20 +53,29 @@ export default function UploadVideosPage() {
       {error && <p style={{ color: '#f87171' }}>{error}</p>}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {filtered.map((s) => (
-          <ShowRow
-            key={s._id}
-            show={s}
-            expanded={expanded === s._id}
-            onToggle={() => setExpanded(expanded === s._id ? null : s._id)}
-          />
-        ))}
+        {shows.map((s) => {
+          const visible = filtered.includes(s);
+          return (
+            <div key={s._id} style={{ display: visible ? 'block' : 'none' }}>
+              <ShowRow
+                show={s}
+                expanded={expanded === s._id}
+                onToggle={() => setExpanded(expanded === s._id ? null : s._id)}
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
 function ShowRow({ show, expanded, onToggle }) {
+  // Once the user expands a show, keep its EpisodeList mounted (just hidden)
+  // even after they collapse — so any in-progress uploads keep their state.
+  const [everExpanded, setEverExpanded] = useState(false);
+  useEffect(() => { if (expanded) setEverExpanded(true); }, [expanded]);
+
   return (
     <div style={{ border: '1px solid #333', borderRadius: 8, background: '#0d0d0d' }}>
       <button
@@ -85,7 +94,11 @@ function ShowRow({ show, expanded, onToggle }) {
         </span>
         <span style={{ color: '#888' }}>{expanded ? '▾' : '▸'}</span>
       </button>
-      {expanded && <EpisodeList slug={show.slug} />}
+      {everExpanded && (
+        <div style={{ display: expanded ? 'block' : 'none' }}>
+          <EpisodeList slug={show.slug} />
+        </div>
+      )}
     </div>
   );
 }
@@ -97,7 +110,8 @@ function EpisodeList({ slug }) {
 
   useEffect(() => {
     let cancelled = false;
-    setData(null);
+    // Do NOT clear data on refetch — would unmount EpisodeRows and lose
+    // the upload state of other rows that the user is still working on.
     setErr(null);
     fetch(`/api/uploads/episodes?slug=${encodeURIComponent(slug)}`)
       .then((r) => r.json())
@@ -191,6 +205,9 @@ function EpisodeRow({ slug, episode, onSynced }) {
         // Stay in 'uploaded' so Sync/Discard remain available for retry.
         setPhase('uploaded');
         setErrorMsg(data.error || `sync ${r.status}`);
+        // Refetch so a stale UI (e.g. another writer populated s3_url) shows
+        // the replace checkbox and the user can retry with overwrite=true.
+        onSynced?.();
         return;
       }
       setPhase('synced');

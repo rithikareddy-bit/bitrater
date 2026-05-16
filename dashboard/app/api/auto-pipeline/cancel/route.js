@@ -90,26 +90,32 @@ export async function POST(request) {
       plan.$set[field] = value;
     };
 
-    // Pre-fetch GCP execution ARNs from video_episodes for episodes whose GCP
-    // is in-flight in pipeline_runs. We need these because cancel must stop
-    // the GCP step functions too — otherwise GCP completes after restore and
-    // writes a new h*_master_m3u8_url, leaking past the cancel.
-    const gcpEpIds = run.episodes
+    // Fetch live status from video_episodes for ALL non-terminal episodes.
+    // pipeline_runs.episodes[] lags behind the orchestrator tick — a lab/GCP
+    // can have finished (and written its real status to video_episodes) while
+    // pipeline_runs still says STARTING/RUNNING. Without this check, Cancel
+    // would stop nothing (the job is already done) but would still overwrite
+    // the completed status with CANCELLED, hiding the bitrates/VMAFs the user
+    // already got. Truth = video_episodes; pipeline_runs is just a cache.
+    const liveEpIds = run.episodes
       .filter(ep => {
         const isTerminal = ep.status === 'READY_TO_SYNC' || ep.status === 'SYNCED' ||
                            ep.status === 'SKIPPED' || ep.status === 'FAILED';
-        if (isTerminal) return false;
-        return ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING' ||
-               ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING';
+        return !isTerminal;
       })
       .map(ep => ep.episode_id);
-    const gcpArnByEp = new Map();
-    if (gcpEpIds.length > 0) {
+    const liveByEp = new Map();
+    if (liveEpIds.length > 0) {
       const docs = await videoEpisodesCol.find(
-        { episode_id: { $in: gcpEpIds } },
-        { projection: { episode_id: 1, gcp_execution_arn_h264: 1, gcp_execution_arn_h265: 1 } },
+        { episode_id: { $in: liveEpIds } },
+        { projection: {
+            episode_id: 1,
+            lab_status_h264: 1, lab_status_h265: 1,
+            gcp_job_status_h264: 1, gcp_job_status_h265: 1,
+            gcp_execution_arn_h264: 1, gcp_execution_arn_h265: 1,
+        } },
       ).toArray();
-      for (const d of docs) gcpArnByEp.set(d.episode_id, d);
+      for (const d of docs) liveByEp.set(d.episode_id, d);
     }
 
     // 3. Stop all running labs and mark all non-terminal episodes as CANCELLED
@@ -120,40 +126,49 @@ export async function POST(request) {
                          ep.status === 'SKIPPED' || ep.status === 'FAILED';
       if (isTerminal) continue;
 
+      // Read live truth from video_episodes. If a codec is already COMPLETE /
+      // SUCCEEDED there, it's done regardless of what pipeline_runs says —
+      // skip stopping it AND skip the CANCELLED writeback so we don't bury
+      // real bitrates/VMAF the user already earned.
+      const live = liveByEp.get(ep.episode_id);
+      const labH264Done = live?.lab_status_h264 === 'COMPLETE';
+      const labH265Done = live?.lab_status_h265 === 'COMPLETE';
+      const gcpH264Done = live?.gcp_job_status_h264 === 'SUCCEEDED';
+      const gcpH265Done = live?.gcp_job_status_h265 === 'SUCCEEDED';
+
       // Stop in-flight lab SFN/Batch only when there's actually a running job
       // to stop. Mark CANCELLED for every non-COMPLETE codec — including
       // QUEUED — because the run is dead and they'll never execute. Codecs
-      // that already finished (COMPLETE) are preserved.
-      if (ep.lab_h264_status === 'STARTING' || ep.lab_h264_status === 'RUNNING') {
+      // that already finished (COMPLETE per video_episodes) are preserved.
+      if (!labH264Done && (ep.lab_h264_status === 'STARTING' || ep.lab_h264_status === 'RUNNING')) {
         stopPromises.push(stopLabForEpisode(ep.episode_id, 'h264').then(ok => { if (ok) stoppedLabs++; }));
       }
-      if (ep.lab_h264_status !== 'COMPLETE') {
+      if (!labH264Done && ep.lab_h264_status !== 'COMPLETE') {
         addVeSet(ep.episode_id, 'lab_status_h264', 'CANCELLED');
       }
-      if (ep.lab_h265_status === 'STARTING' || ep.lab_h265_status === 'RUNNING') {
+      if (!labH265Done && (ep.lab_h265_status === 'STARTING' || ep.lab_h265_status === 'RUNNING')) {
         stopPromises.push(stopLabForEpisode(ep.episode_id, 'h265').then(ok => { if (ok) stoppedLabs++; }));
       }
-      if (ep.lab_h265_status !== 'COMPLETE') {
+      if (!labH265Done && ep.lab_h265_status !== 'COMPLETE') {
         addVeSet(ep.episode_id, 'lab_status_h265', 'CANCELLED');
       }
 
       // Same rule for GCP: stop only when in-flight, mark every non-SUCCEEDED
       // codec as CANCELLED.
-      const gcpDoc = gcpArnByEp.get(ep.episode_id);
-      if (ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING') {
-        if (gcpDoc?.gcp_execution_arn_h264) {
-          stopPromises.push(stopGcpExecution(gcpDoc.gcp_execution_arn_h264).then(ok => { if (ok) stoppedGcp++; }));
+      if (!gcpH264Done && (ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING')) {
+        if (live?.gcp_execution_arn_h264) {
+          stopPromises.push(stopGcpExecution(live.gcp_execution_arn_h264).then(ok => { if (ok) stoppedGcp++; }));
         }
       }
-      if (ep.gcp_h264_status !== 'SUCCEEDED') {
+      if (!gcpH264Done && ep.gcp_h264_status !== 'SUCCEEDED') {
         addVeSet(ep.episode_id, 'gcp_job_status_h264', 'CANCELLED');
       }
-      if (ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING') {
-        if (gcpDoc?.gcp_execution_arn_h265) {
-          stopPromises.push(stopGcpExecution(gcpDoc.gcp_execution_arn_h265).then(ok => { if (ok) stoppedGcp++; }));
+      if (!gcpH265Done && (ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING')) {
+        if (live?.gcp_execution_arn_h265) {
+          stopPromises.push(stopGcpExecution(live.gcp_execution_arn_h265).then(ok => { if (ok) stoppedGcp++; }));
         }
       }
-      if (ep.gcp_h265_status !== 'SUCCEEDED') {
+      if (!gcpH265Done && ep.gcp_h265_status !== 'SUCCEEDED') {
         addVeSet(ep.episode_id, 'gcp_job_status_h265', 'CANCELLED');
       }
 
@@ -179,11 +194,17 @@ export async function POST(request) {
       };
 
       // Mirror the video_episodes logic: cancel every non-finished codec
-      // (including QUEUED), preserve only COMPLETE / SUCCEEDED.
-      if (ep.lab_h264_status !== 'COMPLETE') cancelFields['episodes.$.lab_h264_status'] = 'CANCELLED';
-      if (ep.lab_h265_status !== 'COMPLETE') cancelFields['episodes.$.lab_h265_status'] = 'CANCELLED';
-      if (ep.gcp_h264_status !== 'SUCCEEDED') cancelFields['episodes.$.gcp_h264_status'] = 'CANCELLED';
-      if (ep.gcp_h265_status !== 'SUCCEEDED') cancelFields['episodes.$.gcp_h265_status'] = 'CANCELLED';
+      // (including QUEUED), preserve only COMPLETE / SUCCEEDED. If
+      // video_episodes already shows terminal-success, fast-forward
+      // pipeline_runs to match instead of overwriting with CANCELLED.
+      if (labH264Done) cancelFields['episodes.$.lab_h264_status'] = 'COMPLETE';
+      else if (ep.lab_h264_status !== 'COMPLETE') cancelFields['episodes.$.lab_h264_status'] = 'CANCELLED';
+      if (labH265Done) cancelFields['episodes.$.lab_h265_status'] = 'COMPLETE';
+      else if (ep.lab_h265_status !== 'COMPLETE') cancelFields['episodes.$.lab_h265_status'] = 'CANCELLED';
+      if (gcpH264Done) cancelFields['episodes.$.gcp_h264_status'] = 'SUCCEEDED';
+      else if (ep.gcp_h264_status !== 'SUCCEEDED') cancelFields['episodes.$.gcp_h264_status'] = 'CANCELLED';
+      if (gcpH265Done) cancelFields['episodes.$.gcp_h265_status'] = 'SUCCEEDED';
+      else if (ep.gcp_h265_status !== 'SUCCEEDED') cancelFields['episodes.$.gcp_h265_status'] = 'CANCELLED';
 
       await col.updateOne(
         { _id: oid, 'episodes.episode_id': ep.episode_id },
@@ -196,14 +217,32 @@ export async function POST(request) {
     // land AFTER our CANCELLED write.
     await Promise.allSettled(stopPromises);
 
+    // Per-field conditional writes. Between our liveByEp snapshot above and
+    // this write, the lab Batch callback or the GCP step function's terminal
+    // handler can flip a status to COMPLETE / SUCCEEDED. Gate each field on
+    // "not already terminal" so we never bury a success that landed mid-cancel.
+    // Done one updateOne per (field,value) so each field carries its own guard.
+    const TERMINAL_BY_FIELD = {
+      lab_status_h264: 'COMPLETE',
+      lab_status_h265: 'COMPLETE',
+      gcp_job_status_h264: 'SUCCEEDED',
+      gcp_job_status_h265: 'SUCCEEDED',
+    };
     if (veWrites.size > 0) {
-      await Promise.allSettled(
-        Array.from(veWrites.entries()).map(([episodeId, update]) =>
-          videoEpisodesCol.updateOne({ episode_id: episodeId }, update).catch(err => {
-            console.warn(`[auto-pipeline/cancel] video_episodes cancel write failed for ${episodeId}:`, err?.message);
-          }),
-        ),
-      );
+      const ops = [];
+      for (const [episodeId, update] of veWrites.entries()) {
+        for (const [field, value] of Object.entries(update.$set)) {
+          const guard = TERMINAL_BY_FIELD[field];
+          const filter = { episode_id: episodeId };
+          if (guard && value === 'CANCELLED') filter[field] = { $ne: guard };
+          ops.push(
+            videoEpisodesCol.updateOne(filter, { $set: { [field]: value } }).catch(err => {
+              console.warn(`[auto-pipeline/cancel] video_episodes cancel write failed for ${episodeId}.${field}:`, err?.message);
+            }),
+          );
+        }
+      }
+      await Promise.allSettled(ops);
     }
 
     return NextResponse.json({ ok: true, stoppedLabs, stoppedGcp });
