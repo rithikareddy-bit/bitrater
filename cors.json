@@ -1,0 +1,22 @@
+{
+    "CORSRules": [
+      {
+        "AllowedHeaders": ["*"],
+        "AllowedMethods": ["POST", "PUT", "GET", "HEAD"],
+        "AllowedOrigins": [
+          "https://admin-tool-mongo.vercel.app",
+          "http://localhost:3333",
+          "https://sanitystudiorct.sanity.studio",
+          "https://chaishots.sanity.studio",
+          "https://chaishots-hindi.sanity.studio",
+          "https://chaishots-bhojpuri.sanity.studio",
+          "https://chaishots-kannada.sanity.studio",
+          "https://localhost:5174",
+          "https://uvaie2hhux.us-east-1.awsapprunner.com",
+          "http://localhost:3000"
+        ],
+        "ExposeHeaders": ["ETag"],
+        "MaxAgeSeconds": 3000
+      }
+    ]
+  }

@@ -1,0 +1,30 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "MultipartUploadOnEpisodePrefix",
+        "Effect": "Allow",
+        "Action": [
+          "s3:PutObject",
+          "s3:AbortMultipartUpload"
+        ],
+        "Resource": "arn:aws:s3:::sanity-dev-store/uploads/episodes/*"
+      },
+      {
+        "Sid": "ListMultipartsOnBucket",
+        "Effect": "Allow",
+        "Action": [
+          "s3:ListBucketMultipartUploads"
+        ],
+        "Resource": "arn:aws:s3:::sanity-dev-store"
+      },
+      {
+        "Sid": "ListPartsOfOurMultiparts",
+        "Effect": "Allow",
+        "Action": [
+          "s3:ListMultipartUploadParts"
+        ],
+        "Resource": "arn:aws:s3:::sanity-dev-store/uploads/episodes/*"
+      }
+    ]
+  }

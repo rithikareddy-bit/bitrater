@@ -1,0 +1,14 @@
+{
+    "Rules": [
+      {
+        "ID": "abort-incomplete-multipart-uploads-uploads-episodes",
+        "Status": "Enabled",
+        "Filter": {
+          "Prefix": "uploads/episodes/"
+        },
+        "AbortIncompleteMultipartUpload": {
+          "DaysAfterInitiation": 7
+        }
+      }
+    ]
+  }
