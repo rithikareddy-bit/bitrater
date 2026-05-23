@@ -1,27 +1,74 @@
 import { NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import { SFNClient, StopExecutionCommand } from '@aws-sdk/client-sfn';
+import { BatchClient, ListJobsCommand, TerminateJobCommand } from '@aws-sdk/client-batch';
 import clientPromise from '@/lib/mongodb';
 
-const STOP_LAB_BASE = typeof process !== 'undefined'
-  ? (process.env.APP_BASE_URL || `http://localhost:${process.env.PORT || 3000}`)
-  : 'http://localhost:3000';
+const region = process.env.AWS_REGION || 'us-east-1';
+const sfn = new SFNClient({ region });
+const batch = new BatchClient({ region });
 
-const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const BATCH_ACTIVE_STATUSES = ['SUBMITTED', 'PENDING', 'RUNNABLE', 'STARTING', 'RUNNING'];
 
 export const dynamic = 'force-dynamic';
 
-async function stopLabForEpisode(episodeId, codec) {
+// Stop one in-flight lab SFN execution. Called directly (not via
+// /api/stop-lab) — an internal HTTP hop can silently fail in production
+// (wrong APP_BASE_URL, sandboxed loopback) and leave the SFN running.
+async function stopLabSfn(execArn) {
+  if (!execArn) return false;
   try {
-    const res = await fetch(`${STOP_LAB_BASE}/api/stop-lab`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ episodeId, codec }),
-    });
-    return res.ok;
+    await sfn.send(new StopExecutionCommand({
+      executionArn: execArn,
+      cause: 'Pipeline cancelled by user',
+    }));
+    return true;
   } catch {
     return false;
   }
+}
+
+// Terminate every active Batch job whose name starts with any episode prefix
+// in `episodeIds`. Done in one pass per status (with pagination) instead of
+// per-episode, so cost is O(statuses × pages) not O(episodes × statuses).
+// Why prefix-based and not arn-based: there's a race in /api/push where SFN
+// starts BEFORE lab_execution_arn_* is written to video_episodes. If Cancel
+// snapshots video_episodes mid-window, we have no arn — but the Batch jobs
+// the SFN spawned already exist and must still be killed. Prefix matching is
+// the safety net.
+async function terminateBatchJobsForEpisodes(episodeIds) {
+  const queue = process.env.BATCH_JOB_QUEUE;
+  if (!queue || episodeIds.length === 0) return 0;
+  const prefixes = episodeIds.map(id => `ChaiQSearch-${id.slice(0, 24)}-`);
+  let terminated = 0;
+  for (const status of BATCH_ACTIVE_STATUSES) {
+    let nextToken;
+    do {
+      let resp;
+      try {
+        resp = await batch.send(new ListJobsCommand({
+          jobQueue: queue,
+          jobStatus: status,
+          nextToken,
+        }));
+      } catch {
+        break;
+      }
+      for (const job of resp.jobSummaryList || []) {
+        if (!job.jobName) continue;
+        if (!prefixes.some(p => job.jobName.startsWith(p))) continue;
+        try {
+          await batch.send(new TerminateJobCommand({
+            jobId: job.jobId,
+            reason: 'Pipeline cancelled by user',
+          }));
+          terminated++;
+        } catch { /* may have already finished */ }
+      }
+      nextToken = resp.nextToken;
+    } while (nextToken);
+  }
+  return terminated;
 }
 
 // Stop the GCP transcoder Step Function. Without this, an in-flight GCP
@@ -111,6 +158,7 @@ export async function POST(request) {
         { projection: {
             episode_id: 1,
             lab_status_h264: 1, lab_status_h265: 1,
+            lab_execution_arn_h264: 1, lab_execution_arn_h265: 1,
             gcp_job_status_h264: 1, gcp_job_status_h265: 1,
             gcp_execution_arn_h264: 1, gcp_execution_arn_h265: 1,
         } },
@@ -136,37 +184,44 @@ export async function POST(request) {
       const gcpH264Done = live?.gcp_job_status_h264 === 'SUCCEEDED';
       const gcpH265Done = live?.gcp_job_status_h265 === 'SUCCEEDED';
 
-      // Stop in-flight lab SFN/Batch only when there's actually a running job
-      // to stop. Mark CANCELLED for every non-COMPLETE codec — including
-      // QUEUED — because the run is dead and they'll never execute. Codecs
-      // that already finished (COMPLETE per video_episodes) are preserved.
-      if (!labH264Done && (ep.lab_h264_status === 'STARTING' || ep.lab_h264_status === 'RUNNING')) {
-        stopPromises.push(stopLabForEpisode(ep.episode_id, 'h264').then(ok => { if (ok) stoppedLabs++; }));
+      // Decide what to stop from LIVE video_episodes state, not pipeline_runs
+      // ep.lab_h*_status — the latter lags by up to one orchestrator tick, so a
+      // job that started seconds before Cancel could still read as QUEUED here
+      // and be skipped, leaving the SFN/Batch running. The presence of an
+      // execution ARN combined with a non-terminal live status is the real
+      // signal that something is in flight.
+      const liveLab264 = live?.lab_status_h264;
+      const liveLab265 = live?.lab_status_h265;
+      const liveGcp264 = live?.gcp_job_status_h264;
+      const liveGcp265 = live?.gcp_job_status_h265;
+      const labTerminal = s => s === 'COMPLETE' || s === 'FAILED' || s === 'CANCELLED';
+      const gcpTerminal = s => s === 'SUCCEEDED' || s === 'FAILED' || s === 'CANCELLED';
+
+      if (!labH264Done && live?.lab_execution_arn_h264 && !labTerminal(liveLab264)) {
+        stopPromises.push(stopLabSfn(live.lab_execution_arn_h264)
+          .then(ok => { if (ok) stoppedLabs++; }));
       }
       if (!labH264Done && ep.lab_h264_status !== 'COMPLETE') {
         addVeSet(ep.episode_id, 'lab_status_h264', 'CANCELLED');
       }
-      if (!labH265Done && (ep.lab_h265_status === 'STARTING' || ep.lab_h265_status === 'RUNNING')) {
-        stopPromises.push(stopLabForEpisode(ep.episode_id, 'h265').then(ok => { if (ok) stoppedLabs++; }));
+      if (!labH265Done && live?.lab_execution_arn_h265 && !labTerminal(liveLab265)) {
+        stopPromises.push(stopLabSfn(live.lab_execution_arn_h265)
+          .then(ok => { if (ok) stoppedLabs++; }));
       }
       if (!labH265Done && ep.lab_h265_status !== 'COMPLETE') {
         addVeSet(ep.episode_id, 'lab_status_h265', 'CANCELLED');
       }
 
-      // Same rule for GCP: stop only when in-flight, mark every non-SUCCEEDED
-      // codec as CANCELLED.
-      if (!gcpH264Done && (ep.gcp_h264_status === 'STARTING' || ep.gcp_h264_status === 'RUNNING')) {
-        if (live?.gcp_execution_arn_h264) {
-          stopPromises.push(stopGcpExecution(live.gcp_execution_arn_h264).then(ok => { if (ok) stoppedGcp++; }));
-        }
+      if (!gcpH264Done && live?.gcp_execution_arn_h264 && !gcpTerminal(liveGcp264)) {
+        stopPromises.push(stopGcpExecution(live.gcp_execution_arn_h264)
+          .then(ok => { if (ok) stoppedGcp++; }));
       }
       if (!gcpH264Done && ep.gcp_h264_status !== 'SUCCEEDED') {
         addVeSet(ep.episode_id, 'gcp_job_status_h264', 'CANCELLED');
       }
-      if (!gcpH265Done && (ep.gcp_h265_status === 'STARTING' || ep.gcp_h265_status === 'RUNNING')) {
-        if (live?.gcp_execution_arn_h265) {
-          stopPromises.push(stopGcpExecution(live.gcp_execution_arn_h265).then(ok => { if (ok) stoppedGcp++; }));
-        }
+      if (!gcpH265Done && live?.gcp_execution_arn_h265 && !gcpTerminal(liveGcp265)) {
+        stopPromises.push(stopGcpExecution(live.gcp_execution_arn_h265)
+          .then(ok => { if (ok) stoppedGcp++; }));
       }
       if (!gcpH265Done && ep.gcp_h265_status !== 'SUCCEEDED') {
         addVeSet(ep.episode_id, 'gcp_job_status_h265', 'CANCELLED');
@@ -212,10 +267,69 @@ export async function POST(request) {
       );
     }
 
-    // Wait for stop-lab to finish before writing CANCELLED markers, so
-    // stop-lab's FAILED writeback (only fired when an exec ARN exists) doesn't
-    // land AFTER our CANCELLED write.
+    // Wait for SFN stops to finish before the safety-net Batch sweep, so
+    // SFN-driven terminal callbacks don't race the CANCELLED writes below.
     await Promise.allSettled(stopPromises);
+
+    // Safety net for two races:
+    //  (a) /api/push starts SFN BEFORE writing lab_execution_arn_* — if Cancel
+    //      snapshots video_episodes in that window we miss the SFN arn entirely
+    //      and the Batch jobs it spawns would orphan.
+    //  (b) Orchestrator's isCancelled() check fires BEFORE /api/push; a lab can
+    //      start during cancel's stop loop and our snapshot won't have its arn.
+    // Re-fetch arns and terminate-by-Batch-name-prefix to catch both.
+    const nonTerminalEpIds = run.episodes
+      .filter(ep => {
+        const isT = ep.status === 'READY_TO_SYNC' || ep.status === 'SYNCED' ||
+                    ep.status === 'SKIPPED' || ep.status === 'FAILED';
+        return !isT;
+      })
+      .map(ep => ep.episode_id);
+
+    if (nonTerminalEpIds.length > 0) {
+      const lateDocs = await videoEpisodesCol.find(
+        { episode_id: { $in: nonTerminalEpIds } },
+        { projection: {
+            episode_id: 1,
+            lab_execution_arn_h264: 1, lab_execution_arn_h265: 1,
+            lab_status_h264: 1, lab_status_h265: 1,
+            gcp_execution_arn_h264: 1, gcp_execution_arn_h265: 1,
+            gcp_job_status_h264: 1, gcp_job_status_h265: 1,
+        } },
+      ).toArray();
+
+      const lateLabTerminal = s => s === 'COMPLETE' || s === 'FAILED' || s === 'CANCELLED';
+      const lateGcpTerminal = s => s === 'SUCCEEDED' || s === 'FAILED' || s === 'CANCELLED';
+      const latePromises = [];
+      for (const d of lateDocs) {
+        const seenLab264 = liveByEp.get(d.episode_id)?.lab_execution_arn_h264;
+        const seenLab265 = liveByEp.get(d.episode_id)?.lab_execution_arn_h265;
+        const seenGcp264 = liveByEp.get(d.episode_id)?.gcp_execution_arn_h264;
+        const seenGcp265 = liveByEp.get(d.episode_id)?.gcp_execution_arn_h265;
+        if (d.lab_execution_arn_h264 && d.lab_execution_arn_h264 !== seenLab264 &&
+            !lateLabTerminal(d.lab_status_h264)) {
+          latePromises.push(stopLabSfn(d.lab_execution_arn_h264).then(ok => { if (ok) stoppedLabs++; }));
+        }
+        if (d.lab_execution_arn_h265 && d.lab_execution_arn_h265 !== seenLab265 &&
+            !lateLabTerminal(d.lab_status_h265)) {
+          latePromises.push(stopLabSfn(d.lab_execution_arn_h265).then(ok => { if (ok) stoppedLabs++; }));
+        }
+        if (d.gcp_execution_arn_h264 && d.gcp_execution_arn_h264 !== seenGcp264 &&
+            !lateGcpTerminal(d.gcp_job_status_h264)) {
+          latePromises.push(stopGcpExecution(d.gcp_execution_arn_h264).then(ok => { if (ok) stoppedGcp++; }));
+        }
+        if (d.gcp_execution_arn_h265 && d.gcp_execution_arn_h265 !== seenGcp265 &&
+            !lateGcpTerminal(d.gcp_job_status_h265)) {
+          latePromises.push(stopGcpExecution(d.gcp_execution_arn_h265).then(ok => { if (ok) stoppedGcp++; }));
+        }
+      }
+      await Promise.allSettled(latePromises);
+
+      // Always do the prefix-based Batch sweep — covers the case where SFN
+      // started but its arn was never written to video_episodes.
+      const terminatedBatch = await terminateBatchJobsForEpisodes(nonTerminalEpIds);
+      if (terminatedBatch > 0) stoppedLabs += terminatedBatch;
+    }
 
     // Per-field conditional writes. Between our liveByEp snapshot above and
     // this write, the lab Batch callback or the GCP step function's terminal

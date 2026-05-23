@@ -3,6 +3,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { uploadFile } from '@/lib/multipartUploader';
 
+// Parse a fetch Response as JSON without ever throwing. An empty or non-JSON
+// body (a 500 with no body, a proxy timeout page, a truncated response) would
+// otherwise make r.json() throw "Unexpected end of JSON input". Returns {} for
+// an empty body and a tagged error object for malformed JSON, so callers can
+// keep using `data.error` / `r.ok` exactly as before.
+async function safeJson(response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: 'server returned an invalid response' };
+  }
+}
+
 export default function UploadVideosPage() {
   const [shows, setShows] = useState([]);
   const [query, setQuery] = useState('');
@@ -13,7 +28,7 @@ export default function UploadVideosPage() {
   useEffect(() => {
     setLoading(true);
     fetch(`/api/uploads/shows`)
-      .then((r) => r.json())
+      .then(safeJson)
       .then((data) => {
         if (data.error) setError(data.error);
         else setShows(data.shows || []);
@@ -114,7 +129,7 @@ function EpisodeList({ slug }) {
     // the upload state of other rows that the user is still working on.
     setErr(null);
     fetch(`/api/uploads/episodes?slug=${encodeURIComponent(slug)}`)
-      .then((r) => r.json())
+      .then(safeJson)
       .then((d) => { if (!cancelled) { if (d.error) setErr(d.error); else setData(d); } })
       .catch((e) => { if (!cancelled) setErr(e.message); });
     return () => { cancelled = true; };
@@ -200,7 +215,7 @@ function EpisodeRow({ slug, episode, onSynced }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uploadToken, overwrite: hasExisting && allowOverwrite }),
       });
-      const data = await r.json();
+      const data = await safeJson(r);
       if (!r.ok) {
         // Stay in 'uploaded' so Sync/Discard remain available for retry.
         setPhase('uploaded');

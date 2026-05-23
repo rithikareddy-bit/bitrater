@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { resolveShowPosterUrl } from '@/lib/posterUrl';
+import TestJasH264Button from '@/components/TestJasH264Button';
 import {
   getCachedShow,
   setCachedShow,
@@ -195,7 +196,7 @@ export default function ShowsPage() {
                   <>
                     <SectionLabel>Episodes</SectionLabel>
                     {(show.episodes || []).map((ep) => (
-                      <EpisodeRow key={ep._id || ep.id} episode={ep} />
+                      <EpisodeRow key={ep._id || ep.id} episode={ep} showSlug={show.slug} />
                     ))}
                   </>
                 )}
@@ -302,7 +303,7 @@ function TrailerRow({ trailer, index, showId }) {
   );
 }
 
-function EpisodeRow({ episode }) {
+function EpisodeRow({ episode, showSlug }) {
   const [status, setStatus] = useState(null);
   const epId = episode._id || episode.id;
 
@@ -327,20 +328,23 @@ function EpisodeRow({ episode }) {
   const color = STATUS_COLORS[label] || '#555';
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '6px 0', borderBottom: '1px solid #1e1e1e', fontSize: 13,
-    }}>
-      <Link href={`/episode/${epId}`} style={{ color: '#e8e8e8', flex: 1 }}>
-        {episode.title || epId}
-      </Link>
-      <span style={{
-        fontSize: 11, fontWeight: 600, color,
-        border: `1px solid ${color}`, borderRadius: 4,
-        padding: '1px 6px', marginLeft: 8, whiteSpace: 'nowrap',
+    <div style={{ borderBottom: '1px solid #1e1e1e' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '6px 0', fontSize: 13,
       }}>
-        {label}
-      </span>
+        <Link href={`/episode/${epId}`} style={{ color: '#e8e8e8', flex: 1 }}>
+          {episode.title || epId}
+        </Link>
+        <span style={{
+          fontSize: 11, fontWeight: 600, color,
+          border: `1px solid ${color}`, borderRadius: 4,
+          padding: '1px 6px', marginLeft: 8, whiteSpace: 'nowrap',
+        }}>
+          {label}
+        </span>
+      </div>
+      {showSlug === 'test-jas' && epId && <TestJasH264Button episodeId={String(epId)} />}
     </div>
   );
 }

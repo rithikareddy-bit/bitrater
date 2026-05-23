@@ -54,9 +54,12 @@ export async function GET(request, { params }) {
       const showWithEp = await findEpisodeInShowcache(
         masterDb,
         id,
-        { 'episodes.$': 1, title: 1 },
+        { 'episodes.$': 1, title: 1, slug: 1 },
       );
       episodeMeta = showWithEp?.episodes?.[0] ?? null;
+      if (episodeMeta && showWithEp?.slug) {
+        episodeMeta.show_slug = showWithEp.slug;
+      }
       videoUrl = episodeMeta?.s3_url ?? null;
     }
 

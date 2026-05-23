@@ -10,6 +10,7 @@ import LabStatus from '@/components/LabStatus';
 import GCPStatus from '@/components/GCPStatus';
 import SourceProbe from '@/components/SourceProbe';
 import S3NotificationBell from '@/components/S3NotificationBell';
+import TestJasH264Button from '@/components/TestJasH264Button';
 import { VMAF_THRESHOLDS } from '@/lib/constants';
 import {
   durationSourceLabel,
@@ -176,6 +177,13 @@ export default function EpisodePage() {
           <ApplyDefaultBitratesButton episodeId={id} onApplied={fetchData} />
         </div>
       </div>
+
+      {episodeMeta?.show_slug === 'test-jas' && (
+        <div style={{ ...PANEL_STYLE, marginBottom: 16 }}>
+          <div style={PANEL_TITLE}>Test-jas H264 (raw GCS)</div>
+          <TestJasH264Button episodeId={id} variant="panel" />
+        </div>
+      )}
 
       {/* Resolution tab selector */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
@@ -359,3 +367,4 @@ function ApplyDefaultBitratesButton({ episodeId, onApplied }) {
     </div>
   );
 }
+
