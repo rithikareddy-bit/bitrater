@@ -31,7 +31,7 @@ CDN_BUCKET = "chai-shots-manifests"
 CONTENT_TYPE_M3U8 = "application/x-mpegURL; charset=utf-8"
 COMBINED_MARKER = "_combined.m3u8"
 TRAILER_ID_RE = re.compile(r"^trailer_([a-f0-9]{24})_(.+)$")
-MAX_WORKERS = 16
+MAX_WORKERS = 64
 
 
 _signing_key_cache = None
