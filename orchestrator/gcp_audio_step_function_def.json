@@ -1,0 +1,122 @@
+{
+  "Comment": "Audio per-episode pipeline (generate-only): copy -> transcode (loudnorm via Transcoder lufs) -> poll. Renditions land in the audio bucket under output/<episode_id>/. No finalize-to-CDN, no signing.",
+  "StartAt": "CopyAudioToGCS",
+  "States": {
+    "CopyAudioToGCS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${gcp_copy_audio_lambda_arn}",
+        "Payload": {
+          "episode_id.$": "$$.Execution.Input.episode_id",
+          "audio_url.$": "$$.Execution.Input.audio_url"
+        }
+      },
+      "ResultSelector": {
+        "episode_id.$": "$.Payload.episode_id",
+        "gcs_input_uri.$": "$.Payload.gcs_input_uri",
+        "source_ext.$": "$.Payload.source_ext"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.copyError",
+          "Next": "JobFailed"
+        }
+      ],
+      "Next": "SubmitAudioJob"
+    },
+    "SubmitAudioJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${gcp_audio_transcoder_lambda_arn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "episode_id.$": "$.Payload.episode_id",
+        "gcp_job_name.$": "$.Payload.gcp_job_name",
+        "output_uri.$": "$.Payload.output_uri",
+        "ladder.$": "$.Payload.ladder"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "WaitForJob"
+    },
+    "WaitForJob": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckJobStatus"
+    },
+    "CheckJobStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${gcp_check_audio_status_lambda_arn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "episode_id.$": "$.Payload.episode_id",
+        "gcp_job_name.$": "$.Payload.gcp_job_name",
+        "gcp_job_state.$": "$.Payload.gcp_job_state",
+        "output_uri.$": "$.Payload.output_uri",
+        "ladder.$": "$.Payload.ladder"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException"],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.checkError",
+          "Next": "JobFailed"
+        }
+      ],
+      "Next": "IsComplete"
+    },
+    "IsComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.gcp_job_state",
+          "StringEquals": "SUCCEEDED",
+          "Next": "GenerateDone"
+        },
+        {
+          "Variable": "$.gcp_job_state",
+          "StringEquals": "FAILED",
+          "Next": "JobFailed"
+        }
+      ],
+      "Default": "WaitForJob"
+    },
+    "GenerateDone": {
+      "Type": "Succeed",
+      "Comment": "Renditions generated in the audio bucket. No CDN copy, no signing (by design, for now)."
+    },
+    "JobFailed": {
+      "Type": "Fail",
+      "Cause": "Audio pipeline failed (copy, submit, or transcode)",
+      "Error": "AudioPipelineFailed"
+    }
+  }
+}

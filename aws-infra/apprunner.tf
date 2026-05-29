@@ -81,10 +81,14 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
           aws_sfn_state_machine.research_orchestrator_h264.arn,
           aws_sfn_state_machine.research_orchestrator_h265.arn,
           aws_sfn_state_machine.gcp_orchestrator.arn,
+          aws_sfn_state_machine.audio_orchestrator.arn,
+          aws_sfn_state_machine.audio_show_batch.arn,
           "arn:aws:states:us-east-1:107647021172:execution:Chai-Q-Orchestrator:*",
           "arn:aws:states:us-east-1:107647021172:execution:Chai-Q-Orchestrator-H264:*",
           "arn:aws:states:us-east-1:107647021172:execution:Chai-Q-Orchestrator-H265:*",
           "arn:aws:states:us-east-1:107647021172:execution:GCP-Orchestrator:*",
+          "arn:aws:states:us-east-1:107647021172:execution:Audio-Orchestrator:*",
+          "arn:aws:states:us-east-1:107647021172:execution:Audio-Show-Batch:*",
         ]
       },
       {
@@ -141,6 +145,8 @@ resource "aws_apprunner_service" "dashboard" {
             SFN_ARN_H264                      = aws_sfn_state_machine.research_orchestrator_h264.arn
             SFN_ARN_H265                      = aws_sfn_state_machine.research_orchestrator_h265.arn
             GCP_SFN_ARN                       = aws_sfn_state_machine.gcp_orchestrator.arn
+            AUDIO_SFN_ARN                     = aws_sfn_state_machine.audio_orchestrator.arn
+            AUDIO_SHOW_BATCH_SFN_ARN          = aws_sfn_state_machine.audio_show_batch.arn
             BATCH_JOB_QUEUE                   = aws_batch_job_queue.chai_q_queue.name
             CREATE_COMBINED_MASTER_LAMBDA_ARN = aws_lambda_function.gcp_create_combined_master.arn
             QUALITY_CHECK_LAMBDA_ARN          = aws_lambda_function.quality_checker.arn

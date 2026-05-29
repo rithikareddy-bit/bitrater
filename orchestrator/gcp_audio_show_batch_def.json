@@ -1,0 +1,47 @@
+{
+  "Comment": "Audio per-show batch: list episodes, then convert up to 30 at once (refill on finish) by starting the per-episode child state machine as a nested execution per item.",
+  "StartAt": "ListEpisodes",
+  "States": {
+    "ListEpisodes": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${list_audio_episodes_lambda_arn}",
+        "Payload.$": "$$.Execution.Input"
+      },
+      "ResultSelector": {
+        "slug.$": "$.Payload.slug",
+        "count.$": "$.Payload.count",
+        "episodes.$": "$.Payload.episodes"
+      },
+      "ResultPath": "$",
+      "Next": "ConvertAll"
+    },
+    "ConvertAll": {
+      "Type": "Map",
+      "ItemsPath": "$.episodes",
+      "MaxConcurrency": 30,
+      "ToleratedFailurePercentage": 100,
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "RunEpisode",
+        "States": {
+          "RunEpisode": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::states:startExecution.sync:2",
+            "Parameters": {
+              "StateMachineArn": "${audio_child_state_machine_arn}",
+              "Input": {
+                "episode_id.$": "$.episode_id",
+                "audio_url.$": "$.audio_url",
+                "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$": "$$.Execution.Id"
+              }
+            },
+            "End": true
+          }
+        }
+      },
+      "End": true
+    }
+  }
+}

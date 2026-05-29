@@ -56,6 +56,20 @@ gcloud storage buckets create "gs://${GCS_INPUT_BUCKET}" \
   --project="${GCP_PROJECT}" --location="${GCP_LOCATION}" 2>/dev/null || echo "  (input bucket already exists)"
 gcloud storage buckets create "gs://${GCS_OUTPUT_BUCKET}" \
   --project="${GCP_PROJECT}" --location="${GCP_LOCATION}" 2>/dev/null || echo "  (output bucket already exists)"
+AUDIO_BUCKET="${AUDIO_BUCKET:-chai-q-audio-transcoder}"
+gcloud storage buckets create "gs://${AUDIO_BUCKET}" \
+  --project="${GCP_PROJECT}" --location="${GCP_LOCATION}" 2>/dev/null || echo "  (audio bucket already exists)"
+
+# Public preview bucket for audio renditions — dashboard plays from here via
+# https://storage.googleapis.com/<bucket>/<id>/audio_master.m3u8. Renditions only,
+# no source masters. Uniform bucket-level access + allUsers:objectViewer so the
+# HLS manifest opens without signing.
+AUDIO_PUBLIC_BUCKET="${AUDIO_PUBLIC_BUCKET:-chai-q-audio-public}"
+gcloud storage buckets create "gs://${AUDIO_PUBLIC_BUCKET}" \
+  --project="${GCP_PROJECT}" --location="${GCP_LOCATION}" \
+  --uniform-bucket-level-access 2>/dev/null || echo "  (audio public bucket already exists)"
+gcloud storage buckets add-iam-policy-binding "gs://${AUDIO_PUBLIC_BUCKET}" \
+  --member="allUsers" --role="roles/storage.objectViewer" --quiet >/dev/null
 
 echo "[1c] Creating GCP service account..."
 gcloud iam service-accounts create "${GCP_SA_NAME}" \
@@ -132,7 +146,8 @@ terraform apply -auto-approve \
   -var="subtitle_mongo_uri=${SUBTITLE_MONGO_URI:-}" \
   -var="cdn_base=${CDN_BASE:-https://cdn.chaishots.in}" \
   -var="vtt_worker_url=${VTT_WORKER_URL:-}" \
-  -var="vtt_worker_secret=${VTT_WORKER_SECRET:-}"
+  -var="vtt_worker_secret=${VTT_WORKER_SECRET:-}" \
+  -var="audio_bucket=${AUDIO_BUCKET:-chai-q-audio-transcoder}"
 
 echo ""
 echo "========================================"

@@ -246,8 +246,16 @@ data "archive_file" "gcp_check_status_zip" {
 
 data "archive_file" "gcp_finalize_zip" {
   type        = "zip"
-  source_file = "../orchestrator/gcp_finalize_hls.py"
   output_path = "/tmp/chai-q-gcp-finalize.zip"
+  source {
+    content  = file("../orchestrator/gcp_finalize_hls.py")
+    filename = "gcp_finalize_hls.py"
+  }
+  # Shared BCP-47 normalization (also used by the audio Lambda).
+  source {
+    content  = file("../orchestrator/lang_codes.py")
+    filename = "lang_codes.py"
+  }
 }
 
 locals {
@@ -521,6 +529,11 @@ data "archive_file" "resync_subtitles_zip" {
     content  = file("../orchestrator/media_cdn_signer.py")
     filename = "media_cdn_signer.py"
   }
+  # gcp_finalize_hls.py imports from lang_codes — must travel with it.
+  source {
+    content  = file("../orchestrator/lang_codes.py")
+    filename = "lang_codes.py"
+  }
 }
 
 resource "aws_lambda_function" "resync_subtitles" {
@@ -568,7 +581,12 @@ resource "aws_lambda_function" "resign_playback_urls" {
   handler          = "resign_playback_urls.handler"
   runtime          = "python3.11"
   timeout          = 900 # Max allowed. Full sweep across 549 episodes × ~12 files each.
-  memory_size      = 512
+  # Kept at 1769 MB (= 1 full vCPU) by preference / headroom, and so terraform doesn't drift
+  # vs the live value. NOTE: memory is NOT what fixed the 900s timeout — the sweep is I/O-bound
+  # (cross-cloud AWS→GCS, only ~240-300 MB used); a 2026-05-26 CloudWatch test showed 1769 MB
+  # gave no speedup. The real lever is I/O concurrency: MAX_WORKERS=64 in resign_playback_urls.py
+  # (896s→274s). Permanent fix = near-expiry filter + sharding.
+  memory_size      = 1769
   layers           = [aws_lambda_layer_version.gcp_deps.arn]
 
   environment {

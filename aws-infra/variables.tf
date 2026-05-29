@@ -12,7 +12,7 @@ variable "gcp_project" {
 variable "gcp_location" {
   description = "GCP region for the Transcoder API"
   type        = string
-  default     = "us-central1"
+  default     = "asia-south1"
 }
 
 variable "gcs_input_bucket" {

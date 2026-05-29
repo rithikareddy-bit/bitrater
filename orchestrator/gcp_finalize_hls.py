@@ -168,51 +168,15 @@ def _inject_gap_separators(vtt_content: str, video_duration: float = 0) -> str:
     return out.strip()
 
 
-# BCP-47 codes + display names for the show's source language. The romanized
-# track uses the {code}-Latn suffix (BCP-47 script subtag for Latin script).
-LANG_CODE_NAMES = {
-    "kn": "Kannada",
-    "te": "Telugu",
-    "hi": "Hindi",
-    "ta": "Tamil",
-    "ml": "Malayalam",
-    "bn": "Bengali",
-    "mr": "Marathi",
-    "gu": "Gujarati",
-    "pa": "Punjabi",
-    "ur": "Urdu",
-    "or": "Odia",
-    "as": "Assamese",
-    "en": "English",
-}
-LANG_NAME_TO_CODE = {v.lower(): k for k, v in LANG_CODE_NAMES.items()}
-
-ROMANIZED_DISPLAY_NAMES = {
-    "kn": "Kanglish",
-    "te": "Tinglish",
-    "hi": "Hinglish",
-    "ta": "Tanglish",
-    "ml": "Manglish",
-    "bn": "Banglish",
-}
-
-
-def _normalize_lang_code(source_language: str) -> str:
-    """Normalize a free-form language hint to a BCP-47 2-letter code.
-
-    Accepts: 'kannada', 'Kannada', 'kn', 'KAN' → 'kn'.
-    Falls back to the first two lowercased chars when unknown.
-    """
-    s = (source_language or "").strip().lower()
-    if not s:
-        return "xx"
-    if s in LANG_CODE_NAMES:
-        return s
-    if s in LANG_NAME_TO_CODE:
-        return LANG_NAME_TO_CODE[s]
-    if s == "kan":
-        return "kn"
-    return s[:2]
+# BCP-47 language tables + normalization live in `lang_codes` (no env reads) so
+# they can be shared with the audio Lambda. Re-exported here under the original
+# names so the rest of this file (and any downstream tooling) keeps working.
+from lang_codes import (
+    LANG_CODE_NAMES,
+    LANG_NAME_TO_CODE,
+    ROMANIZED_DISPLAY_NAMES,
+    normalize_lang_code as _normalize_lang_code,
+)
 
 
 def build_subtitle_langs(source_language: str) -> dict:
