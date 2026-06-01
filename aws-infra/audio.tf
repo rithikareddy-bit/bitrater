@@ -20,7 +20,7 @@ locals {
     GCS_INPUT_BUCKET           = var.audio_bucket          # one bucket, input/ + output/ prefixes
     GCS_OUTPUT_BUCKET          = var.audio_bucket
     GCP_CREDENTIALS_SECRET_ARN = local.gcp_credentials_secret_arn_effective
-    AUDIO_SEGMENT_SECONDS      = "6"
+    AUDIO_SEGMENT_SECONDS      = "2"   # match video segment/GOP duration (gcp_transcoder.py = 2s)
     AUDIO_LADDER_KBPS          = "64"   # single-rung static ladder, HE-AAC (all-GCP; no ffprobe)
     AUDIO_LOUDNESS_LUFS        = "-16"
     AUDIO_PUBLIC_BUCKET        = "chai-q-audio-public"  # renditions copied here on success (public, no masters)

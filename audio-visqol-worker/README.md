@@ -16,7 +16,8 @@ See `../AUDIO-QUALITY-CHECK-PLAN.md` for the full design.
 | `EPISODE_ID` | episode UUID (Mongo key) |
 | `MASTER_URL` | public `audio_master.m3u8` (`public_master_url`) |
 | `SOURCE_URL` | source `audio_url` (`.wav` or `.mp3`, auto-detected) |
-| `MONGO_URI` | results sink |
+| `MONGO_URI` | results sink (or set `MONGO_SECRET_ARN` to fetch it from Secrets Manager at runtime) |
+| `MONGO_SECRET_ARN` | Secrets Manager ARN holding the Mongo URI — used by the Batch job def so the credential isn't plaintext (worker fetches via its jobRole) |
 | `VISQOL_SEGMENT` | `mid-180s` (default) or `full` |
 | `VISQOL_BIN` / `VISQOL_MODEL` | set by the image; override for local runs |
 

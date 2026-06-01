@@ -123,7 +123,8 @@ Three states + poll loop. No normalize state (Transcoder does loudness), no fina
   (`Input.preprocessing_config` + `PreprocessingConfig.Audio.lufs` verified in the Python client.)
 - Per rung `kbps` in the ladder: distinct keys — elementary `es_audio_{k}k` (HE-AAC v1 at the
   64k rung, AAC-LC if the ladder is ever widened above 64k; `bitrate_bps=k*1000`,
-  `channel_count=2`, `sample_rate_hertz=48000`) and fMP4 mux `audio_{k}k` (`segment_duration=6s`).
+  `channel_count=2`, `sample_rate_hertz=48000`) and fMP4 mux `audio_{k}k` (`segment_duration=2s`,
+  matching the video pipeline's 2s segment/GOP).
   One HLS manifest `audio_master.m3u8` listing the rung mux stream.
 - Output `gs://chai-q-audio-transcoder/output/<id>/`. Writes `gcp_job_name`, `ladder`, `lufs`.
 
@@ -187,7 +188,7 @@ Lambda env (`local.audio_lambda_env` in `audio.tf`):
 MONGO_URI, GCP_PROJECT, GCP_LOCATION=asia-south1,
 GCS_INPUT_BUCKET=GCS_OUTPUT_BUCKET=chai-q-audio-transcoder,
 GCP_CREDENTIALS_SECRET_ARN,
-AUDIO_SEGMENT_SECONDS=6, AUDIO_LADDER_KBPS=64, AUDIO_LOUDNESS_LUFS=-16
+AUDIO_SEGMENT_SECONDS=2, AUDIO_LADDER_KBPS=64, AUDIO_LOUDNESS_LUFS=-16
 ```
 
 **Config to verify before/at deploy:**

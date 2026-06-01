@@ -141,7 +141,7 @@ def handler(event, context):
         gcp_project = os.environ["GCP_PROJECT"]
         gcp_location = os.environ.get("GCP_LOCATION", "asia-south1")
         gcs_output_bucket = os.environ["GCS_OUTPUT_BUCKET"]
-        segment_seconds = int(os.environ.get("AUDIO_SEGMENT_SECONDS", "6"))
+        segment_seconds = int(os.environ.get("AUDIO_SEGMENT_SECONDS", "2"))
         lufs = float(os.environ.get("AUDIO_LOUDNESS_LUFS", "-16"))
 
         output_uri = f"gs://{gcs_output_bucket}/output/{episode_id}/"

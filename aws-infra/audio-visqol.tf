@@ -13,6 +13,30 @@ resource "aws_ecr_repository" "audio_visqol_worker" {
   force_delete         = true
 }
 
+# --- Mongo URI in Secrets Manager (so it's NOT plaintext in the job definition) ---
+# The worker fetches this at runtime via its jobRole; the job def carries only the ARN.
+resource "aws_secretsmanager_secret" "audio_mongo_uri" {
+  name = "chai-q-audio-mongo-uri"
+}
+resource "aws_secretsmanager_secret_version" "audio_mongo_uri" {
+  secret_id     = aws_secretsmanager_secret.audio_mongo_uri.id
+  secret_string = var.mongo_uri
+}
+
+# Let the Batch container (jobRole = batch_instance_role) read just this one secret.
+resource "aws_iam_role_policy" "audio_visqol_secret_read" {
+  name = "chai-q-audio-visqol-secret-read"
+  role = aws_iam_role.batch_instance_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = aws_secretsmanager_secret.audio_mongo_uri.arn
+    }]
+  })
+}
+
 # --- Build & push the image (multi-stage: builds ViSQOL via Bazel + static ffmpeg) ---
 resource "null_resource" "audio_visqol_push" {
   triggers = {
@@ -45,10 +69,11 @@ resource "aws_batch_job_definition" "audio_visqol_def" {
   container_properties = jsonencode({
     image = "${aws_ecr_repository.audio_visqol_worker.repository_url}:latest"
 
-    # MONGO_URI is the results sink; EPISODE_ID/MASTER_URL/SOURCE_URL are passed per-job via
-    # the dashboard's SubmitJob containerOverrides. VISQOL_SEGMENT defaults to a mid window.
+    # Only the secret ARN (not the credential) is in the job def; the worker fetches the URI at
+    # runtime via its jobRole (see _resolve_mongo_uri / _fetch_secret in worker.py). EPISODE_ID/
+    # MASTER_URL/SOURCE_URL are passed per-job via the dashboard's SubmitJob containerOverrides.
     environment = [
-      { name = "MONGO_URI", value = var.mongo_uri },
+      { name = "MONGO_SECRET_ARN", value = aws_secretsmanager_secret.audio_mongo_uri.arn },
       { name = "VISQOL_SEGMENT", value = "mid-180s" },
     ]
 

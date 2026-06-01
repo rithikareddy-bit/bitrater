@@ -35,9 +35,21 @@ from urllib.parse import urljoin
 import requests
 
 
-# ── rung → codec label (mirrors gcp_audio_transcoder.py: <=64k is HE-AAC, above is AAC-LC) ──
-def _codec_for(kbps):
-    return "aac-he" if kbps <= 64 else "aac-lc"
+# ── codec label from the ACTUAL rendition stream (not assumed from kbps) ─────────────────────
+# HE-AAC and AAC-LC both report codec_name='aac'; the AAC object type is in ffprobe's `profile`
+# (HE-AAC / HE-AACv2 / LC). Detecting it from the real stream avoids mislabeling — e.g. a legacy
+# AAC-LC 64k rung that an older pipeline produced would otherwise be wrongly tagged "aac-he".
+def _codec_label(codec_name, profile):
+    p = (profile or "").upper()
+    if codec_name == "aac":
+        if "HE-AAC" in p and "V2" in p:
+            return "aac-he-v2"
+        if "HE-AAC" in p:
+            return "aac-he"
+        if "LC" in p:
+            return "aac-lc"
+        return "aac"
+    return codec_name or "unknown"
 
 
 # ── master playlist parsing ────────────────────────────────────────────────────────────────
@@ -80,10 +92,11 @@ def parse_master(master_url):
 
 # ── ffprobe / ffmpeg helpers ─────────────────────────────────────────────────────────────────
 def ffprobe_info(url):
-    """Return {codec, sample_rate, duration} for the first audio stream of `url`."""
+    """Return {codec, profile, sample_rate, duration} for the first audio stream of `url`.
+    `profile` distinguishes HE-AAC vs AAC-LC (both have codec_name='aac') — see _codec_label."""
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a:0",
-         "-show_entries", "stream=codec_name,sample_rate",
+         "-show_entries", "stream=codec_name,profile,sample_rate",
          "-show_entries", "format=duration", "-of", "json", url],
         capture_output=True, text=True, check=True,
     )
@@ -92,6 +105,7 @@ def ffprobe_info(url):
     fmt = data.get("format") or {}
     return {
         "codec": stream.get("codec_name"),
+        "profile": stream.get("profile"),
         "sample_rate": int(stream["sample_rate"]) if stream.get("sample_rate") else None,
         "duration": float(fmt["duration"]) if fmt.get("duration") else None,
     }
@@ -196,6 +210,28 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _fetch_secret(arn):
+    """Fetch a Secrets Manager secret string by ARN using the container's IAM (the Batch jobRole).
+    Region is parsed from the ARN. boto3 is imported lazily so local --no-db runs don't need it."""
+    import boto3
+    parts = arn.split(":")
+    region = parts[3] if arn.startswith("arn:") and len(parts) > 3 and parts[3] else os.getenv("AWS_REGION", "us-east-1")
+    return boto3.client("secretsmanager", region_name=region).get_secret_value(SecretId=arn)["SecretString"]
+
+
+def _resolve_mongo_uri(args):
+    """Resolve the Mongo URI (None under --no-db). Order: --mongo-uri flag → MONGO_URI env →
+    MONGO_SECRET_ARN (a Secrets Manager ARN fetched at runtime via the jobRole). The ARN path
+    keeps the credential out of the Batch job definition's plaintext environment."""
+    if args.no_db:
+        return None
+    direct = args.mongo_uri or os.getenv("MONGO_URI")
+    if direct:
+        return direct
+    arn = os.getenv("MONGO_SECRET_ARN")
+    return _fetch_secret(arn) if arn else None
+
+
 def write_results(mongo_uri, episode_id, summary, per_rung):
     import pymongo
     db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
@@ -226,7 +262,7 @@ def run(args):
     episode_id = args.episode_id or os.getenv("EPISODE_ID")
     master_url = args.master_url or os.getenv("MASTER_URL")
     source_url = args.source_url or os.getenv("SOURCE_URL")
-    mongo_uri = None if args.no_db else (args.mongo_uri or os.getenv("MONGO_URI"))
+    mongo_uri = _resolve_mongo_uri(args)
     segment = args.segment or os.getenv("VISQOL_SEGMENT", "mid-180s")
     visqol_bin = os.getenv("VISQOL_BIN", "visqol")
     model_path = os.getenv("VISQOL_MODEL")
@@ -279,16 +315,18 @@ def run(args):
     scores, per_rung = {}, []
     for kbps, variant_url in rungs:
         local_pl = materialize_hls(variant_url, os.path.join(workdir, f"hls_{kbps}k"))
+        rinfo = ffprobe_info(local_pl)
+        codec = _codec_label(rinfo.get("codec"), rinfo.get("profile"))
         deg_wav = os.path.join(workdir, f"deg_{kbps}k.wav")
         decode_to_wav(local_pl, deg_wav, window)
         mos = run_visqol(ref_wav, deg_wav, visqol_bin, model_path)
         scores[str(kbps)] = mos
         per_rung.append({
-            "episode_id": episode_id, "rung_kbps": kbps, "codec": _codec_for(kbps),
+            "episode_id": episode_id, "rung_kbps": kbps, "codec": codec,
             "visqol_mos": mos, "mode": "audio", "segment": seg_label,
             "source_codec": source_codec, "source_sr": source_sr, "timestamp": _now_iso(),
         })
-        print(f"[OK] {kbps}k ({_codec_for(kbps)}) MOS-LQO={mos}")
+        print(f"[OK] {kbps}k ({codec}) MOS-LQO={mos}")
 
     summary = {
         "status": "DONE", "mode": "audio", "segment": seg_label, "scores": scores,
@@ -327,7 +365,7 @@ def main():
         run(args)
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
-        mongo_uri = None if args.no_db else (args.mongo_uri or os.getenv("MONGO_URI"))
+        mongo_uri = _resolve_mongo_uri(args)
         episode_id = args.episode_id or os.getenv("EPISODE_ID")
         if mongo_uri and episode_id:
             stamp_failed(mongo_uri, episode_id, str(e))

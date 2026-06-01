@@ -84,8 +84,9 @@ No Step Functions changes. No re-transcode. No GCP credentials in the worker.
 
 ### 2.1 `audio-visqol-worker/` (new) — worker.py + Dockerfile
 Modeled on `research-worker/`. Same static-ffmpeg Lambda/Batch base image **plus a ViSQOL stage**.
-- **Env in:** `EPISODE_ID`, `MASTER_URL`, `SOURCE_URL`, `MONGO_URI`, optional `VISQOL_SEGMENT`
-  (default `mid-180s`), optional `VISQOL_MODE` (`audio`).
+- **Env in:** `EPISODE_ID`, `MASTER_URL`, `SOURCE_URL`, `MONGO_SECRET_ARN` (Secrets Manager ARN —
+  worker fetches the Mongo URI at runtime via its jobRole, so no plaintext credential in the job
+  def; `MONGO_URI` still honored for local runs), optional `VISQOL_SEGMENT` (default `mid-180s`).
 - **Writes:** `chai_q_lab.audio_episodes.visqol` (summary for the UI) and
   `chai_q_lab.audio_visqol_research` (one doc per rung per run, history for aggregation).
 - **Self-stamps** `CALCULATING`→`DONE`/`FAILED`; wraps the whole body in try/except so a crash
@@ -192,7 +193,7 @@ for slots; acceptable given on-demand, low frequency.
 - **IAM (new):** the App Runner role currently has only `states:StartExecution` (used by
   `convert`/`run-show`). Add **`batch:SubmitJob`** (scoped to the audio-visqol job-def + queue).
 - **App Runner env (new):** `BATCH_JOB_QUEUE_ARN` (reuse video's), `AUDIO_VISQOL_JOB_DEFINITION_ARN`.
-- **Worker env:** `MONGO_URI`, `EPISODE_ID`, `MASTER_URL`, `SOURCE_URL`, `VISQOL_SEGMENT`,
+- **Worker env:** `MONGO_SECRET_ARN` (or `MONGO_URI` locally), `EPISODE_ID`, `MASTER_URL`, `SOURCE_URL`, `VISQOL_SEGMENT`,
   `VISQOL_MODE` — all passed as Batch `containerOverrides.environment` (no secrets; HTTPS-only inputs).
 - **Build/deploy:** new image to ECR; `terraform apply` for the job-def + IAM; dashboard image
   rebuild (App Runner auto-redeploys). Fits the existing `deploy.sh` flow.
