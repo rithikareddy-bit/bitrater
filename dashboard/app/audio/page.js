@@ -22,6 +22,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 
 const POLL_MS = 8000;
+// A ViSQOL job stuck CALCULATING past this (e.g. its container was OOM-killed before it could
+// stamp FAILED) is treated as dead, so the button re-enables instead of locking forever (G7).
+const VISQOL_STALE_MS = 20 * 60 * 1000;
 
 const LANG_LABELS = {
   te: 'Telugu', hi: 'Hindi', kn: 'Kannada', ta: 'Tamil',
@@ -99,6 +102,73 @@ function StatusPill({ status }) {
   );
 }
 
+function VisqolCell({ ep, busy, onCalc }) {
+  const vq = ep.visqol;
+  // The score needs a public master to fetch over HTTPS; a still-running transcode has none.
+  const canRun = ep.public && ep.status !== 'RUNNING' && ep.status !== 'COPYING';
+  // A CALCULATING older than the stale threshold is a dead job — don't keep the button spinning.
+  const calcAge = vq?.computed_at ? Date.now() - new Date(vq.computed_at).getTime() : 0;
+  const stale = vq?.status === 'CALCULATING' && calcAge > VISQOL_STALE_MS;
+  const calculating = busy || (vq?.status === 'CALCULATING' && !stale);
+  const done = vq?.status === 'DONE';
+  const failed = vq?.status === 'FAILED' || stale;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-start' }}>
+      {done && vq.scores && Object.keys(vq.scores).length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {Object.entries(vq.scores).map(([k, v]) => (
+            <span key={k} style={{ fontSize: 12 }}>
+              <span style={{ color: '#a5b4fc', fontWeight: 600 }}>{k}k</span>{' '}
+              <span style={{ color: '#e8e8e8', fontWeight: 600 }}>{v}</span>
+              <span style={{ color: '#555' }}> MOS</span>
+            </span>
+          ))}
+          {vq.source_codec === 'mp3' && (
+            <span
+              title="Source is MP3 (lossy reference): absolute MOS is bounded by the MP3 master; treat the score as relative, not absolute."
+              style={{ fontSize: 10, color: '#fbbf24' }}
+            >
+              vs MP3 source — relative
+            </span>
+          )}
+        </div>
+      )}
+      {failed && (
+        <span
+          title={stale
+            ? 'ViSQOL job did not report back in time — it likely died; recalculate.'
+            : vq.error || 'ViSQOL job failed'}
+          style={{ color: '#f87171', fontSize: 11 }}
+        >
+          {stale ? '⚠ timed out' : '⚠ failed'}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => onCalc(ep.id)}
+        disabled={!canRun || calculating}
+        title={!ep.public
+          ? 'A public master is needed first — run the pipeline and let the public copy finish.'
+          : 'Score this episode with ViSQOL (source vs the 64k rendition)'}
+        style={{
+          padding: '3px 10px',
+          borderRadius: 5,
+          border: '1px solid #3730a3',
+          background: calculating ? '#1e1b4b' : '#312e81',
+          color: '#c7d2fe',
+          fontSize: 11,
+          fontWeight: 600,
+          cursor: !canRun || calculating ? 'not-allowed' : 'pointer',
+          opacity: !canRun ? 0.5 : 1,
+        }}
+      >
+        {calculating ? 'Calculating…' : done || failed ? 'Recalculate' : 'Calculate'}
+      </button>
+    </div>
+  );
+}
+
 function StatRow({ label, value, sub }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
@@ -162,6 +232,7 @@ export default function AudioOverviewPage() {
   const [fetchedAt, setFetchedAt] = useState(null);
   const [runBusy, setRunBusy] = useState(false);
   const [epBusy, setEpBusy] = useState({}); // episodeId -> bool
+  const [vqBusy, setVqBusy] = useState({}); // episodeId -> bool (ViSQOL calculate in flight)
 
   const timerRef = useRef(null);
   const visibleRef = useRef(true);
@@ -271,13 +342,28 @@ export default function AudioOverviewPage() {
     else loadLive(selectedSlug, true);
   }
 
+  // Submit a ViSQOL "Check Quality" job for one episode (source vs the 64k rendition).
+  // The worker stamps DONE/FAILED on visqol; we just kick it off and let polling pick up
+  // the CALCULATING→DONE transition.
+  async function calcVisqol(episodeId) {
+    setVqBusy((p) => ({ ...p, [episodeId]: true }));
+    const r = await fetch('/api/audio/visqol', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeId }),
+    }).then(safeJson);
+    setVqBusy((p) => ({ ...p, [episodeId]: false }));
+    if (r.error) alert(`Quality check failed: ${r.error}`);
+    else loadLive(selectedSlug, true);
+  }
+
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', padding: 24, color: '#e8e8e8', fontFamily: 'system-ui' }}>
       <div style={{ marginBottom: 20, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16 }}>
         <Link href="/" style={{ fontSize: 13, color: '#4da6ff' }}>← Catalog</Link>
         <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Audio overview</h1>
         <span style={{ color: '#666', fontSize: 12 }}>
-          podcast_showcache · HLS-AAC 64/96/128k · −16 LUFS
+          podcast_showcache · HLS HE-AAC 64k · −16 LUFS
         </span>
       </div>
 
@@ -498,10 +584,10 @@ export default function AudioOverviewPage() {
             </span>
           </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', fontSize: 12 }}>
+            <table style={{ width: '100%', minWidth: 1040, borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: '#111' }}>
-                  {['#', 'Episode', 'Status', 'Ladder', 'Public master', ''].map((h, i) => (
+                  {['#', 'Episode', 'Status', 'Ladder', 'Public master', 'Quality (ViSQOL)', ''].map((h, i) => (
                     <th
                       key={h || `actions-${i}`}
                       style={{
@@ -624,6 +710,9 @@ export default function AudioOverviewPage() {
                         <span style={{ color: '#555' }}>—</span>
                       )}
                     </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <VisqolCell ep={ep} busy={vqBusy[ep.id]} onCalc={calcVisqol} />
+                    </td>
                     <td style={{ padding: '10px 12px', textAlign: 'right' }}>
                       <button
                         type="button"
@@ -652,6 +741,8 @@ export default function AudioOverviewPage() {
             Status lifecycle: <code style={{ color: '#888' }}>idle → COPYING → RUNNING → SUCCEEDED|FAILED</code>.
             Ladder is the kbps rungs the Transcoder produced. Public master opens the HLS playlist
             directly from <code style={{ color: '#888' }}>chai-q-audio-public</code> in a new tab.
+            Quality (ViSQOL) scores the 64k rendition against the source on demand — MOS ~4.7 is
+            transparent for speech; needs a public master first.
           </div>
         </div>
       )}

@@ -1,7 +1,7 @@
 """
 Audio State 2: Build an audio-only GCP Transcoder JobConfig and submit it.
 
-Produces AAC-LC HLS renditions (64/96/128, capped by the copy step's `ladder`) with
+Produces a single HE-AAC HLS rendition (64k, capped by the copy step's `ladder`) with
 fMP4 segments + one HLS master, written to:
     gs://${GCS_OUTPUT_BUCKET}/output/${episode_id}/
 
@@ -58,8 +58,10 @@ def _build_job_config(gcs_input_uri, output_uri, ladder, segment_seconds, lufs, 
         # pipeline's separation (audio_aac elementary vs mux_h264_audio mux).
         es_key = f"es_audio_{kbps}k"
         mux_key = f"audio_{kbps}k"
-        # HE-AAC v1 (mp4a.40.5) at <=64 kbps is meaningfully cleaner than AAC-LC for
-        # spoken word; AAC-LC (mp4a.40.2) above that is the safer, more compatible choice.
+        # Single 64k rung → HE-AAC v1 (mp4a.40.5). ViSQOL-confirmed on a clean WAV source: at
+        # 64k HE-AAC beats AAC-LC (4.689 vs 4.629 — SBR helps at low bitrate). The <=64
+        # condition is kept so AAC-LC (mp4a.40.2) is still picked automatically if the ladder
+        # is ever widened above 64k.
         codec = "aac-he" if kbps <= 64 else "aac"
         elementary_streams.append(
             types.ElementaryStream(
@@ -133,7 +135,7 @@ def handler(event, context):
         # Static ladder from env (no ffmpeg/ffprobe probe). All-GCP: Transcoder encodes these
         # rungs and normalizes loudness via lufs. (No per-source upsample-cap for now.)
         ladder = event.get("ladder") or [
-            int(x) for x in os.environ.get("AUDIO_LADDER_KBPS", "64,96,128").split(",") if x.strip()
+            int(x) for x in os.environ.get("AUDIO_LADDER_KBPS", "64").split(",") if x.strip()
         ]
 
         gcp_project = os.environ["GCP_PROJECT"]

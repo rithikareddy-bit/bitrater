@@ -68,6 +68,9 @@ export async function GET(request) {
         // the audio URL has no subs embedded even though transcode SUCCEEDED.
         subtitle_tracks: byId[e.id]?.subtitle_tracks || null,
         subtitle_publish_error: byId[e.id]?.subtitle_publish_error || null,
+        // ViSQOL "Check Quality" result (status CALCULATING|DONE|FAILED + per-rung MOS scores),
+        // written by the audio-visqol-worker. null until the button is pressed for this episode.
+        visqol: byId[e.id]?.visqol || null,
       })),
     });
   } catch (err) {

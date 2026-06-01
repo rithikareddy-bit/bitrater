@@ -104,6 +104,16 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
         Resource = "*"
       },
       {
+        # Submit the on-demand audio ViSQOL "Calculate" job (dashboard /api/audio/visqol).
+        Sid    = "SubmitAudioVisqolJob"
+        Effect = "Allow"
+        Action = "batch:SubmitJob"
+        Resource = [
+          aws_batch_job_definition.audio_visqol_def.arn,
+          aws_batch_job_queue.chai_q_queue.arn,
+        ]
+      },
+      {
         Sid    = "InvokeLambdas"
         Effect = "Allow"
         Action = "lambda:InvokeFunction"
@@ -148,6 +158,7 @@ resource "aws_apprunner_service" "dashboard" {
             AUDIO_SFN_ARN                     = aws_sfn_state_machine.audio_orchestrator.arn
             AUDIO_SHOW_BATCH_SFN_ARN          = aws_sfn_state_machine.audio_show_batch.arn
             BATCH_JOB_QUEUE                   = aws_batch_job_queue.chai_q_queue.name
+            AUDIO_VISQOL_JOB_DEFINITION       = aws_batch_job_definition.audio_visqol_def.arn
             CREATE_COMBINED_MASTER_LAMBDA_ARN = aws_lambda_function.gcp_create_combined_master.arn
             QUALITY_CHECK_LAMBDA_ARN          = aws_lambda_function.quality_checker.arn
             RESIGN_PLAYBACK_URLS_LAMBDA_ARN   = aws_lambda_function.resign_playback_urls.arn

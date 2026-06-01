@@ -1,7 +1,7 @@
 # Audio Pipeline — Plan
 
-Take a podcast audio source (`podcast_showcache.episodes[].audio_url`) and produce adaptive
-**HLS-AAC** renditions (64/96/128k). The pipeline is **100% GCP for processing** — GCP
+Take a podcast audio source (`podcast_showcache.episodes[].audio_url`) and produce a single
+**HLS HE-AAC** rendition (64k). The pipeline is **100% GCP for processing** — GCP
 Transcoder does both **loudness normalization** and the **AAC/HLS encode** in one managed job.
 No ffmpeg, no Cloud Run worker. AWS provides only orchestration (Step Functions + Lambdas) and
 the dashboard.
@@ -11,8 +11,10 @@ the dashboard.
 **signing are deliberately NOT built yet** (see §9 Deferred).
 
 Decisions locked with the operator:
-- **No MP3 fallback.** AAC-LC in HLS plays on every targeted device.
-- **Ladder = 64/96/128k AAC-LC**, static (no per-source probe). 64k = low-bandwidth floor.
+- **No MP3 fallback.** AAC in HLS plays on every targeted device.
+- **Ladder = single 64k rung, HE-AAC v1 (mp4a.40.5)**, static (no per-source probe).
+  (96k/128k dropped — ViSQOL showed 64k HE-AAC is already good enough for spoken word, so one
+  rung keeps storage/bandwidth minimal; there is nothing to adapt between.)
 - **48 kHz stereo**, loudness **−16 LUFS** (podcast standard).
 - **GCP Transcoder does everything** (normalize + encode) — confirmed it supports LUFS via
   `Input.preprocessing_config.audio.lufs`. So **no ffmpeg/loudnorm step at all**.
@@ -38,13 +40,14 @@ Mongo (same `MONGO_URI`), DB `master`, collection **`podcast_showcache`** (verif
 
 ## 2. Bitrate ladder (static — no probe)
 
-- **`64 / 96 / 128k` AAC-LC**, fixed from `AUDIO_LADDER_KBPS`. Every episode gets all three rungs.
+- **`64k` only**, fixed from `AUDIO_LADDER_KBPS`. Every episode gets one rung (64k HE-AAC v1).
 - **No ffprobe / no upsample-cap** (we removed ffmpeg entirely). A low-bitrate MP3 source still
-  gets a 128k rung — slightly larger file, no quality gain. Acceptable since masters are
-  typically WAV / ≥128k. Re-introducing the cap later would need a GCP-native probe (input-info
-  after submit) — deferred, not worth it now.
-- 64k = intelligible-speech floor for bad connections; 128k = transparent-enough ceiling for
-  spoken word. No rung above 128k.
+  gets the 64k rung — no quality gain, no probe needed. Acceptable since masters are typically
+  WAV / ≥64k. Re-introducing a cap later would need a GCP-native probe (input-info after submit)
+  — deferred, not worth it now.
+- 64k HE-AAC = transparent-enough for spoken word **and** a low-bandwidth floor in one rung.
+  ViSQOL on a clean WAV source put 64k HE-AAC at ~4.69 MOS, so a second rung earns no audible
+  gain. No rung above 64k.
 
 ---
 
@@ -118,9 +121,10 @@ Three states + poll loop. No normalize state (Transcoder does loudness), no fina
   )
   ```
   (`Input.preprocessing_config` + `PreprocessingConfig.Audio.lufs` verified in the Python client.)
-- Per rung `kbps` in the ladder: distinct keys — elementary `es_audio_{k}k` (AAC-LC,
-  `bitrate_bps=k*1000`, `channel_count=2`, `sample_rate_hertz=48000`) and fMP4 mux `audio_{k}k`
-  (`segment_duration=6s`). One HLS manifest `audio_master.m3u8` listing the rung mux streams.
+- Per rung `kbps` in the ladder: distinct keys — elementary `es_audio_{k}k` (HE-AAC v1 at the
+  64k rung, AAC-LC if the ladder is ever widened above 64k; `bitrate_bps=k*1000`,
+  `channel_count=2`, `sample_rate_hertz=48000`) and fMP4 mux `audio_{k}k` (`segment_duration=6s`).
+  One HLS manifest `audio_master.m3u8` listing the rung mux stream.
 - Output `gs://chai-q-audio-transcoder/output/<id>/`. Writes `gcp_job_name`, `ladder`, `lufs`.
 
 ### 4.3 `gcp_check_audio_status.py` (CheckJobStatus)
@@ -155,10 +159,8 @@ Status lifecycle across the run: **`COPYING → RUNNING → SUCCEEDED | FAILED`*
 gs://chai-q-audio-transcoder/
   input/<episode_id>/source.<ext>            # the streamed source
   output/<episode_id>/
-    audio_master.m3u8                        # variant playlist: 64/96/128
-    audio_64k.m3u8  + .m4s segments + init   (mp4a.40.2)
-    audio_96k.m3u8  + .m4s segments + init
-    audio_128k.m3u8 + .m4s segments + init
+    audio_master.m3u8                        # variant playlist: 64 only
+    audio_64k.m3u8  + .m4s segments + init   (mp4a.40.5, HE-AAC)
 ```
 Single working bucket, `input/` + `output/` prefixes (Transcoder reads one, writes the other).
 A bucket lifecycle rule can auto-delete both prefixes after N days (disposable). **Nothing is
@@ -167,8 +169,8 @@ copied to the CDN and nothing is signed yet** (§9).
 ---
 
 ## 7. Playback (once delivery/signing exist — §9)
-- HLS-AAC adaptive, auto-switch 64↔96↔128 on bandwidth; pins to 64k on bad connections.
-- No MP3 fallback. Quality ceiling: WAV → best AAC; MP3 → bounded by source bitrate.
+- HLS single-rung 64k HE-AAC; no bandwidth adaptation (one rung), plays everywhere.
+- No MP3 fallback. Quality ceiling: WAV → best 64k HE-AAC; MP3 → bounded by source bitrate.
 
 ---
 
@@ -185,7 +187,7 @@ Lambda env (`local.audio_lambda_env` in `audio.tf`):
 MONGO_URI, GCP_PROJECT, GCP_LOCATION=asia-south1,
 GCS_INPUT_BUCKET=GCS_OUTPUT_BUCKET=chai-q-audio-transcoder,
 GCP_CREDENTIALS_SECRET_ARN,
-AUDIO_SEGMENT_SECONDS=6, AUDIO_LADDER_KBPS=64,96,128, AUDIO_LOUDNESS_LUFS=-16
+AUDIO_SEGMENT_SECONDS=6, AUDIO_LADDER_KBPS=64, AUDIO_LOUDNESS_LUFS=-16
 ```
 
 **Config to verify before/at deploy:**
@@ -222,7 +224,7 @@ Everything below is intentionally out of current scope; renditions stop in the a
 
 Built & validated (generate-only, all-GCP):
 1. ✅ `gcp_copy_audio_to_gcs.py` (HTTPS stream → GCS, status stamping).
-2. ✅ `gcp_audio_transcoder.py` (Transcoder `lufs=-16` + AAC 64/96/128 HLS).
+2. ✅ `gcp_audio_transcoder.py` (Transcoder `lufs=-16` + single 64k HE-AAC HLS).
 3. ✅ `gcp_check_audio_status.py`, `list_audio_episodes.py`.
 4. ✅ `gcp_audio_step_function_def.json` (child) + `gcp_audio_show_batch_def.json` (parent Map 30).
 5. ✅ `aws-infra/audio.tf` (5 Lambdas → 4 after worker removal + 2 SFNs; reuses gcp_deps layer).

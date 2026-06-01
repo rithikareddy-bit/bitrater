@@ -21,7 +21,7 @@ locals {
     GCS_OUTPUT_BUCKET          = var.audio_bucket
     GCP_CREDENTIALS_SECRET_ARN = local.gcp_credentials_secret_arn_effective
     AUDIO_SEGMENT_SECONDS      = "6"
-    AUDIO_LADDER_KBPS          = "64,96,128"   # static ladder (all-GCP; no ffprobe)
+    AUDIO_LADDER_KBPS          = "64"   # single-rung static ladder, HE-AAC (all-GCP; no ffprobe)
     AUDIO_LOUDNESS_LUFS        = "-16"
     AUDIO_PUBLIC_BUCKET        = "chai-q-audio-public"  # renditions copied here on success (public, no masters)
   }
