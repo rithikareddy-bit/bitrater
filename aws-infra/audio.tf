@@ -24,6 +24,7 @@ locals {
     AUDIO_LADDER_KBPS          = "64"   # single-rung static ladder, HE-AAC (all-GCP; no ffprobe)
     AUDIO_LOUDNESS_LUFS        = "-16"
     AUDIO_PUBLIC_BUCKET        = "chai-q-audio-public"  # renditions copied here on success (public, no masters)
+    CDN_BASE                   = var.cdn_base           # https://cdn.chaishots.in — audio served UNSIGNED via /hls/audio/<id>/<ts>/
   }
 }
 
