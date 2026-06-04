@@ -50,6 +50,12 @@ export async function GET(request) {
         audio_url: e.audio_url,
         status: byId[e.id]?.gcp_job_status || 'idle',
         output_uri: byId[e.id]?.output_uri || null,
+        // The audio playback URL (public/unsigned). This is what "Sync" copies
+        // into the showcache's signed_playback_url field.
+        playback_url: byId[e.id]?.public_master_url || null,
+        // Current value already synced into podcast_showcache.episodes[].signed_playback_url
+        // (the source episode object `e`). null until the Sync button writes it.
+        signed_playback_url: e.signed_playback_url || null,
         // public browser-openable master URL (https://storage.googleapis.com/chai-q-audio-public/...).
         // Falls back to the private gs:// path if the public copy hasn't run.
         master_uri:

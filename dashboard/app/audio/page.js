@@ -231,8 +231,10 @@ export default function AudioOverviewPage() {
   const [liveError, setLiveError] = useState(null);
   const [fetchedAt, setFetchedAt] = useState(null);
   const [runBusy, setRunBusy] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false); // show-level "Sync all" in flight
   const [epBusy, setEpBusy] = useState({}); // episodeId -> bool
   const [vqBusy, setVqBusy] = useState({}); // episodeId -> bool (ViSQOL calculate in flight)
+  const [syncEpBusy, setSyncEpBusy] = useState({}); // episodeId -> bool (per-episode sync in flight)
 
   const timerRef = useRef(null);
   const visibleRef = useRef(true);
@@ -340,6 +342,37 @@ export default function AudioOverviewPage() {
     setEpBusy((p) => ({ ...p, [episodeId]: false }));
     if (r.error) alert(`Convert failed: ${r.error}`);
     else loadLive(selectedSlug, true);
+  }
+
+  // Copy this episode's playback URL into podcast_showcache.episodes[].signed_playback_url
+  // (created if absent). Audio is unsigned, so this is a plain Mongo copy, no signer.
+  async function syncEpisode(episodeId) {
+    setSyncEpBusy((p) => ({ ...p, [episodeId]: true }));
+    const r = await fetch('/api/audio/sync-showcache', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeId }),
+    }).then(safeJson);
+    setSyncEpBusy((p) => ({ ...p, [episodeId]: false }));
+    if (r.error) alert(`Sync failed: ${r.error}`);
+    else loadLive(selectedSlug, true);
+  }
+
+  // Sync every episode of the selected show that has a playback URL.
+  async function syncShow() {
+    if (!selectedSlug) return;
+    setSyncBusy(true);
+    const r = await fetch('/api/audio/sync-showcache', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug: selectedSlug }),
+    }).then(safeJson);
+    setSyncBusy(false);
+    if (r.error) alert(`Sync failed: ${r.error}`);
+    else {
+      if (r.skipped) alert(`Synced ${r.synced} episode(s); skipped ${r.skipped} with no playback URL yet.`);
+      loadLive(selectedSlug, true);
+    }
   }
 
   // Submit a ViSQOL "Check Quality" job for one episode (source vs the 64k rendition).
@@ -490,6 +523,24 @@ export default function AudioOverviewPage() {
                   }}
                 >
                   {runBusy ? 'Starting…' : '▶ Run pipeline'}
+                </button>
+                <button
+                  type="button"
+                  onClick={syncShow}
+                  disabled={syncBusy}
+                  title="Copy each episode's playback URL into podcast_showcache.signed_playback_url (creates the field if missing)"
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 6,
+                    border: '1px solid #1d4ed8',
+                    background: syncBusy ? '#172554' : '#1d4ed8',
+                    color: '#dbeafe',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: syncBusy ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {syncBusy ? 'Syncing…' : '⟳ Sync all to showcache'}
                 </button>
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#aaa', fontSize: 12 }}>
                   <input
@@ -714,23 +765,54 @@ export default function AudioOverviewPage() {
                       <VisqolCell ep={ep} busy={vqBusy[ep.id]} onCalc={calcVisqol} />
                     </td>
                     <td style={{ padding: '10px 12px', textAlign: 'right' }}>
-                      <button
-                        type="button"
-                        onClick={() => runEpisode(ep.id)}
-                        disabled={epBusy[ep.id] || ep.status === 'RUNNING' || ep.status === 'COPYING'}
-                        title={ep.status === 'SUCCEEDED' ? 'Re-run this episode' : 'Run this episode'}
-                        style={{
-                          padding: '4px 12px',
-                          borderRadius: 5,
-                          border: '1px solid #333',
-                          background: epBusy[ep.id] ? '#1a1a1a' : '#1a1a1a',
-                          color: '#e8e8e8',
-                          fontSize: 11,
-                          cursor: epBusy[ep.id] || ep.status === 'RUNNING' || ep.status === 'COPYING' ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        {epBusy[ep.id] ? 'Starting…' : ep.status === 'SUCCEEDED' ? 'Re-run' : 'Run'}
-                      </button>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+                        <button
+                          type="button"
+                          onClick={() => runEpisode(ep.id)}
+                          disabled={epBusy[ep.id] || ep.status === 'RUNNING' || ep.status === 'COPYING'}
+                          title={ep.status === 'SUCCEEDED' ? 'Re-run this episode' : 'Run this episode'}
+                          style={{
+                            padding: '4px 12px',
+                            borderRadius: 5,
+                            border: '1px solid #333',
+                            background: '#1a1a1a',
+                            color: '#e8e8e8',
+                            fontSize: 11,
+                            cursor: epBusy[ep.id] || ep.status === 'RUNNING' || ep.status === 'COPYING' ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {epBusy[ep.id] ? 'Starting…' : ep.status === 'SUCCEEDED' ? 'Re-run' : 'Run'}
+                        </button>
+                        {(() => {
+                          const synced = ep.signed_playback_url && ep.signed_playback_url === ep.playback_url;
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => syncEpisode(ep.id)}
+                              disabled={syncEpBusy[ep.id] || !ep.playback_url}
+                              title={!ep.playback_url
+                                ? 'No playback URL yet — run the pipeline and let the public copy finish first'
+                                : synced
+                                  ? 'Playback URL already in showcache — click to re-sync'
+                                  : 'Copy this playback URL into podcast_showcache.signed_playback_url'}
+                              style={{
+                                padding: '4px 12px',
+                                borderRadius: 5,
+                                border: `1px solid ${synced ? '#166534' : '#1d4ed8'}`,
+                                background: synced ? 'rgba(22,101,52,0.15)' : '#11233f',
+                                color: synced ? '#86efac' : '#bfdbfe',
+                                fontSize: 11,
+                                fontWeight: 600,
+                                cursor: syncEpBusy[ep.id] || !ep.playback_url ? 'not-allowed' : 'pointer',
+                                opacity: !ep.playback_url ? 0.5 : 1,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {syncEpBusy[ep.id] ? 'Syncing…' : synced ? '✓ Synced' : '⟳ Sync'}
+                            </button>
+                          );
+                        })()}
+                      </div>
                     </td>
                   </tr>
                 ))}
