@@ -237,7 +237,7 @@ def handler(event, context):
         combined_filename = f"{show_slug}_ep_{episode_number}_{folder_ts}_combined.m3u8"
 
     combined_blob = bucket.blob(f"{cdn_prefix}/{combined_filename}")
-    combined_blob.cache_control = "no-store"
+    combined_blob.cache_control = "public, max-age=31536000"
     combined_blob.upload_from_string(combined_text, content_type=CONTENT_TYPE_M3U8)
     print(f"[COMBINED] Uploaded {combined_filename} to {cdn_prefix}/")
 

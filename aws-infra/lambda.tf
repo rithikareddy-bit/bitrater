@@ -425,10 +425,6 @@ data "archive_file" "quality_checker_zip" {
     content  = file("../orchestrator/quality_checker.py")
     filename = "quality_checker.py"
   }
-  source {
-    content  = file("../orchestrator/media_cdn_signer.py")
-    filename = "media_cdn_signer.py"
-  }
 }
 
 resource "aws_lambda_function" "quality_checker" {
@@ -449,12 +445,10 @@ resource "aws_lambda_function" "quality_checker" {
 
   environment {
     variables = {
-      MONGO_URI              = var.mongo_uri
-      FFMPEG_PATH            = "/opt/bin/ffmpeg"
-      FFPROBE_PATH           = "/opt/bin/ffprobe"
-      CDN_BASE               = var.cdn_base
-      SIGNING_KEY_SECRET_ID  = var.media_cdn_signing_key_secret_id
-      SIGNED_URL_TTL_SECONDS = tostring(var.signed_url_ttl_seconds)
+      MONGO_URI    = var.mongo_uri
+      FFMPEG_PATH  = "/opt/bin/ffmpeg"
+      FFPROBE_PATH = "/opt/bin/ffprobe"
+      CDN_BASE     = var.cdn_base
     }
   }
 }
@@ -481,10 +475,6 @@ data "archive_file" "url_health_checker_zip" {
     content  = file("../orchestrator/url_health_checker.py")
     filename = "url_health_checker.py"
   }
-  source {
-    content  = file("../orchestrator/media_cdn_signer.py")
-    filename = "media_cdn_signer.py"
-  }
 }
 
 resource "aws_lambda_function" "url_health_checker" {
@@ -500,12 +490,9 @@ resource "aws_lambda_function" "url_health_checker" {
 
   environment {
     variables = {
-      MONGO_URI              = var.mongo_uri
-      CDN_BASE               = var.cdn_base
-      SIGNING_KEY_SECRET_ID  = var.media_cdn_signing_key_secret_id
-      SIGNED_URL_TTL_SECONDS = tostring(var.signed_url_ttl_seconds)
-      SIGNING_ENABLED        = tostring(var.signing_enabled)
-      URL_HEALTH_WORKERS     = "50"
+      MONGO_URI          = var.mongo_uri
+      CDN_BASE           = var.cdn_base
+      URL_HEALTH_WORKERS = "50"
     }
   }
 }
@@ -524,10 +511,6 @@ data "archive_file" "resync_subtitles_zip" {
   source {
     content  = file("../orchestrator/gcp_finalize_hls.py")
     filename = "gcp_finalize_hls.py"
-  }
-  source {
-    content  = file("../orchestrator/media_cdn_signer.py")
-    filename = "media_cdn_signer.py"
   }
   # gcp_finalize_hls.py imports from lang_codes — must travel with it.
   source {
@@ -550,9 +533,6 @@ resource "aws_lambda_function" "resync_subtitles" {
   environment {
     variables = merge(local.gcp_lambda_env, {
       RESIGN_PLAYBACK_URLS_LAMBDA_ARN = aws_lambda_function.resign_playback_urls.arn
-      SIGNING_KEY_SECRET_ID           = var.media_cdn_signing_key_secret_id
-      SIGNED_URL_TTL_SECONDS          = tostring(var.signed_url_ttl_seconds)
-      SIGNING_ENABLED                 = tostring(var.signing_enabled)
     })
   }
 }
@@ -566,10 +546,6 @@ data "archive_file" "resign_playback_urls_zip" {
   source {
     content  = file("../orchestrator/resign_playback_urls.py")
     filename = "resign_playback_urls.py"
-  }
-  source {
-    content  = file("../orchestrator/media_cdn_signer.py")
-    filename = "media_cdn_signer.py"
   }
 }
 
@@ -590,10 +566,6 @@ resource "aws_lambda_function" "resign_playback_urls" {
   layers           = [aws_lambda_layer_version.gcp_deps.arn]
 
   environment {
-    variables = merge(local.gcp_lambda_env, {
-      SIGNING_KEY_SECRET_ID  = var.media_cdn_signing_key_secret_id
-      SIGNED_URL_TTL_SECONDS = tostring(var.signed_url_ttl_seconds)
-      SIGNING_ENABLED        = tostring(var.signing_enabled)
-    })
+    variables = local.gcp_lambda_env
   }
 }

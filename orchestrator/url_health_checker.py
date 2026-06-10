@@ -19,60 +19,17 @@ Results are written to chai_q_lab.url_health_runs:
 """
 
 import concurrent.futures
-import json
 import os
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-import boto3
 import pymongo
 
-from media_cdn_signer import sign_url_prefix, append_signing_params, strip_existing_signing_params
-
 CDN_BASE = os.environ.get("CDN_BASE", "https://cdn.chaishots.in")
-SIGNED_URL_TTL_SECONDS = int(os.environ.get("SIGNED_URL_TTL_SECONDS", "3600"))
 MAX_WORKERS = int(os.environ.get("URL_HEALTH_WORKERS", "20"))
 REQUEST_TIMEOUT = 8  # seconds
-
-_signing_key_cache = None
-
-
-def _get_signing_key():
-    global _signing_key_cache
-    if _signing_key_cache is None:
-        secret_id = os.environ["SIGNING_KEY_SECRET_ID"]
-        sm = boto3.client("secretsmanager")
-        secret = sm.get_secret_value(SecretId=secret_id)
-        data = json.loads(secret["SecretString"])
-        _signing_key_cache = (data["key_name"], data["private_key_b64url"])
-    return _signing_key_cache
-
-
-def _signing_enabled() -> bool:
-    return os.environ.get("SIGNING_ENABLED", "false").lower() == "true"
-
-
-def _sign_url(url: str) -> str:
-    """Sign a CDN URL if signing is enabled and URL starts with CDN_BASE.
-
-    Strips any existing signing params first so already-signed combined/trailer
-    URLs from showcache don't get double-signed.
-    Returns the URL unchanged if signing is disabled or URL is off-CDN.
-    """
-    if not url or not url.startswith(CDN_BASE + "/") or not _signing_enabled():
-        return url
-    clean = strip_existing_signing_params(url)
-    rest = clean[len(CDN_BASE) + 1:]
-    first_seg = rest.split("/", 1)[0]
-    if not first_seg:
-        return url
-    url_prefix = f"{CDN_BASE}/{first_seg}/"
-    expires_unix = int(time.time()) + SIGNED_URL_TTL_SECONDS
-    key_name, priv = _get_signing_key()
-    qs = sign_url_prefix(url_prefix, expires_unix, key_name, priv)
-    return append_signing_params(clean, qs)
 
 
 def _check_url(episode_id: str, url_type: str, raw_url: str,
@@ -91,14 +48,9 @@ def _check_url(episode_id: str, url_type: str, raw_url: str,
     if not raw_url:
         return {**meta, "status": None, "ok": False, "latency_ms": None, "error": "empty url"}
 
-    try:
-        signed = _sign_url(raw_url)
-    except Exception as e:
-        return {**meta, "status": None, "ok": False, "latency_ms": None, "error": f"signing failed: {e}"}
-
     t0 = time.monotonic()
     try:
-        req = urllib.request.Request(signed, method="HEAD")
+        req = urllib.request.Request(raw_url, method="HEAD")
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
             latency_ms = round((time.monotonic() - t0) * 1000)
             status = resp.status
@@ -110,7 +62,7 @@ def _check_url(episode_id: str, url_type: str, raw_url: str,
         if e.code == 405:
             try:
                 req2 = urllib.request.Request(
-                    signed,
+                    raw_url,
                     method="GET",
                     headers={"Range": "bytes=0-511"},
                 )
@@ -227,10 +179,6 @@ def handler(event, context):
     print(f"[URL-HEALTH] Starting run at {started_at}")
 
     try:
-        # Pre-warm signing key cache before threads start to avoid concurrent Secrets Manager calls.
-        if _signing_enabled():
-            _get_signing_key()
-
         entries = _collect_urls(mongo_client)
         print(f"[URL-HEALTH] Found {len(entries)} URLs to check")
 

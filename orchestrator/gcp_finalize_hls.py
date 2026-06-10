@@ -365,13 +365,13 @@ def _upload_subtitles_to_gcs(creds, cdn_prefix, vtt_urls, video_duration=0, subt
             print(f"[SUBS] Downloaded {lang_key}: {utf8_bytes} UTF-8 bytes ({len(vtt_content)} chars)")
 
             vtt_blob = bucket.blob(f"{cdn_prefix}/{vtt_filename}")
-            vtt_blob.cache_control = "no-store"
+            vtt_blob.cache_control = "public, max-age=31536000"
             # str → UTF-8 on upload; charset in Content-Type tells players/CDN the encoding
             vtt_blob.upload_from_string(vtt_content, content_type=CONTENT_TYPE_VTT)
 
             playlist_content = SUBTITLE_PLAYLIST_TEMPLATE.format(vtt_filename=vtt_filename)
             playlist_blob = bucket.blob(f"{cdn_prefix}/{playlist_filename}")
-            playlist_blob.cache_control = "no-store"
+            playlist_blob.cache_control = "public, max-age=31536000"
             playlist_blob.upload_from_string(playlist_content, content_type=CONTENT_TYPE_M3U8)
 
             uploaded.append((lang_code, display_name, playlist_filename))
@@ -422,7 +422,7 @@ def _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks):
             patched.append(line)
 
     patched_text = "\n".join(patched) + "\n"
-    blob.cache_control = "no-store"
+    blob.cache_control = "public, max-age=31536000"
     blob.upload_from_string(patched_text, content_type=CONTENT_TYPE_M3U8)
     print(f"[PATCH] Patched {manifest_name} with {len(subtitle_tracks)} subtitle tracks")
 
@@ -464,10 +464,7 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec
             raise RuntimeError(
                 f"Partial copy: {blob.name} expected {blob.size} bytes, got {dst_blob.size}"
             )
-        if dst_name.endswith(".m3u8"):
-            dst_blob.cache_control = "no-store"
-        else:
-            dst_blob.cache_control = "public, max-age=31536000"
+        dst_blob.cache_control = "public, max-age=31536000"
         dst_blob.patch()
         copied += 1
 
@@ -517,7 +514,7 @@ def _correct_init_byterange(creds, cdn_prefix, name_map):
                 f'BYTERANGE="{correct_size}@0"',
                 1,
             )
-            blob.cache_control = "no-store"
+            blob.cache_control = "public, max-age=31536000"
             blob.upload_from_string(patched, content_type=CONTENT_TYPE_M3U8)
             print(f"[BYTERANGE] Fixed {manifest_name}: {declared_size} → {correct_size}")
         else:
@@ -535,7 +532,7 @@ def _rename_manifest_refs(creds, cdn_prefix, master_name, name_map):
     for old_name, new_name in name_map.items():
         if old_name != master_name:
             text = text.replace(old_name, new_name)
-    blob.cache_control = "no-store"
+    blob.cache_control = "public, max-age=31536000"
     blob.upload_from_string(text, content_type=CONTENT_TYPE_M3U8)
     print(f"[RENAME] Updated sub-manifest refs in {master_name}")
 
@@ -589,7 +586,7 @@ def _reorder_streams_in_manifest(creds, cdn_prefix, manifest_name):
         reordered.append(inf_line)
         reordered.append(uri_line)
 
-    blob.cache_control = "no-store"
+    blob.cache_control = "public, max-age=31536000"
     blob.upload_from_string("\n".join(reordered) + "\n", content_type=CONTENT_TYPE_M3U8)
     print(f"[REORDER] Reordered streams in {manifest_name} to 720p→480p→1080p")
 
@@ -604,7 +601,7 @@ def _fix_audio_name(creds, cdn_prefix, slug, manifest_name):
     text = blob.download_as_text(encoding="utf-8")
     patched = text.replace('NAME="Test Language"', f'NAME="{slug}"')
     if patched != text:
-        blob.cache_control = "no-store"
+        blob.cache_control = "public, max-age=31536000"
         blob.upload_from_string(patched, content_type=CONTENT_TYPE_M3U8)
         print(f"[PATCH] Fixed audio NAME to '{slug}' in {manifest_name}")
 

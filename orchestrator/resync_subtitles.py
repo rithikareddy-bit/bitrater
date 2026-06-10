@@ -32,7 +32,6 @@ Optional env:
 import json
 import os
 import re
-import time
 from datetime import datetime, timezone
 
 import boto3
@@ -49,14 +48,8 @@ from gcp_finalize_hls import (
     _get_subtitle_vtt_urls,
     _upload_subtitles_to_gcs,
 )
-from media_cdn_signer import sign_url_prefix, append_signing_params
-
-
 CDN_BUCKET = "chai-shots-manifests"
 RESIGN_LAMBDA_ARN = os.environ.get("RESIGN_PLAYBACK_URLS_LAMBDA_ARN")
-SIGNING_KEY_SECRET_ID = os.environ.get("SIGNING_KEY_SECRET_ID")
-SIGNED_URL_TTL_SECONDS = int(os.environ.get("SIGNED_URL_TTL_SECONDS", "7200"))
-SIGNING_ENABLED = os.environ.get("SIGNING_ENABLED", "false").lower() == "true"
 MEDIA_CDN_PROJECT = os.environ.get("MEDIA_CDN_PROJECT", "media-cdn-poc-466009")
 MEDIA_CDN_SERVICE = os.environ.get("MEDIA_CDN_SERVICE", "chai-shorts-media-cdn")
 MEDIA_CDN_LOCATION = os.environ.get("MEDIA_CDN_LOCATION", "global")
@@ -64,38 +57,6 @@ NETWORK_SERVICES_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 SUBTITLE_GROUP_ID = '"subtitles"'
 
 _lambda_client = None
-_signing_key_cache = None
-
-
-def _get_signing_key():
-    """Cached fetch of the Ed25519 prefix-signing key from Secrets Manager."""
-    global _signing_key_cache
-    if _signing_key_cache is None:
-        if not SIGNING_KEY_SECRET_ID:
-            return None
-        sm = boto3.client("secretsmanager")
-        secret = sm.get_secret_value(SecretId=SIGNING_KEY_SECRET_ID)
-        data = json.loads(secret["SecretString"])
-        _signing_key_cache = (data["key_name"], data["private_key_b64url"])
-    return _signing_key_cache
-
-
-def _presign_subtitle_uri(absolute_uri: str, episode_id: str) -> str:
-    """Pre-sign the subtitle .m3u8 absolute URI with the same prefix-sig the
-    resign Lambda uses, so there is NO window where the patched master
-    references unsigned subtitle children. The subsequent resign re-signs
-    everything (strip-then-append is idempotent).
-    """
-    if not SIGNING_ENABLED:
-        return absolute_uri
-    key = _get_signing_key()
-    if not key:
-        return absolute_uri
-    key_name, priv = key
-    url_prefix = f"{CDN_BASE}/{episode_id}/"
-    expires_unix = int(time.time()) + SIGNED_URL_TTL_SECONDS
-    qs = sign_url_prefix(url_prefix, expires_unix, key_name, priv)
-    return append_signing_params(absolute_uri, qs)
 
 
 def _split_cdn_url(url: str):
@@ -110,35 +71,6 @@ def _split_cdn_url(url: str):
     return prefix, filename
 
 
-def _presign_subtitle_playlist(creds, cdn_prefix: str, playlist_filename: str, episode_id: str) -> None:
-    """Rewrite the just-uploaded subtitle_<lang>.m3u8 so its bare .vtt URI
-    carries signing params from the start. Resign will idempotently re-sign
-    on its sweep; this just removes the unsigned-window between our patch
-    upload and the resign Lambda completing."""
-    if not SIGNING_ENABLED:
-        return
-    key = _get_signing_key()
-    if not key:
-        return
-    key_name, priv = key
-    episode_id_in_path = cdn_prefix.split("/", 1)[0]
-    url_prefix = f"{CDN_BASE}/{episode_id_in_path}/"
-    expires_unix = int(time.time()) + SIGNED_URL_TTL_SECONDS
-    qs = sign_url_prefix(url_prefix, expires_unix, key_name, priv)
-
-    bucket = gcs.Client(credentials=creds).bucket(CDN_BUCKET)
-    blob = bucket.blob(f"{cdn_prefix}/{playlist_filename}")
-    text = blob.download_as_text(encoding="utf-8")
-
-    def rewrite(line: str) -> str:
-        s = line.strip()
-        if not s or s.startswith("#"):
-            return line
-        return append_signing_params(s, qs)
-
-    new_text = "\n".join(rewrite(l) for l in text.splitlines()) + "\n"
-    blob.cache_control = "no-store"
-    blob.upload_from_string(new_text, content_type=CONTENT_TYPE_M3U8)
 
 
 def _patch_combined_master(creds, cdn_prefix: str, master_filename: str, subtitle_tracks, episode_id: str):
@@ -179,15 +111,13 @@ def _patch_combined_master(creds, cdn_prefix: str, master_filename: str, subtitl
     if stripped_count:
         print(f"[PATCH] Stripping {stripped_count} existing subtitle entries from {master_filename}")
 
-    # Build the fresh canonical set with absolute pre-signed URIs.
     new_subtitle_lines = []
     en_seen = False
     for lang_code, display_name, playlist_filename in subtitle_tracks:
         default = "YES" if (lang_code == "en" and not en_seen) else "NO"
         if lang_code == "en":
             en_seen = True
-        absolute_uri_unsigned = f"{CDN_BASE}/{cdn_prefix}/{playlist_filename}"
-        absolute_uri = _presign_subtitle_uri(absolute_uri_unsigned, episode_id)
+        absolute_uri = f"{CDN_BASE}/{cdn_prefix}/{playlist_filename}"
         new_subtitle_lines.append(
             f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID={SUBTITLE_GROUP_ID},'
             f'NAME="{display_name}",LANGUAGE="{lang_code}",'
@@ -215,7 +145,7 @@ def _patch_combined_master(creds, cdn_prefix: str, master_filename: str, subtitl
         print(f"[PATCH] {master_filename} unchanged after patch; skipping upload")
         return True
 
-    blob.cache_control = "no-store"
+    blob.cache_control = "public, max-age=31536000"
     blob.upload_from_string(new_text, content_type=CONTENT_TYPE_M3U8)
     print(f"[PATCH] {master_filename}: stripped={stripped_count}, "
           f"wrote langs={[t[0] for t in subtitle_tracks]}")
@@ -299,13 +229,6 @@ def _resync_one(db, episode_id: str) -> dict:
         return {"episode_id": episode_id, "status": "skipped", "reason": "no-tracks-uploaded"}
 
     # Pre-sign each new subtitle .m3u8's bare .vtt URI so there is no window
-    # where players see unsigned children between our upload and the resign
-    # Lambda completing. Resign will strip-and-re-sign idempotently.
-    for _, _, playlist_filename in tracks:
-        try:
-            _presign_subtitle_playlist(creds, cdn_prefix, playlist_filename, episode_id)
-        except Exception as e:
-            print(f"[PRESIGN] {playlist_filename} failed (non-fatal, resign will handle): {e}")
     _patch_combined_master(creds, cdn_prefix, master_filename, tracks, episode_id)
     resign_result = _invoke_resign(episode_id, canonical)
     _invalidate_cdn(creds, cdn_prefix)

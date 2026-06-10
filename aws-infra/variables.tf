@@ -74,13 +74,13 @@ variable "resign_schedule_expression" {
 }
 
 variable "resign_schedule_enabled" {
-  description = "Whether the resigner EventBridge rule is enabled. Default true (production state). Set false only for emergency disable."
+  description = "Whether the resigner EventBridge rule is enabled. Signing removed — keep false."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "signing_enabled" {
-  description = "Master kill switch for the resigner Lambda. When false, sync-route invocations write canonical URLs as-is (no signing, no GCS rewrite) and clear any stale signed_playback_expires_at. Default true (production state). Set false only for emergency disable."
+  description = "Master kill switch for the resigner Lambda. Signing removed — keep false."
   type        = bool
-  default     = true
+  default     = false
 }
