@@ -96,7 +96,7 @@ export default function ShowStatusPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all'); // all | partial | none | full | empty
+  const [statusFilter, setStatusFilter] = useState('all'); // all | partial | none | full | empty | no_url
   const [expandedId, setExpandedId] = useState(null);
   const [activeRuns, setActiveRuns] = useState(null);
   const [activeLoading, setActiveLoading] = useState(false);
@@ -140,6 +140,7 @@ export default function ShowStatusPage() {
   const summary = data?.summary;
 
   const filteredShows = shows.filter((s) => {
+    if (statusFilter === 'no_url') return (s.no_url_count || 0) > 0;
     if (statusFilter !== 'all' && s.status !== statusFilter) return false;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -248,10 +249,10 @@ export default function ShowStatusPage() {
               }}
             />
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {['all', 'partial', 'none', 'full', 'empty'].map((s) => (
+              {['all', 'partial', 'none', 'full', 'empty', 'no_url'].map((s) => (
                 <LangPill
                   key={s}
-                  label={s === 'all' ? 'All status' : (STATUS_STYLE[s]?.label || s)}
+                  label={s === 'all' ? 'All status' : s === 'no_url' ? 'No URL' : (STATUS_STYLE[s]?.label || s)}
                   active={statusFilter === s}
                   onClick={() => setStatusFilter(s)}
                 />

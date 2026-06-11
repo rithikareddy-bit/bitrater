@@ -70,16 +70,19 @@ export async function GET(request) {
       const episodes = Array.isArray(doc.episodes) ? doc.episodes : [];
       const total = episodes.length;
       let combinedCount = 0;
+      let noUrlCount = 0;
       const missing = [];
       for (const ep of episodes) {
         if (urlHasCombined(ep?.signed_playback_url)) {
           combinedCount += 1;
         } else {
+          const hasUrl = Boolean(ep?.signed_playback_url);
+          if (!hasUrl) noUrlCount += 1;
           missing.push({
             id: ep?.id ?? null,
             episode_number: ep?.episode_number ?? null,
             title: ep?.title ?? null,
-            has_url: Boolean(ep?.signed_playback_url),
+            has_url: hasUrl,
           });
         }
       }
@@ -100,6 +103,7 @@ export async function GET(request) {
         status,
         missing_sample: missing.slice(0, 5),
         missing_count: missing.length,
+        no_url_count: noUrlCount,
         updated_at: doc.updated_at instanceof Date
           ? doc.updated_at.toISOString()
           : (doc.updated_at ?? null),

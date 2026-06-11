@@ -21,15 +21,16 @@ Results are written to chai_q_lab.url_health_runs:
 import concurrent.futures
 import os
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 
 import pymongo
+import urllib3
 
 CDN_BASE = os.environ.get("CDN_BASE", "https://cdn.chaishots.in")
 MAX_WORKERS = int(os.environ.get("URL_HEALTH_WORKERS", "20"))
 REQUEST_TIMEOUT = 8  # seconds
+
+_http = urllib3.PoolManager(num_pools=4, maxsize=MAX_WORKERS, timeout=urllib3.Timeout(total=REQUEST_TIMEOUT))
 
 
 def _check_url(episode_id: str, url_type: str, raw_url: str,
@@ -50,32 +51,19 @@ def _check_url(episode_id: str, url_type: str, raw_url: str,
 
     t0 = time.monotonic()
     try:
-        req = urllib.request.Request(raw_url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-            latency_ms = round((time.monotonic() - t0) * 1000)
-            status = resp.status
-            ok = 200 <= status < 300
-            return {**meta, "status": status, "ok": ok, "latency_ms": latency_ms, "error": None}
-    except urllib.error.HTTPError as e:
+        resp = _http.request("HEAD", raw_url, redirect=True)
         latency_ms = round((time.monotonic() - t0) * 1000)
+        status = resp.status
         # 405 Method Not Allowed → server doesn't support HEAD, try GET with range
-        if e.code == 405:
-            try:
-                req2 = urllib.request.Request(
-                    raw_url,
-                    method="GET",
-                    headers={"Range": "bytes=0-511"},
-                )
-                with urllib.request.urlopen(req2, timeout=REQUEST_TIMEOUT) as resp2:
-                    latency_ms = round((time.monotonic() - t0) * 1000)
-                    body = resp2.read(512).decode("utf-8-sig", errors="replace")
-                    ok = body.lstrip().startswith("#EXTM3U")
-                    return {**meta, "status": resp2.status, "ok": ok, "latency_ms": latency_ms,
-                            "error": None if ok else "not a valid HLS manifest"}
-            except Exception as e2:
-                latency_ms = round((time.monotonic() - t0) * 1000)
-                return {**meta, "status": None, "ok": False, "latency_ms": latency_ms, "error": str(e2)[:300]}
-        return {**meta, "status": e.code, "ok": False, "latency_ms": latency_ms, "error": str(e)[:300]}
+        if status == 405:
+            resp2 = _http.request("GET", raw_url, headers={"Range": "bytes=0-511"}, redirect=True)
+            latency_ms = round((time.monotonic() - t0) * 1000)
+            body = resp2.data[:512].decode("utf-8-sig", errors="replace")
+            ok = body.lstrip().startswith("#EXTM3U")
+            return {**meta, "status": resp2.status, "ok": ok, "latency_ms": latency_ms,
+                    "error": None if ok else "not a valid HLS manifest"}
+        ok = 200 <= status < 300
+        return {**meta, "status": status, "ok": ok, "latency_ms": latency_ms, "error": None}
     except Exception as e:
         latency_ms = round((time.monotonic() - t0) * 1000)
         return {**meta, "status": None, "ok": False, "latency_ms": latency_ms, "error": str(e)[:300]}
