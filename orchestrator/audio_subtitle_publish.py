@@ -151,11 +151,11 @@ def _upload_subtitles(creds, public_bucket_name: str, episode_id: str,
             print(f"[SUBS][AUDIO] Downloaded {lang_key}: {utf8_bytes} UTF-8 bytes")
 
             vtt_blob = bucket.blob(f"{episode_id}/{vtt_filename}")
-            vtt_blob.cache_control = "public, max-age=31536000"
+            vtt_blob.cache_control = "public, max-age=2592000"
             vtt_blob.upload_from_string(vtt_content, content_type=CONTENT_TYPE_VTT)
 
             playlist_blob = bucket.blob(f"{episode_id}/{playlist_filename}")
-            playlist_blob.cache_control = "public, max-age=31536000"
+            playlist_blob.cache_control = "public, max-age=2592000"
             playlist_blob.upload_from_string(
                 SUBTITLE_PLAYLIST_TEMPLATE.format(vtt_filename=vtt_filename),
                 content_type=CONTENT_TYPE_M3U8,
@@ -228,7 +228,7 @@ def _patch_audio_master(creds, public_bucket_name: str, episode_id: str,
                 inserted = True
 
     patched_text = "\n".join(patched) + "\n"
-    blob.cache_control = "public, max-age=31536000"
+    blob.cache_control = "public, max-age=2592000"
     blob.upload_from_string(patched_text, content_type=CONTENT_TYPE_M3U8)
     print(f"[SUBS][AUDIO] Patched audio_master.m3u8 with {len(subtitle_tracks)} subtitle track(s)")
 

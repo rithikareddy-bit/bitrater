@@ -82,7 +82,7 @@ def _publish_to_cdn(creds, episode_id, ts):
                 f"Partial CDN copy: {blob.name} expected {blob.size} bytes, got {dst_blob.size}"
             )
         # Manifests must stay fresh; segments/VTTs are immutable within a versioned <ts> folder.
-        dst_blob.cache_control = "public, max-age=31536000"
+        dst_blob.cache_control = "public, max-age=2592000"
         dst_blob.patch()
         n += 1
     print(f"[CDN] copied {n} objects → gs://{CDN_BUCKET}/{dst_prefix}")

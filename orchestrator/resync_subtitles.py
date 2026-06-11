@@ -145,7 +145,7 @@ def _patch_combined_master(creds, cdn_prefix: str, master_filename: str, subtitl
         print(f"[PATCH] {master_filename} unchanged after patch; skipping upload")
         return True
 
-    blob.cache_control = "public, max-age=31536000"
+    blob.cache_control = "public, max-age=2592000"
     blob.upload_from_string(new_text, content_type=CONTENT_TYPE_M3U8)
     print(f"[PATCH] {master_filename}: stripped={stripped_count}, "
           f"wrote langs={[t[0] for t in subtitle_tracks]}")
