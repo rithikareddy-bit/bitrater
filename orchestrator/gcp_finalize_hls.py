@@ -137,10 +137,25 @@ def _inject_gap_separators(vtt_content: str, video_duration: float = 0) -> str:
             continue
 
     if not cues:
-        return vtt_content  # nothing to process, return as-is
+        # No parseable cues — still ensure the header is present
+        ts_map = "X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000"
+        if ts_map not in vtt_content:
+            lines = vtt_content.replace("\r\n", "\n").split("\n")
+            out = []
+            inserted = False
+            for line in lines:
+                out.append(line)
+                if not inserted and line.strip().upper().startswith("WEBVTT"):
+                    out.append(ts_map)
+                    inserted = True
+            return "\n".join(out)
+        return vtt_content
 
     # Rebuild VTT with separator cues in gaps
-    out = "WEBVTT\n\n"
+    # X-TIMESTAMP-MAP aligns VTT cue times to the fMP4 media timeline (PTS=0).
+    # Without it, iOS 16 and ExoPlayer default to MPEGTS:900000 (10s offset),
+    # causing subtitles to appear 10 seconds late on those devices.
+    out = "WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000\n\n"
     cue_num = 1
     for i, cue in enumerate(cues):
         out += f"{cue_num}\n{cue['start']} --> {cue['end']}\n{cue['text']}\n\n"
@@ -221,12 +236,18 @@ SUBTITLE_PLAYLIST_TEMPLATE = """\
 """
 
 
+_gcp_credentials_cache = None
+
 def _get_gcp_credentials():
+    global _gcp_credentials_cache
+    if _gcp_credentials_cache is not None:
+        return _gcp_credentials_cache
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
     sm = boto3.client("secretsmanager")
     secret = sm.get_secret_value(SecretId=secret_arn)
     info = json.loads(secret["SecretString"])
-    return service_account.Credentials.from_service_account_info(info)
+    _gcp_credentials_cache = service_account.Credentials.from_service_account_info(info)
+    return _gcp_credentials_cache
 
 
 _TRAILER_ID_RE = re.compile(r"^trailer_([a-f0-9]{24})_(.+)$")

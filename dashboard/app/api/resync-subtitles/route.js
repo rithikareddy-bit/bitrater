@@ -13,33 +13,35 @@ const RESYNC_LAMBDA_ARN = process.env.RESYNC_SUBTITLES_LAMBDA_ARN;
 async function listMissingForShow(showId) {
   const client = await clientPromise();
   const masterDb = client.db('master');
-  const labDb = client.db('chai_q_lab');
 
   const show = await masterDb.collection('showcache').findOne(
     { _id: new ObjectId(showId) },
-    { projection: { 'episodes.id': 1 } },
+    { projection: { 'episodes.id': 1, 'episodes.signed_playback_url': 1 } },
   );
   if (!show) return null;
 
-  const ids = (show.episodes || []).map((e) => String(e.id)).filter(Boolean);
-  if (ids.length === 0) return [];
+  // Eligibility = episode has a _combined URL in showcache.
+  return (show.episodes || [])
+    .filter((e) => e.id && e.signed_playback_url?.includes('_combined'))
+    .map((e) => String(e.id));
+}
 
-  const docs = await labDb
-    .collection('video_episodes')
-    .find(
-      { episode_id: { $in: ids } },
-      { projection: { episode_id: 1, combined_master_m3u8_url: 1, subtitles_injected: 1 } },
-    )
-    .toArray();
+async function listAllCombinedEpisodes() {
+  const client = await clientPromise();
+  const shows = await client.db('master').collection('showcache').find(
+    {},
+    { projection: { 'episodes.id': 1, 'episodes.signed_playback_url': 1 } },
+  ).toArray();
 
-  // Eligibility = has a combined master. We do NOT filter by
-  // subtitles_injected because re-running on an already-synced episode is a
-  // valid operation (e.g. to correct mislabeled tracks or pick up new VTTs).
-  // The Lambda's cleanup is idempotent: strips old subtitle EXT-X-MEDIA
-  // entries and rewrites the canonical set from the current source_language.
-  return docs
-    .filter((d) => d.combined_master_m3u8_url)
-    .map((d) => d.episode_id);
+  const ids = [];
+  for (const show of shows) {
+    for (const ep of show.episodes || []) {
+      if (ep.id && ep.signed_playback_url?.includes('_combined')) {
+        ids.push(String(ep.id));
+      }
+    }
+  }
+  return ids;
 }
 
 async function invokeOneSync(episodeId) {
@@ -62,13 +64,38 @@ async function invokeOneAsync(episodeId) {
   // Event-mode invoke: AWS queues the Lambda and returns ~immediately. Lambda
   // runs to completion in the background (Mongo + GCS state is the source of
   // truth). UI polls GET ?showId for remaining count.
-  const cmd = new InvokeCommand({
-    FunctionName: RESYNC_LAMBDA_ARN,
-    InvocationType: 'Event',
-    Payload: Buffer.from(JSON.stringify({ episode_id: episodeId })),
-  });
-  await lambda.send(cmd);
-  return { episode_id: episodeId, status: 'queued' };
+  // Never throws — returns { status: 'queued' } or { status: 'invoke-error', error }.
+  try {
+    const cmd = new InvokeCommand({
+      FunctionName: RESYNC_LAMBDA_ARN,
+      InvocationType: 'Event',
+      Payload: Buffer.from(JSON.stringify({ episode_id: episodeId })),
+    });
+    await lambda.send(cmd);
+    return { episode_id: episodeId, status: 'queued' };
+  } catch (err) {
+    console.error(`[invokeOneAsync] ${episodeId}:`, err.message);
+    return { episode_id: episodeId, status: 'invoke-error', error: err.message };
+  }
+}
+
+// Batch mode: fires one Lambda per shard of `batchSize` episodes.
+// Each Lambda processes its shard serially and fires CDN invalidations
+// sequentially at the end — same pattern as fix_subtitle_timestamp_map.py.
+// Never throws.
+async function invokeBatchAsync(episodeIds) {
+  try {
+    const cmd = new InvokeCommand({
+      FunctionName: RESYNC_LAMBDA_ARN,
+      InvocationType: 'Event',
+      Payload: Buffer.from(JSON.stringify({ episode_ids: episodeIds })),
+    });
+    await lambda.send(cmd);
+    return { count: episodeIds.length, status: 'queued' };
+  } catch (err) {
+    console.error(`[invokeBatchAsync] shard of ${episodeIds.length}:`, err.message);
+    return { count: episodeIds.length, status: 'invoke-error', error: err.message };
+  }
 }
 
 /**
@@ -92,7 +119,7 @@ export async function POST(request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { episodeId, showId } = body || {};
+  const { episodeId, showId, all } = body || {};
 
   if (episodeId && typeof episodeId === 'string') {
     try {
@@ -120,15 +147,46 @@ export async function POST(request) {
       // Async fan-out: AppRunner edge cuts at ~120s; per-episode Lambda is
       // 300s. Queue all invocations in parallel then return — UI polls GET
       // ?showId for the eligible-count to drop.
-      await Promise.all(targets.map(invokeOneAsync));
-      return NextResponse.json({ showId, queued: targets.length });
+      const results = await Promise.all(targets.map(invokeOneAsync));
+      const failed = results.filter((r) => r.status === 'invoke-error');
+      const queued = results.length - failed.length;
+      const resp = { showId, queued };
+      if (failed.length) resp.invokeErrors = failed.length;
+      return NextResponse.json(resp);
     } catch (err) {
       console.error('[POST /api/resync-subtitles show]', err);
       return NextResponse.json({ error: err.message || 'Show fan-out failed' }, { status: 500 });
     }
   }
 
-  return NextResponse.json({ error: 'Provide episodeId or showId' }, { status: 400 });
+  if (all === true) {
+    try {
+      const targets = await listAllCombinedEpisodes();
+      if (targets.length === 0) {
+        return NextResponse.json({ all: true, queued: 0, message: 'No combined episodes found' });
+      }
+      // Fire one Lambda per shard of 8 episodes (batch mode).
+      // Each Lambda processes its shard serially (~20-25s per episode) and fires
+      // CDN invalidations sequentially at the end — avoids CDN rate limiting,
+      // same as local script. Shard size 8 gives ~100s margin within 300s timeout.
+      const SHARD = 8;
+      const shards = [];
+      for (let i = 0; i < targets.length; i += SHARD) {
+        shards.push(targets.slice(i, i + SHARD));
+      }
+      const results = await Promise.all(shards.map((s) => invokeBatchAsync(s)));
+      const failed = results.filter((r) => r.status === 'invoke-error');
+      const queued = results.filter((r) => r.status === 'queued').reduce((s, r) => s + r.count, 0);
+      const resp = { all: true, queued, total: targets.length, shards: shards.length };
+      if (failed.length) resp.invokeErrors = failed.length;
+      return NextResponse.json(resp);
+    } catch (err) {
+      console.error('[POST /api/resync-subtitles all]', err);
+      return NextResponse.json({ error: err.message || 'All-shows fan-out failed' }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({ error: 'Provide episodeId, showId, or all:true' }, { status: 400 });
 }
 
 /**
@@ -143,11 +201,9 @@ export async function GET(request) {
   const showId = searchParams.get('showId');
 
   try {
-    const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
-
     if (episodeId) {
-      const doc = await labDb.collection('video_episodes').findOne(
+      const client = await clientPromise();
+      const doc = await client.db('chai_q_lab').collection('video_episodes').findOne(
         { episode_id: episodeId },
         { projection: { combined_master_m3u8_url: 1, subtitles_injected: 1 } },
       );

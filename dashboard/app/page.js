@@ -48,6 +48,8 @@ export default function ShowsPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState(null);
+  const [resyncAllStatus, setResyncAllStatus] = useState(null); // null | 'running' | 'done' | 'error'
+  const [resyncAllMsg, setResyncAllMsg] = useState(null);
 
   useEffect(() => {
     fetch(`/api/shows?limit=${PAGE_SIZE}&skip=0`)
@@ -75,6 +77,29 @@ export default function ShowsPage() {
       })
       .catch(() => { /* keep existing list on load-more failure */ })
       .finally(() => setLoadingMore(false));
+  }
+
+  async function resyncAllShows() {
+    setResyncAllStatus('running');
+    setResyncAllMsg(null);
+    try {
+      const r = await fetch('/api/resync-subtitles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: true }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      const msg = data.invokeErrors
+        ? `Queued ${data.queued}/${data.total} episodes (${data.invokeErrors} shards failed)`
+        : `Queued ${data.queued} episodes across ${data.shards} batches`;
+      setResyncAllMsg(msg);
+      setResyncAllStatus(data.invokeErrors ? 'partial' : 'done');
+    } catch (e) {
+      setResyncAllStatus('error');
+      setResyncAllMsg(e.message || 'Unknown error');
+      console.error('resync all shows failed', e);
+    }
   }
 
   async function toggleExpand(show) {
@@ -117,7 +142,41 @@ export default function ShowsPage() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 20 }}>Show Catalog</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Show Catalog</h1>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+          <button
+            onClick={resyncAllShows}
+            disabled={resyncAllStatus === 'running'}
+            style={{
+              background: resyncAllStatus === 'done' ? '#166534'
+                : resyncAllStatus === 'partial' ? '#78350f'
+                : resyncAllStatus === 'error' ? '#7f1d1d'
+                : '#1e3a5f',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              padding: '7px 14px',
+              fontSize: 13,
+              cursor: resyncAllStatus === 'running' ? 'not-allowed' : 'pointer',
+              opacity: resyncAllStatus === 'running' ? 0.7 : 1,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {resyncAllStatus === 'running' ? 'Queuing...' : 'Resync All Subtitles'}
+          </button>
+          {resyncAllMsg && (
+            <span style={{
+              fontSize: 11,
+              color: resyncAllStatus === 'done' ? '#4ade80' : resyncAllStatus === 'partial' ? '#fbbf24' : '#f87171',
+              maxWidth: 260,
+              textAlign: 'right',
+            }}>
+              {resyncAllMsg}
+            </span>
+          )}
+        </div>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 16 }}>
         {shows.map((show) => {
           const cardImage = show.posterUrl || resolveShowPosterUrl(show) || show.thumbnail;

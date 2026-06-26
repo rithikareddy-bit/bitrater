@@ -194,14 +194,14 @@ def _invalidate_cdn(creds, cdn_prefix: str) -> None:
     )
     url = f"https://networkservices.googleapis.com/v1/{service_path}:invalidateCache"
     path_pattern = f"/{cdn_prefix.strip('/')}/*"
-    resp = session.post(url, json={"pathMatcher": path_pattern})
+    resp = session.post(url, json={"path": path_pattern})
     if resp.status_code >= 300:
         print(f"[CDN] invalidation FAILED for {path_pattern}: {resp.status_code} {resp.text}")
     else:
         print(f"[CDN] invalidation queued for {path_pattern}")
 
 
-def _resync_one(db, episode_id: str) -> dict:
+def _resync_one(db, episode_id: str, skip_cdn_invalidation: bool = False) -> dict:
     episode = db.video_episodes.find_one(
         {"episode_id": episode_id},
         {"combined_master_m3u8_url": 1, "subtitles_injected": 1},
@@ -228,10 +228,11 @@ def _resync_one(db, episode_id: str) -> dict:
     if not tracks:
         return {"episode_id": episode_id, "status": "skipped", "reason": "no-tracks-uploaded"}
 
-    # Pre-sign each new subtitle .m3u8's bare .vtt URI so there is no window
     _patch_combined_master(creds, cdn_prefix, master_filename, tracks, episode_id)
     resign_result = _invoke_resign(episode_id, canonical)
-    _invalidate_cdn(creds, cdn_prefix)
+
+    if not skip_cdn_invalidation:
+        _invalidate_cdn(creds, cdn_prefix)
 
     db.video_episodes.update_one(
         {"episode_id": episode_id},
@@ -243,17 +244,57 @@ def _resync_one(db, episode_id: str) -> dict:
     return {
         "episode_id": episode_id,
         "status": "ok",
+        "cdn_prefix": cdn_prefix,
         "tracks": [t[0] for t in tracks],
         "signed_url": resign_result.get("signed_url"),
     }
 
 
 def handler(event, context):
-    """Single-episode invocation: {"episode_id": "..."}."""
-    episode_id = event["episode_id"]
+    """
+    Single-episode:  {"episode_id": "..."}
+    Batch mode:      {"episode_ids": ["...", ...]}
+      — processes all episodes, skips per-episode CDN invalidation,
+        then fires invalidations sequentially at the end (same as local script).
+    """
     mongo_client = pymongo.MongoClient(os.environ["MONGO_URI"])
     try:
         db = mongo_client["chai_q_lab"]
+
+        episode_ids = event.get("episode_ids")
+        if episode_ids:
+            # First call fetches from Secrets Manager and caches; subsequent
+            # calls inside _resync_one return the cached value instantly.
+            creds = _get_gcp_credentials()
+            fixed_prefixes = set()
+            results = []
+            ok = skipped = errors = 0
+            for eid in episode_ids:
+                try:
+                    result = _resync_one(db, eid, skip_cdn_invalidation=True)
+                    results.append(result)
+                    if result.get("status") == "ok":
+                        ok += 1
+                        fixed_prefixes.add(result["cdn_prefix"])
+                    else:
+                        skipped += 1
+                except Exception as e:
+                    errors += 1
+                    print(f"[batch] {eid} error: {e}")
+
+            # Sequential CDN invalidation — same pattern as fix_subtitle_timestamp_map.py
+            for prefix in sorted(fixed_prefixes):
+                _invalidate_cdn(creds, prefix)
+
+            return {
+                "batch": True,
+                "ok": ok,
+                "skipped": skipped,
+                "errors": errors,
+                "invalidated": len(fixed_prefixes),
+            }
+
+        episode_id = event["episode_id"]
         return _resync_one(db, episode_id)
     finally:
         mongo_client.close()
