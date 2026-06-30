@@ -74,4 +74,5 @@ def handler(event, context):
         "golden_recipes": event["golden_recipes"],
         "codec": event.get("codec"),
         "source_fps": event["source_fps"],
+        "has_audio": event.get("has_audio", True),
     }

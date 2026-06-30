@@ -11,7 +11,8 @@
           "s3_url.$": "$$.Execution.Input.s3_url",
           "golden_recipes.$": "$$.Execution.Input.golden_recipes",
           "codec.$": "$$.Execution.Input.codec",
-          "source_fps.$": "$$.Execution.Input.source_fps"
+          "source_fps.$": "$$.Execution.Input.source_fps",
+          "has_audio.$": "$$.Execution.Input.has_audio"
         }
       },
       "ResultSelector": {
@@ -19,7 +20,8 @@
         "gcs_input_uri.$": "$.Payload.gcs_input_uri",
         "golden_recipes.$": "$.Payload.golden_recipes",
         "codec.$": "$.Payload.codec",
-        "source_fps.$": "$.Payload.source_fps"
+        "source_fps.$": "$.Payload.source_fps",
+        "has_audio.$": "$.Payload.has_audio"
       },
       "Retry": [
         {

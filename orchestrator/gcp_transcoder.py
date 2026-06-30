@@ -93,8 +93,14 @@ def _gop_and_segment_duration(frame_rate):
     return duration_pb2.Duration(seconds=2)
 
 
-def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_rate):
-    """Construct a GCP Transcoder JobConfig for the requested codec."""
+def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_rate, has_audio=True):
+    """Construct a GCP Transcoder JobConfig for the requested codec.
+
+    When the source has no audio track (has_audio=False), the audio
+    ElementaryStream/MuxStream and the manifest's audio reference are omitted;
+    otherwise GCP rejects the job with
+    "atom ... does not have any inputs with an audio track".
+    """
     resolutions_data = golden_recipes["resolutions"]
 
     elementary_streams = []
@@ -125,19 +131,20 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
                     ),
                 ))
                 h264_video_mux_keys.append(video_mux_key)
-        mux_streams.append(types.MuxStream(
-            key=h264_audio_mux_key,
-            container="fmp4",
-            elementary_streams=["audio_aac"],
-            segment_settings=types.SegmentSettings(
-                segment_duration=gop_dur,
-            ),
-        ))
+        if has_audio:
+            mux_streams.append(types.MuxStream(
+                key=h264_audio_mux_key,
+                container="fmp4",
+                elementary_streams=["audio_aac"],
+                segment_settings=types.SegmentSettings(
+                    segment_duration=gop_dur,
+                ),
+            ))
         manifests = [
             types.Manifest(
                 file_name="h264_master.m3u8",
                 type_=types.Manifest.ManifestType.HLS,
-                mux_streams=h264_video_mux_keys + [h264_audio_mux_key],
+                mux_streams=h264_video_mux_keys + ([h264_audio_mux_key] if has_audio else []),
             ),
         ]
 
@@ -163,32 +170,34 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
                 ))
                 h265_mux_keys.append(video_mux_key)
 
-        mux_streams.append(types.MuxStream(
-            key=h265_audio_mux_key,
-            container="fmp4",
-            elementary_streams=["audio_aac"],
-            segment_settings=types.SegmentSettings(
-                segment_duration=gop_dur,
-            ),
-        ))
+        if has_audio:
+            mux_streams.append(types.MuxStream(
+                key=h265_audio_mux_key,
+                container="fmp4",
+                elementary_streams=["audio_aac"],
+                segment_settings=types.SegmentSettings(
+                    segment_duration=gop_dur,
+                ),
+            ))
         manifests = [
             types.Manifest(
                 file_name="h265_master.m3u8",
                 type_=types.Manifest.ManifestType.HLS,
-                mux_streams=h265_mux_keys + [h265_audio_mux_key],
+                mux_streams=h265_mux_keys + ([h265_audio_mux_key] if has_audio else []),
             ),
         ]
 
-    audio_stream = types.ElementaryStream(
-        key="audio_aac",
-        audio_stream=types.AudioStream(
-            codec="aac",
-            bitrate_bps=128000,
-            channel_count=2,
-            sample_rate_hertz=48000,
-        ),
-    )
-    elementary_streams.append(audio_stream)
+    if has_audio:
+        audio_stream = types.ElementaryStream(
+            key="audio_aac",
+            audio_stream=types.AudioStream(
+                codec="aac",
+                bitrate_bps=128000,
+                channel_count=2,
+                sample_rate_hertz=48000,
+            ),
+        )
+        elementary_streams.append(audio_stream)
 
     return types.JobConfig(
         inputs=[types.Input(key="input0", uri=gcs_input_uri)],
@@ -207,6 +216,7 @@ def handler(event, context):
     if "source_fps" not in event:
         raise ValueError("Missing source_fps in event payload")
     source_fps = event["source_fps"]
+    has_audio = event.get("has_audio", True)
     mongo_uri = os.environ["MONGO_URI"]
 
     gcp_project = os.environ["GCP_PROJECT"]
@@ -215,7 +225,7 @@ def handler(event, context):
 
     output_uri = f"gs://{gcs_output_bucket}/{episode_id}/"
 
-    job_config = _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, source_fps)
+    job_config = _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, source_fps, has_audio)
 
     creds = _get_gcp_credentials()
     client = transcoder_v1.TranscoderServiceClient(credentials=creds)
