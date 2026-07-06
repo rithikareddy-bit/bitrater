@@ -1,0 +1,6 @@
+# runtime artifacts from the manifest strip / cache-control jobs — not source
+batch_strip_manifests.log
+batch_strip_state.jsonl
+wrapper.out
+*.out
+nohup.out
