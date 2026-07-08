@@ -97,6 +97,7 @@ export default function ShowStatusPage() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // all | partial | none | full | empty | no_url
+  const [activeOnly, setActiveOnly] = useState(true); // default on: show only active shows (mongo active === true)
   const [expandedId, setExpandedId] = useState(null);
   const [activeRuns, setActiveRuns] = useState(null);
   const [activeLoading, setActiveLoading] = useState(false);
@@ -137,9 +138,25 @@ export default function ShowStatusPage() {
   }, [activeLang]);
 
   const shows = data?.shows ?? [];
-  const summary = data?.summary;
 
-  const filteredShows = shows.filter((s) => {
+  // When "Active only" is on, everything below — summary cards, table, and the
+  // shows counter — is scoped to shows with active === true.
+  const scopedShows = activeOnly ? shows.filter((s) => s.active) : shows;
+
+  const summary = data
+    ? scopedShows.reduce(
+        (acc, s) => {
+          acc[s.status] = (acc[s.status] || 0) + 1;
+          acc.total_shows += 1;
+          acc.total_episodes += s.episode_total || 0;
+          acc.total_combined_episodes += s.episode_combined || 0;
+          return acc;
+        },
+        { full: 0, partial: 0, none: 0, empty: 0, total_shows: 0, total_episodes: 0, total_combined_episodes: 0 },
+      )
+    : null;
+
+  const filteredShows = scopedShows.filter((s) => {
     if (statusFilter === 'no_url') return (s.no_url_count || 0) > 0;
     if (statusFilter !== 'all' && s.status !== statusFilter) return false;
     if (search.trim()) {
@@ -258,8 +275,54 @@ export default function ShowStatusPage() {
                 />
               ))}
             </div>
+            <button
+              type="button"
+              onClick={() => setActiveOnly((v) => !v)}
+              title={activeOnly ? 'Showing only active shows (active = true)' : 'Showing all shows'}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '5px 10px',
+                borderRadius: 999,
+                border: `1px solid ${activeOnly ? '#4da6ff' : '#333'}`,
+                background: activeOnly ? '#1c2c44' : '#111',
+                color: activeOnly ? '#bfdbfe' : '#aaa',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <span
+                style={{
+                  width: 30,
+                  height: 16,
+                  borderRadius: 999,
+                  background: activeOnly ? '#4da6ff' : '#333',
+                  position: 'relative',
+                  transition: 'background 0.15s',
+                  flexShrink: 0,
+                }}
+              >
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: 2,
+                    left: activeOnly ? 16 : 2,
+                    width: 12,
+                    height: 12,
+                    borderRadius: '50%',
+                    background: '#fff',
+                    transition: 'left 0.15s',
+                  }}
+                />
+              </span>
+              Active only
+            </button>
             <span style={{ marginLeft: 'auto', color: '#64748b', fontSize: 12 }}>
-              {filteredShows.length} of {shows.length} shows
+              {filteredShows.length} of {scopedShows.length} shows
+              {activeOnly ? ' (active)' : ''}
             </span>
           </div>
 
