@@ -547,6 +547,11 @@ data "archive_file" "resign_playback_urls_zip" {
     content  = file("../orchestrator/resign_playback_urls.py")
     filename = "resign_playback_urls.py"
   }
+  # Handler imports media_cdn_signer for Ed25519 URL-prefix signing — bundle it.
+  source {
+    content  = file("../orchestrator/media_cdn_signer.py")
+    filename = "media_cdn_signer.py"
+  }
 }
 
 resource "aws_lambda_function" "resign_playback_urls" {
@@ -562,10 +567,14 @@ resource "aws_lambda_function" "resign_playback_urls" {
   # (cross-cloud AWS→GCS, only ~240-300 MB used); a 2026-05-26 CloudWatch test showed 1769 MB
   # gave no speedup. The real lever is I/O concurrency: MAX_WORKERS=64 in resign_playback_urls.py
   # (896s→274s). Permanent fix = near-expiry filter + sharding.
-  memory_size      = 1769
-  layers           = [aws_lambda_layer_version.gcp_deps.arn]
+  memory_size = 1769
+  layers      = [aws_lambda_layer_version.gcp_deps.arn]
 
   environment {
-    variables = local.gcp_lambda_env
+    variables = merge(local.gcp_lambda_env, {
+      SIGNING_KEY_SECRET_ID  = var.media_cdn_signing_key_secret_id
+      SIGNING_ENABLED        = tostring(var.signing_enabled)
+      SIGNED_URL_TTL_SECONDS = tostring(var.signed_url_ttl_seconds)
+    })
   }
 }

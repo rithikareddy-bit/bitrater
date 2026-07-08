@@ -74,13 +74,13 @@ variable "resign_schedule_expression" {
 }
 
 variable "resign_schedule_enabled" {
-  description = "Whether the resigner EventBridge rule is enabled. Signing removed — keep false."
+  description = "Whether the resigner EventBridge rule (2 h rotation) is enabled."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "signing_enabled" {
-  description = "Master kill switch for the resigner Lambda. Signing removed — keep false."
+  description = "Master kill switch for the resigner Lambda. false → writes canonical (unsigned) combined URLs and clears signed_playback_expires_at."
   type        = bool
-  default     = false
+  default     = true
 }

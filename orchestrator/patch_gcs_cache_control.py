@@ -26,18 +26,22 @@ CDN_BASE = "https://cdn.chaishots.in/"
 
 
 def _active_prefixes(mongo_uri):
-    """UUID prefixes of every episode of every ACTIVE show, taken from
-    episodes[].signed_playback_url (combined only)."""
+    """UUID prefixes of every episode + trailer of every ACTIVE show, taken from
+    episodes[].signed_playback_url and trailers_playback_urls[].gcpUrl — ANY
+    playback URL shape (combined, legacy /hls/, etc.), not just _combined.m3u8."""
     import pymongo
     client = pymongo.MongoClient(mongo_uri)
     try:
         prefixes = set()
         cur = client["master"]["showcache"].find(
-            {"active": True}, {"episodes.signed_playback_url": 1})
+            {"active": True},
+            {"episodes.signed_playback_url": 1,
+             "trailers_playback_urls.gcpUrl": 1})
         for show in cur:
-            for ep in show.get("episodes") or []:
-                url = ep.get("signed_playback_url")
-                if url and "_combined.m3u8" in url and url.startswith(CDN_BASE):
+            urls = [ep.get("signed_playback_url") for ep in show.get("episodes") or []]
+            urls += [t.get("gcpUrl") for t in show.get("trailers_playback_urls") or []]
+            for url in urls:
+                if url and url.startswith(CDN_BASE):
                     uuid = url[len(CDN_BASE):].split("/", 1)[0]
                     if uuid:
                         prefixes.add(uuid + "/")
