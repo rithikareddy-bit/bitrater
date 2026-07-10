@@ -118,7 +118,29 @@ generate tokens for children/segments (that would be baking = the old breakage).
   open) as an interim, or (b) go straight to **dual-token propagation** (segments protected, pending the
   caching measurement). Step 1 does not commit you to either — that's its value.
 - Note: with dual-token propagation you enforce *everything*, so the "legacy must become combined" gap
-  from master-only **may not apply** (Path B) — but that, too, waits on the caching measurement.
+  from master-only **may not apply** (Path B) — see the enforcement-pattern note below.
+
+### Dual-token enforcement pattern — enforce on `.m3u8` (all), not `_combined.m3u8`
+
+For the **final dual-token** state, enforce on **all `.m3u8`** (masters + child playlists) + segments —
+NOT just `_combined.m3u8`. Because propagation injects tokens into the children, master-vs-child no
+longer needs to be pattern-separable, so the `_combined` suffix is unnecessary. **Consequence: legacy
+`/hls/` masters (also `.m3u8`) get covered WITHOUT migrating them to combined** — this is Path B's whole
+appeal.
+
+Two conditions for a legacy URL to actually *survive* (not 403) under `.m3u8` enforcement:
+1. **Also generate entry tokens for the legacy masters in Mongo.** Today the sweep only tokens
+   `_combined.m3u8` (the `COMBINED_MARKER` filter in `resign_playback_urls.py`). Widen generation to
+   include the legacy `/hls/` playback URLs too — otherwise an *enforced-but-untokened* legacy master
+   returns 403 (breaks, not survives).
+2. **Measure caching under propagation first** — the one open risk (propagation rewrites manifests).
+
+So the dual-token switch = (a) widen token generation beyond `_combined` to **all** masters (combined +
+legacy), (b) change the enforce pattern from `_combined.m3u8` → `.m3u8`, (c) add CDN propagation,
+(d) **gated on the caching measurement**. It removes the combined-migration requirement entirely.
+
+Step 1 (today) — tokening the combined masters — remains the correct foundation; the dual-token move
+just widens generation to legacy and swaps the enforce pattern.
 
 ---
 
