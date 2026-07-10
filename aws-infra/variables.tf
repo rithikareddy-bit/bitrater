@@ -84,3 +84,15 @@ variable "signing_enabled" {
   type        = bool
   default     = true
 }
+
+variable "signing_mode" {
+  description = "Credential format the resigner writes onto combined masters: 'signature' (REQUIRE_SIGNATURES params) or 'token' (REQUIRE_TOKENS FullPath token). Default 'signature' preserves current behaviour; format only."
+  type        = string
+  default     = "signature"
+}
+
+variable "token_query_param" {
+  description = "Query-parameter name that carries the REQUIRE_TOKENS token. MUST match the CDN route's token param when enforcement is enabled (plan open item O1)."
+  type        = string
+  default     = "edge-cache-token"
+}

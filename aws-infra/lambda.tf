@@ -575,6 +575,8 @@ resource "aws_lambda_function" "resign_playback_urls" {
       SIGNING_KEY_SECRET_ID  = var.media_cdn_signing_key_secret_id
       SIGNING_ENABLED        = tostring(var.signing_enabled)
       SIGNED_URL_TTL_SECONDS = tostring(var.signed_url_ttl_seconds)
+      SIGNING_MODE           = var.signing_mode
+      TOKEN_QUERY_PARAM      = var.token_query_param
     })
   }
 }

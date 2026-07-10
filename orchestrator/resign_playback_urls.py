@@ -65,17 +65,37 @@ def _get_signing_key():
     return _SIGNING_KEY
 
 
+def _signing_mode() -> str:
+    """`signature` (default → REQUIRE_SIGNATURES) or `token` (→ REQUIRE_TOKENS).
+
+    Defaults to `signature` so deploying the token code is INERT until the flag is
+    flipped to `token`. Format only — targeting (combined masters), rotation, TTL,
+    and the Mongo-only write path are identical either way.
+    """
+    return os.environ.get("SIGNING_MODE", "signature").lower()
+
+
+def _token_query_param() -> str:
+    """Query-param name that carries the token; must match the CDN route (plan O1)."""
+    return os.environ.get("TOKEN_QUERY_PARAM", "edge-cache-token")
+
+
 def _sign(url: str, now: datetime) -> tuple:
     """Sign a combined-master URL. Returns (signed_url, expires_at datetime).
 
-    Full-path token: scoped to this exact master file, not its containing
-    directory — children/segments are authorized only by the edge's open
-    catch-all route, never by this token.
+    Scoped to this exact master file (full path), not its directory — children/
+    segments are authorized only by the edge's open routes, never by this
+    credential. `signature` mode emits REQUIRE_SIGNATURES params; `token` mode
+    emits a REQUIRE_TOKENS FullPath token.
     """
     key_name, private_key_b64url = _get_signing_key()
     expires_at = now + timedelta(seconds=_ttl_seconds())
     expires_unix = int(expires_at.timestamp())
-    qs = media_cdn_signer.sign_url(url, expires_unix, key_name, private_key_b64url)
+    if _signing_mode() == "token":
+        qs = media_cdn_signer.sign_token_fullpath(
+            url, expires_unix, private_key_b64url, token_param=_token_query_param())
+    else:
+        qs = media_cdn_signer.sign_url(url, expires_unix, key_name, private_key_b64url)
     return media_cdn_signer.append_signing_params(url, qs), expires_at
 
 
