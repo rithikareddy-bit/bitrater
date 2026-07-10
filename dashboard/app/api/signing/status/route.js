@@ -49,7 +49,7 @@ export async function GET(request) {
       .toArray();
 
     const latestRun = await labDb.collection('playback_resign_runs')
-      .find({}, { projection: { errors: 1 } })
+      .find({}, { projection: { errors: 1, started_at: 1 } })
       .sort({ started_at: -1 })
       .limit(1)
       .next();

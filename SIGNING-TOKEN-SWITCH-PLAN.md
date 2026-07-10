@@ -120,27 +120,45 @@ generate tokens for children/segments (that would be baking = the old breakage).
 - Note: with dual-token propagation you enforce *everything*, so the "legacy must become combined" gap
   from master-only **may not apply** (Path B) — see the enforcement-pattern note below.
 
-### Dual-token enforcement pattern — enforce on `.m3u8` (all), not `_combined.m3u8`
+### Dual-token CDN config (grounded in Google's dual-token doc)
 
-For the **final dual-token** state, enforce on **all `.m3u8`** (masters + child playlists) + segments —
-NOT just `_combined.m3u8`. Because propagation injects tokens into the children, master-vs-child no
-longer needs to be pattern-separable, so the `_combined` suffix is unnecessary. **Consequence: legacy
-`/hls/` masters (also `.m3u8`) get covered WITHOUT migrating them to combined** — this is Path B's whole
-appeal.
+Source: <https://docs.cloud.google.com/media-cdn/docs/use-dual-token-authentication>. Cookieless HLS
+dual-token needs **three routes**, most-specific first:
 
-Two conditions for a legacy URL to actually *survive* (not 403) under `.m3u8` enforcement:
-1. **Also generate entry tokens for the legacy masters in Mongo.** Today the sweep only tokens
-   `_combined.m3u8` (the `COMBINED_MARKER` filter in `resign_playback_urls.py`). Widen generation to
-   include the legacy `/hls/` playback URLs too — otherwise an *enforced-but-untokened* legacy master
-   returns 403 (breaks, not survives).
-2. **Measure caching under propagation first** — the one open risk (propagation rewrites manifests).
+| # | Route match | signedRequestMode | addSignatures action | Role |
+|---|---|---|---|---|
+| 1 | **master** (`_combined.m3u8`, per-depth) | `REQUIRE_TOKENS` (short keyset) | `GENERATE_TOKEN_HLS_COOKIELESS` | validate *our* entry token → mint long token, append to child URIs |
+| 2 | **media playlists** (`/**.m3u8`) | `REQUIRE_TOKENS` (long keyset) | `PROPAGATE_TOKEN_HLS_COOKIELESS` | copy long token onto segment URIs |
+| 3 | **segments** (`/**.ts` AND `/**.m4s`) | `REQUIRE_TOKENS` (long keyset) | none | require long token |
 
-So the dual-token switch = (a) widen token generation beyond `_combined` to **all** masters (combined +
-legacy), (b) change the enforce pattern from `_combined.m3u8` → `.m3u8`, (c) add CDN propagation,
-(d) **gated on the caching measurement**. It removes the combined-migration requirement entirely.
+Route 1 `addSignatures` block: `keyset` (long), `tokenTtl`, `tokenQueryParameter` (long token name),
+`copiedParameters` (e.g. `PathGlobs`, `SessionID`). Two keysets (short validates our token; long is the
+CDN's propagated token — same or separate), two token param names. Google's example uses
+`cacheMode: CACHE_ALL_STATIC` (differs from our current `USE_ORIGIN_HEADERS` — reconcile).
 
-Step 1 (today) — tokening the combined masters — remains the correct foundation; the dual-token move
-just widens generation to legacy and swaps the enforce pattern.
+**UNRESOLVED — does legacy need migration for dual-token? (do not assert either way):**
+What Google's doc literally shows: `GENERATE_TOKEN_HLS_COOKIELESS` is on a route matching the **specific**
+`/HLS_PRIMARY_PLAYLIST.m3u8`, and `PROPAGATE_TOKEN_HLS_COOKIELESS` is on `/**.m3u8`. The doc **does NOT
+state** that the master must be a distinct path from media playlists, and **does NOT describe** how the
+edge decides primary-vs-media-playlist (checked verbatim — both NOT PRESENT).
+- **Inference (not a Google quote):** because `GENERATE` sits on a *specific* primary route while
+  `/**.m3u8` would also match the master, the primary route must match the master *without* catching the
+  media playlists → the master likely needs a distinguishable path (`_combined.m3u8`), which would mean
+  legacy still needs combining. This is a reasonable read of the config, not a documented rule.
+- **Prior drafts over-asserted this both ways** ("legacy free" and then "legacy definitely needs
+  migration"). Neither is proven. **Resolve on the canary** (test whether a legacy-shaped master can get
+  `GENERATE` applied) or via Google support before relying on it.
+
+So the dual-token switch = (a) add the 3 routes above (GENERATE on master, PROPAGATE on media playlists,
+REQUIRE_TOKENS on segments incl. `.m4s` and `.ts`), (b) decide short vs long keyset + token param names,
+(c) reconcile `cacheMode`, (d) **gated on the caching measurement** (manifest rewriting). Legacy is NOT
+free here — it still needs combining first.
+
+Open for dual-token: exact keyset setup (one vs two), `tokenTtl` for the long token, `copiedParameters`,
+and the caching impact — all confirmed/measured on a canary before catalog-wide.
+
+Step 1 (today) — tokening the combined masters — remains the correct foundation and is exactly the
+short entry token route 1 validates.
 
 ---
 
