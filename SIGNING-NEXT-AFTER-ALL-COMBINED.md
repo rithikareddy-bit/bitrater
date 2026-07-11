@@ -85,9 +85,3 @@ Once no active content is on Mux:
 - CDN: one `REQUIRE_SIGNATURES` rule on the combined pattern; catch-all `DISABLED`; `/hls/` rule only if audio still needs it; `edgeSslCertificates` present.
 - Spot-check: signed combined master → 200 (+ 30d cache hit); unsigned → 403; a child/segment with no token → 200/206.
 - Resign sweep still completes in seconds (bulkWrite) and re-signs 100% of the catalog.
-
----
-
-## Optional (later) — stronger protection
-
-Today only the **master** is protected; children/segments are open (fetchable if a signed master URL leaks). If the business ever needs the **segments** protected too, that requires **Media CDN dual-token cookieless propagation** (`REQUIRE_TOKENS` + `PROPAGATE_TOKEN_HLS_COOKIELESS`) — the edge injects a token into segment URLs on the fly. It's more config and has caching caveats (signed-manifest rewriting), so only pursue it if segment-level protection becomes a real requirement. For now, master-only is the deliberate, simpler choice.
