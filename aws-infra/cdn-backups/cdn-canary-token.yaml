@@ -1,0 +1,160 @@
+# CANARY — enforce TOKENS (REQUIRE_TOKENS) on ONE episode's combined master only.
+#
+# Derived from the LIVE config (gcloud edge-cache services describe, 2026-07-11).
+# The ONLY change vs live: a NEW priority-1 route scoped to ONE episode's combined
+# master, set to REQUIRE_TOKENS (Ed25519, token param `edge-cache-token` = the param
+# our Lambda already writes). The three existing routes (/{ep}/{file}, /hls/, /) stay
+# DISABLED, bumped to priority 2/3/4. `name` + `edgeSslCertificates` kept byte-for-byte
+# (dropping the cert caused the 2026-06-10 SSL outage).
+#
+# Scoped episode: oh-my-dog ep 1 — first URL path segment 19438a40-44d4-418e-9295-5a5eff3e0dd0.
+# A mistake here affects ONLY that episode; every other URL — other episodes, /hls/
+# audio + legacy — stays DISABLED / open.
+#
+# BEFORE IMPORT: back up live first; confirm the episode's master path matches one of
+# the two pathTemplateMatch lines (curl it → 403 unsigned after import).
+name: projects/media-cdn-poc-466009/locations/global/edgeCacheServices/chai-shorts-media-cdn
+edgeSslCertificates:
+- projects/623432890759/locations/global/certificates/media-cdn-ssl
+routing:
+  hostRules:
+  - hosts:
+    - cdn.chaishots.in
+    pathMatcher: path-matcher-0
+  pathMatchers:
+  - name: path-matcher-0
+    routeRules:
+    - headerAction:
+        responseHeadersToAdd:
+        - headerName: x-cache-status
+          headerValue: '{cdn_cache_status}'
+      matchRules:
+      - pathTemplateMatch: /19438a40-44d4-418e-9295-5a5eff3e0dd0/*_combined.m3u8
+      - pathTemplateMatch: /19438a40-44d4-418e-9295-5a5eff3e0dd0/*/*_combined.m3u8
+      origin: projects/623432890759/locations/global/edgeCacheOrigins/chai-shots-manifests
+      priority: 1
+      routeAction:
+        cdnPolicy:
+          cacheKeyPolicy:
+            excludeQueryString: true
+          cacheMode: USE_ORIGIN_HEADERS
+          negativeCaching: true
+          signedRequestKeyset: projects/media-cdn-poc-466009/locations/global/edgeCacheKeysets/chaishots-playback-keyset
+          signedRequestMode: REQUIRE_TOKENS
+          signedTokenOptions:
+            tokenQueryParameter: edge-cache-token
+            allowedSignatureAlgorithms:
+            - ED25519
+        compressionMode: AUTOMATIC
+        corsPolicy:
+          allowCredentials: true
+          allowHeaders:
+          - '*'
+          allowMethods:
+          - '*'
+          allowOrigins:
+          - '*'
+          exposeHeaders:
+          - '*'
+          maxAge: 86400s
+      routeMethods:
+        allowedMethods:
+        - GET
+        - HEAD
+        - OPTIONS
+    - headerAction:
+        responseHeadersToAdd:
+        - headerName: x-cache-status
+          headerValue: '{cdn_cache_status}'
+      matchRules:
+      - pathTemplateMatch: /{ep}/{file}
+      origin: projects/623432890759/locations/global/edgeCacheOrigins/chai-shots-manifests
+      priority: 2
+      routeAction:
+        cdnPolicy:
+          cacheKeyPolicy:
+            excludeQueryString: true
+          cacheMode: USE_ORIGIN_HEADERS
+          negativeCaching: true
+          signedRequestMode: DISABLED
+        compressionMode: AUTOMATIC
+        corsPolicy:
+          allowCredentials: true
+          allowHeaders:
+          - '*'
+          allowMethods:
+          - '*'
+          allowOrigins:
+          - '*'
+          exposeHeaders:
+          - '*'
+          maxAge: 86400s
+      routeMethods:
+        allowedMethods:
+        - GET
+        - HEAD
+        - OPTIONS
+    - headerAction:
+        responseHeadersToAdd:
+        - headerName: x-cache-status
+          headerValue: '{cdn_cache_status}'
+      matchRules:
+      - prefixMatch: /hls/
+      origin: projects/623432890759/locations/global/edgeCacheOrigins/chai-shots-manifests
+      priority: 3
+      routeAction:
+        cdnPolicy:
+          cacheKeyPolicy:
+            excludeQueryString: true
+          cacheMode: USE_ORIGIN_HEADERS
+          negativeCaching: true
+          signedRequestMode: DISABLED
+        compressionMode: AUTOMATIC
+        corsPolicy:
+          allowCredentials: true
+          allowHeaders:
+          - '*'
+          allowMethods:
+          - '*'
+          allowOrigins:
+          - '*'
+          exposeHeaders:
+          - '*'
+          maxAge: 86400s
+      routeMethods:
+        allowedMethods:
+        - GET
+        - HEAD
+        - OPTIONS
+    - headerAction:
+        responseHeadersToAdd:
+        - headerName: x-cache-status
+          headerValue: '{cdn_cache_status}'
+      matchRules:
+      - prefixMatch: /
+      origin: projects/623432890759/locations/global/edgeCacheOrigins/chai-shots-manifests
+      priority: 4
+      routeAction:
+        cdnPolicy:
+          cacheKeyPolicy:
+            excludeQueryString: true
+          cacheMode: USE_ORIGIN_HEADERS
+          negativeCaching: true
+          signedRequestMode: DISABLED
+        compressionMode: AUTOMATIC
+        corsPolicy:
+          allowCredentials: true
+          allowHeaders:
+          - '*'
+          allowMethods:
+          - '*'
+          allowOrigins:
+          - '*'
+          exposeHeaders:
+          - '*'
+          maxAge: 86400s
+      routeMethods:
+        allowedMethods:
+        - GET
+        - HEAD
+        - OPTIONS
