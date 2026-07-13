@@ -39,7 +39,13 @@ async function stopLabSfn(execArn) {
 async function terminateBatchJobsForEpisodes(episodeIds) {
   const queue = process.env.BATCH_JOB_QUEUE;
   if (!queue || episodeIds.length === 0) return 0;
-  const prefixes = episodeIds.map(id => `ChaiQSearch-${id.slice(0, 24)}-`);
+  // Serial lab jobs are named ChaiQSearch-{id[:24]}-; Parallel Resol jobs are
+  // ParallelResol-{id[:20]}- (parallelResolLab.js). Sweep BOTH so a cancel kills
+  // orphaned jobs even if the driving engine/process is already dead.
+  const prefixes = episodeIds.flatMap(id => [
+    `ChaiQSearch-${id.slice(0, 24)}-`,
+    `ParallelResol-${id.slice(0, 20)}-`,
+  ]);
   let terminated = 0;
   for (const status of BATCH_ACTIVE_STATUSES) {
     let nextToken;

@@ -10,7 +10,12 @@ const batch = new BatchClient({ region });
 const BATCH_STATUSES = ['SUBMITTED', 'PENDING', 'RUNNABLE', 'STARTING', 'RUNNING'];
 
 async function terminateOrphanedBatchJobs(episodeId) {
-  const prefix = `ChaiQSearch-${episodeId.slice(0, 24)}-`;
+  // Serial lab jobs: ChaiQSearch-{id[:24]}-. Parallel Resol jobs (episode-page
+  // "Run lab · Resol"): ParallelResol-{id[:20]}-. Match both so Stop kills either.
+  const prefixes = [
+    `ChaiQSearch-${episodeId.slice(0, 24)}-`,
+    `ParallelResol-${episodeId.slice(0, 20)}-`,
+  ];
   const queue = process.env.BATCH_JOB_QUEUE;
   if (!queue) return 0;
 
@@ -21,7 +26,7 @@ async function terminateOrphanedBatchJobs(episodeId) {
         new ListJobsCommand({ jobQueue: queue, jobStatus: status }),
       );
       for (const job of resp.jobSummaryList || []) {
-        if (job.jobName?.startsWith(prefix)) {
+        if (job.jobName && prefixes.some(p => job.jobName.startsWith(p))) {
           try {
             await batch.send(
               new TerminateJobCommand({
@@ -62,17 +67,20 @@ export async function POST(request) {
       { projection: { [arnKey]: 1 } },
     );
 
+    // A serial lab has an SFN execution ARN; a Parallel Resol lab does NOT (it
+    // submits Batch jobs directly). So a missing ARN is fine — we just skip the
+    // StopExecution and still terminate the orphaned Batch jobs + mark the lab
+    // stopped below. (Also catches the serial race where the ARN isn't written yet.)
     const execArn = episode?.[arnKey];
-    if (!execArn) {
-      return NextResponse.json({ error: 'No execution ARN found for this codec' }, { status: 400 });
-    }
 
-    await sfn.send(
-      new StopExecutionCommand({
-        executionArn: execArn,
-        cause: 'Stopped by user from dashboard',
-      }),
-    );
+    if (execArn) {
+      await sfn.send(
+        new StopExecutionCommand({
+          executionArn: execArn,
+          cause: 'Stopped by user from dashboard',
+        }),
+      );
+    }
 
     const terminated = await terminateOrphanedBatchJobs(episodeId);
 

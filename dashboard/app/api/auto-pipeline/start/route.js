@@ -197,7 +197,9 @@ export async function POST(request) {
       const gcpH265Done = !!state?.h265_master_m3u8_url;
       const combineDone = !!state?.combined_master_m3u8_url;
       const qcDone = QC_DONE.has(state?.quality_check?.overall);
-      const allDone = labH264Done && labH265Done && gcpH264Done && gcpH265Done && combineDone && qcDone;
+      // QC is no longer part of the pipeline (manual-only) — reaching combine
+      // means the pipeline is complete.
+      const allDone = labH264Done && labH265Done && gcpH264Done && gcpH265Done && combineDone;
 
       // Map the per-stage flags to a seeded run-doc state. The orchestrator
       // already has separate paths for each stage; we just need to set the
@@ -219,10 +221,6 @@ export async function POST(request) {
           currentStep = 'DONE';
           finishedAt = nowDate;
         }
-      } else if (combineDone) {
-        // Combine done but QC pending (or QC FAILED/RUNNING) — pollQC picks up.
-        status = 'COMBINING';
-        currentStep = 'QC';
       } else if (gcpH264Done && gcpH265Done) {
         // Both GCP done, combine pending — combine step picks up.
         status = 'QUEUED';

@@ -10,7 +10,12 @@ Checks performed per stream:
 - Black frames (corrupt or dropped content)
 
 Input event:
-  { "episode_id": "...", "combined_url": "https://cdn.../combined.m3u8" }
+  { "episode_id": "..." }
+
+The combined-master URL is NOT passed in. It is read from master.showcache
+(the edge-signed `signed_playback_url` for episodes, `gcpUrl` for trailers) so
+the fetch carries a valid token under CDN enforcement. Episodes that aren't in
+showcache yet (not published/synced) have no signed URL → recorded as ERROR.
 """
 
 import os
@@ -36,25 +41,48 @@ def _fetch_manifest(url):
         return r.read().decode("utf-8-sig")
 
 
+# The 1080p rung is identified by its SHORT edge (min of WxH) being ~1080, NOT a
+# literal "1080x1920". Using the short edge makes this orientation-agnostic
+# (portrait 1080x1920, landscape 1920x1080) and tolerant of codec-padded widths
+# (e.g. 1088x1920). 720p's short edge is 720, so a 1000px floor cleanly separates
+# the top rung from 720p/480p.
+_MIN_1080P_SHORT_EDGE = 1000
+
+
 def _extract_1080p_streams(combined_url):
     """
-    Parse combined manifest and return (h265_url, h264_url) for 1080p streams.
-    Identified by RESOLUTION=1080x1920 and CODECS attribute.
+    Parse combined manifest and return (h265_url, h264_url) for the 1080p rung.
+
+    The rung is matched by resolution (short edge >= 1000) and codec, so it works
+    for any aspect ratio — not just exactly-portrait 1080x1920. When a codec has
+    more than one 1080p variant, the highest-BANDWIDTH one is chosen.
     """
     text = _fetch_manifest(combined_url)
     lines = text.strip().split("\n")
-    h265_url = None
-    h264_url = None
+    best = {"h265": (-1, None), "h264": (-1, None)}  # codec -> (bandwidth, uri)
     for i, line in enumerate(lines):
-        if line.startswith("#EXT-X-STREAM-INF") and "1080x1920" in line:
-            uri = lines[i + 1] if i + 1 < len(lines) else ""
-            if not uri or uri.startswith("#"):
-                continue
-            if "hvc1" in line or "hev1" in line or "h265" in uri:
-                h265_url = uri
-            elif "avc1" in line or "h264" in uri:
-                h264_url = uri
-    return h265_url, h264_url
+        if not line.startswith("#EXT-X-STREAM-INF"):
+            continue
+        m = re.search(r"RESOLUTION=(\d+)x(\d+)", line)
+        if not m:
+            continue
+        short_edge = min(int(m.group(1)), int(m.group(2)))
+        if short_edge < _MIN_1080P_SHORT_EDGE:
+            continue
+        uri = lines[i + 1] if i + 1 < len(lines) else ""
+        if not uri or uri.startswith("#"):
+            continue
+        if "hvc1" in line or "hev1" in line or "h265" in uri:
+            codec = "h265"
+        elif "avc1" in line or "h264" in uri:
+            codec = "h264"
+        else:
+            continue
+        bw_m = re.search(r"BANDWIDTH=(\d+)", line)
+        bw = int(bw_m.group(1)) if bw_m else 0
+        if bw > best[codec][0]:
+            best[codec] = (bw, uri)
+    return best["h265"][1], best["h264"][1]
 
 
 def _to_absolute(uri, base_url):
@@ -230,6 +258,39 @@ def _build_stream_result(path, tag):
     }
 
 
+_TRAILER_ID_RE = re.compile(r"^trailer_([a-f0-9]{24})_(.+)$")
+
+
+def _get_showcache_url(mongo_uri, episode_id):
+    """Option B: return the edge-signed combined-master URL the resigner already
+    wrote to master.showcache — episodes use `signed_playback_url`, trailers use
+    `trailers_playback_urls.gcpUrl`. Returns None if the episode/trailer isn't in
+    showcache yet (i.e. not published/synced), so the caller can record ERROR.
+    """
+    client = pymongo.MongoClient(mongo_uri)
+    try:
+        showcache = client["master"]["showcache"]
+        trailer_match = _TRAILER_ID_RE.match(episode_id)
+        if trailer_match:
+            from bson import ObjectId
+            show_id_hex, trailer_key = trailer_match.group(1), trailer_match.group(2)
+            show = showcache.find_one(
+                {"_id": ObjectId(show_id_hex), "trailers_playback_urls._key": trailer_key},
+                {"trailers_playback_urls.$": 1},
+            )
+            trailers = (show or {}).get("trailers_playback_urls") or []
+            return trailers[0].get("gcpUrl") if trailers else None
+
+        show = showcache.find_one(
+            {"episodes.id": episode_id},
+            {"episodes.$": 1},
+        )
+        episodes = (show or {}).get("episodes") or []
+        return episodes[0].get("signed_playback_url") if episodes else None
+    finally:
+        client.close()
+
+
 def _save_quality_check(mongo_uri, episode_id, quality_check):
     """Write the quality_check doc to chai_q_lab.video_episodes."""
     client = pymongo.MongoClient(mongo_uri)
@@ -243,13 +304,19 @@ def _save_quality_check(mongo_uri, episode_id, quality_check):
 
 
 def handler(event, context):
-    episode_id   = event["episode_id"]
-    combined_url = event["combined_url"]
-    mongo_uri    = os.environ["MONGO_URI"]
+    episode_id = event["episode_id"]
+    mongo_uri  = os.environ["MONGO_URI"]
 
     print(f"[QC] Starting quality check for {episode_id}")
 
     try:
+        combined_url = _get_showcache_url(mongo_uri, episode_id)
+        if not combined_url:
+            raise ValueError(
+                "Episode not in showcache (not published/synced yet) — "
+                "no signed playback URL to check"
+            )
+        print(f"[QC] Using showcache signed URL: {combined_url.split('?', 1)[0]}")
         h265_url, h264_url = _extract_1080p_streams(combined_url)
         if not h265_url and not h264_url:
             raise ValueError("Could not find 1080p streams in combined manifest")

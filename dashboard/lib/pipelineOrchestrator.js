@@ -1,5 +1,6 @@
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+import { runParallelResolLab } from '@/lib/parallelResolLab';
 
 const POLL_MS = 10_000;
 const MAX_RETRIES = 2;
@@ -246,6 +247,9 @@ export async function orchestrate(runIdStr) {
   // Flat pool of MAX_LAB concurrent jobs across all episodes. H.264 has strict
   // priority: H.265 dispatches only once h264Queue is fully drained.
   async function fillLabSlots() {
+    // Parallel Resol drives labs via the encode-pool engine (runParallelResolLab),
+    // NOT /api/push. Never dispatch serial labs for these runs.
+    if (run.mode === 'parallel_resol') return;
     let seen264 = 0;
     while (h264Active.size + h265Active.size < MAX_LAB
            && h264Queue.length > 0 && seen264 < h264Queue.length) {
@@ -306,10 +310,37 @@ export async function orchestrate(runIdStr) {
     }
     await persistQueues();
 
-    // Only run lab for episodes that still need it
-    h264Queue = eligible.filter(ep => ep.lab_h264_status !== 'COMPLETE');
-    h265Queue = eligible.filter(ep => ep.lab_h265_status !== 'COMPLETE');
-    await fillLabSlots();
+    if (run.mode === 'parallel_resol') {
+      // Parallel Resol: labs run via the encode-pool engine (not /api/push).
+      // Mark each not-yet-complete codec RUNNING and TRACK it in the active sets
+      // so pollLabs watches for COMPLETE (written to video_episodes by the engine
+      // as each grid finishes) → enqueues GCP per episode. Then kick the engine.
+      // NOTE: we set the status field to RUNNING (so the 2-min STARTING timeout,
+      // which checks the field, never fires for these long grids) but log a
+      // STARTING transition — that's what lastTransitionTime(ep,'LAB_*','STARTING')
+      // reads, so the 15h TIMEOUT_LAB_MS backstop DOES apply. If the engine dies
+      // entirely, orchestrate marks the lab FAILED_FINAL at 15h instead of
+      // hanging forever.
+      const prCodecs = Array.isArray(run.codecs) && run.codecs.length ? run.codecs : ['h264', 'h265'];
+      for (const ep of eligible) {
+        if (prCodecs.includes('h264') && ep.lab_h264_status !== 'COMPLETE' && !h264Active.has(ep.episode_id)) {
+          h264Active.add(ep.episode_id);
+          await updateEp(ep.episode_id, { lab_h264_status: 'RUNNING', last_updated_at: nowDate() },
+            { step: 'LAB_H264', status: 'STARTING', at: nowDate() });
+        }
+        if (prCodecs.includes('h265') && ep.lab_h265_status !== 'COMPLETE' && !h265Active.has(ep.episode_id)) {
+          h265Active.add(ep.episode_id);
+          await updateEp(ep.episode_id, { lab_h265_status: 'RUNNING', last_updated_at: nowDate() },
+            { step: 'LAB_H265', status: 'STARTING', at: nowDate() });
+        }
+      }
+      fireAndForget(runParallelResolLab(runIdStr));
+    } else {
+      // Serial "Run Pipeline": only run lab for episodes that still need it.
+      h264Queue = eligible.filter(ep => ep.lab_h264_status !== 'COMPLETE');
+      h265Queue = eligible.filter(ep => ep.lab_h265_status !== 'COMPLETE');
+      await fillLabSlots();
+    }
   }
 
   // ── RESUME LOGIC ─────────────────────────────────────────────────────────────
@@ -389,6 +420,13 @@ export async function orchestrate(runIdStr) {
     }
 
     await persistQueues();
+  }
+
+  // Parallel Resol: (re)kick the lab engine. On a fresh start this launches it;
+  // on resume after a process restart it resumes only not-yet-COMPLETE grids.
+  // The engine's own pr_lock prevents a duplicate instance if one is still alive.
+  if (isResuming && run.mode === 'parallel_resol') {
+    fireAndForget(runParallelResolLab(runIdStr));
   }
 
   // ── UNIFIED POLL LOOP ─────────────────────────────────────────────────────────
@@ -892,8 +930,8 @@ export async function orchestrate(runIdStr) {
       }
       if (!h264Url || !h265Url) continue; // wait for eventual consistency
 
-      // Mid-tick cancel guard: combine + QC POST both write to video_episodes
-      // (combined_master_m3u8_url, quality_check.overall). Skip if cancelled.
+      // Mid-tick cancel guard: combine writes to video_episodes
+      // (combined_master_m3u8_url). Skip if cancelled.
       if (await isCancelled()) return;
 
       const combineRes = await internalPost('/api/create-combined-master', { episodeId: ep.episode_id });
@@ -916,112 +954,21 @@ export async function orchestrate(runIdStr) {
         continue;
       }
 
-      // Atomic: combined=true + status=COMBINING in one write
+      // Combine done → go straight to sync. Quality Check is NO LONGER part of
+      // the pipeline; it's manual-only via the Check Quality button, which reads
+      // the edge-signed URL from showcache (see orchestrator/quality_checker.py).
+      // Episode runs land in the terminal READY_TO_SYNC (manual Sync Show stays
+      // authoritative); trailer runs park in SYNC_PENDING for Step 6.5 auto-sync.
       const combineAt = nowDate();
+      const nextStatus = run.kind === 'trailer' ? 'SYNC_PENDING' : 'READY_TO_SYNC';
       await updateEp(ep.episode_id, {
         combined: true,
-        status: 'COMBINING',
-        current_step: 'QC',
+        status: nextStatus,
+        current_step: nextStatus === 'SYNC_PENDING' ? 'SYNC' : 'DONE',
+        finished_at: combineAt,
+        duration_ms: ep.started_at ? combineAt.getTime() - new Date(ep.started_at).getTime() : null,
         last_updated_at: combineAt,
       }, { step: 'COMBINE', status: 'DONE', at: combineAt });
-
-      const qcRes = await internalPost(`/api/quality-check/${ep.episode_id}`, {});
-      if (qcRes.status !== 200) {
-        const qr = ep.retries?.qc ?? 0;
-        if (qr < MAX_RETRIES) {
-          ep.retries = { ...(ep.retries || {}), qc: qr + 1 };
-          await updateEp(ep.episode_id, { 'retries.qc': ep.retries.qc },
-            { step: 'QC', status: 'POST_FAILED (retry)', at: nowDate() });
-        } else {
-          const finAt = nowDate();
-          const nextStatus = run.kind === 'trailer' ? 'SYNC_PENDING' : 'READY_TO_SYNC';
-          await updateEp(ep.episode_id, {
-            status: nextStatus,
-            current_step: nextStatus === 'SYNC_PENDING' ? 'SYNC' : 'DONE',
-            finished_at: finAt,
-            duration_ms: ep.started_at ? finAt.getTime() - new Date(ep.started_at).getTime() : null,
-            last_updated_at: finAt,
-          }, { step: 'QC', status: 'SKIPPED (POST failed, max retries)', at: finAt });
-        }
-      }
-    }
-
-    // ── STEP 6: pollQC ────────────────────────────────────────────────────────
-    for (const ep of episodes) {
-      if (ep.status !== 'COMBINING') continue;
-
-      let qcResult = null;
-      try {
-        const res = await internalGet(`/api/quality-check/${ep.episode_id}`);
-        if (res.ok) qcResult = await res.json();
-      } catch { /* skip */ }
-
-      const overall = qcResult?.overall ?? null;
-
-      // Crash recovery: re-trigger if combined=true but no QC result yet
-      if (overall === null && ep.combined === true) {
-        // Mid-tick cancel guard: re-trigger writes quality_check.overall='RUNNING'
-        // and invokes the QC Lambda — both would clobber Cancel's restore.
-        if (await isCancelled()) return;
-        const qcRes = await internalPost(`/api/quality-check/${ep.episode_id}`, {});
-        if (qcRes.status !== 200) {
-          const qr = ep.retries?.qc ?? 0;
-          if (qr < MAX_RETRIES) {
-            ep.retries = { ...(ep.retries || {}), qc: qr + 1 };
-            await updateEp(ep.episode_id, { 'retries.qc': ep.retries.qc },
-              { step: 'QC', status: 'POST_FAILED (retry)', at: nowDate() });
-          } else {
-            const finAt = nowDate();
-            await updateEp(ep.episode_id, {
-              status: 'READY_TO_SYNC',
-              current_step: 'DONE',
-              finished_at: finAt,
-              duration_ms: ep.started_at ? finAt.getTime() - new Date(ep.started_at).getTime() : null,
-              last_updated_at: finAt,
-            }, { step: 'QC', status: 'SKIPPED (POST failed, max retries)', at: finAt });
-          }
-        }
-        continue;
-      }
-
-      if (overall === 'PASS' || overall === 'ISSUES_FOUND') {
-        const finAt = nowDate();
-        // Trailer runs wait in the non-terminal SYNC_PENDING state until Step 6.5
-        // completes the auto-sync. Episode runs keep the historical READY_TO_SYNC
-        // terminal state so the manual Sync Show button remains authoritative.
-        const nextStatus = run.kind === 'trailer' ? 'SYNC_PENDING' : 'READY_TO_SYNC';
-        await updateEp(ep.episode_id, {
-          status: nextStatus,
-          current_step: nextStatus === 'SYNC_PENDING' ? 'SYNC' : 'DONE',
-          finished_at: finAt,
-          duration_ms: ep.started_at ? finAt.getTime() - new Date(ep.started_at).getTime() : null,
-          last_updated_at: finAt,
-        }, { step: 'QC', status: overall, at: finAt });
-      } else if (overall === 'FAILED') {
-        const qr = ep.retries?.qc ?? 0;
-        if (qr < MAX_RETRIES) {
-          ep.retries = { ...(ep.retries || {}), qc: qr + 1 };
-          await updateEp(ep.episode_id, { 'retries.qc': ep.retries.qc },
-            { step: 'QC', status: 'RETRY', at: nowDate() });
-          // Mid-tick cancel guard: same reason as the re-trigger above.
-          if (await isCancelled()) return;
-          try {
-            await internalPost(`/api/quality-check/${ep.episode_id}`, {});
-          } catch { /* retry POST fire-and-forget */ }
-        } else {
-          const finAt = nowDate();
-          const nextStatus = run.kind === 'trailer' ? 'SYNC_PENDING' : 'READY_TO_SYNC';
-          await updateEp(ep.episode_id, {
-            status: nextStatus,
-            current_step: nextStatus === 'SYNC_PENDING' ? 'SYNC' : 'DONE',
-            finished_at: finAt,
-            duration_ms: ep.started_at ? finAt.getTime() - new Date(ep.started_at).getTime() : null,
-            last_updated_at: finAt,
-          }, null);
-        }
-      } else if (overall !== null && overall !== 'RUNNING') {
-        console.warn(`[orchestrate] Unexpected QC status '${overall}' for ${ep.episode_id}`);
-      }
     }
 
     // ── STEP 6.5: auto-sync trailers ──────────────────────────────────────────

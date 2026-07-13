@@ -360,11 +360,43 @@ async function startPipelineRun({ selectedId, force, setPipelineLoading, setPipe
   }
 }
 
+// "Parallel Resol" — separate entry point. Runs the full candidate grid across
+// ~120 workers (lib/parallelResolLab.js) instead of the serial search, then
+// hands off to the same GCP -> combine -> QC pipeline. Status is a normal
+// pipeline_run, so it reuses /api/auto-pipeline/status.
+async function startParallelResol({ selectedId, setPipelineLoading, setPipelineError, setPipelineRunId, setPipelineRun }) {
+  setPipelineLoading(true);
+  setPipelineError(null);
+  try {
+    const res = await fetch('/api/parallel-resol/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ showId: selectedId }),
+    });
+    const data = await res.json();
+    if (res.status === 409 && data.runId) {
+      setPipelineRunId(data.runId);
+      const statusRes = await fetch(`/api/auto-pipeline/status/${data.runId}`);
+      if (statusRes.ok) setPipelineRun(await statusRes.json());
+    } else if (!res.ok) {
+      setPipelineError(data.error || `HTTP ${res.status}`);
+    } else {
+      setPipelineRunId(data.runId);
+      const statusRes = await fetch(`/api/auto-pipeline/status/${data.runId}`);
+      if (statusRes.ok) setPipelineRun(await statusRes.json());
+    }
+  } catch (err) {
+    setPipelineError(err.message || 'Failed to start Parallel Resol');
+  } finally {
+    setPipelineLoading(false);
+  }
+}
+
 // ── Pipeline controls (Run Pipeline / Sync Show buttons + status badge) ──────
 
 function PipelineControls({
   selectedId, pipelineRun, pipelineLoading, pipelineSyncing,
-  pipelineError, onRunPipeline, onContinueLab, onSyncShow, onCancel,
+  pipelineError, onRunPipeline, onContinueLab, onParallelResol, onSyncShow, onCancel,
 }) {
   const status    = pipelineRun?.status;
   const isRunning = status === 'RUNNING';
@@ -378,9 +410,15 @@ function PipelineControls({
   const ready    = done; // episodes in READY_TO_SYNC or SYNCED
   const etaMs    = pipelineRun?.eta_ms;
 
-  const hasReady = pipelineRun?.episodes?.some(ep =>
-    ep.status === 'READY_TO_SYNC' || ep.status === 'SYNCED'
-  ) ?? false;
+  // Sync Show enables ONLY when GCP master URLs exist for EVERY (non-skipped)
+  // episode — i.e. the whole show has cleared GCP. If any episode is still
+  // missing an H.264/H.265 master, the show isn't fully ready and Sync stays
+  // disabled.
+  const syncEps = pipelineRun?.episodes?.filter(ep => ep.status !== 'SKIPPED') ?? [];
+  const allGcpReady = syncEps.length > 0 && syncEps.every(ep =>
+    (ep.gcp_h264_status === 'SUCCEEDED' || !!ep.h264_master_m3u8_url) &&
+    (ep.gcp_h265_status === 'SUCCEEDED' || !!ep.h265_master_m3u8_url)
+  );
 
   // "Run Pipeline" (force rerun) and "Continue Lab" (resume) share disabled state
   let runLabel = '▶ Run Pipeline';
@@ -403,7 +441,7 @@ function PipelineControls({
   }
 
   // "Sync Show" button
-  const syncDisabled = pipelineSyncing || !hasReady;
+  const syncDisabled = pipelineSyncing || !allGcpReady;
   let syncLabel = 'Sync Show';
   if (pipelineSyncing) syncLabel = 'Syncing…';
 
@@ -460,12 +498,33 @@ function PipelineControls({
           {continueLabel}
         </button>
 
+        {/* Parallel Resol — full grid across ~120 workers (separate from Run Pipeline) */}
+        <button
+          type="button"
+          onClick={onParallelResol}
+          disabled={runDisabled}
+          title="Runs the full bitrate grid for every episode across all ~120 workers at once (fast), instead of the serial search. Separate from Run Pipeline."
+          style={{
+            padding: '8px 16px',
+            borderRadius: 6,
+            border: `1px solid ${runDisabled ? '#3a2a1a' : '#9a5b16'}`,
+            background: runDisabled ? '#1f150f' : '#7c3a0f',
+            color: runDisabled ? '#6a4a2a' : '#fbbf24',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: runDisabled ? 'not-allowed' : 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {pipelineLoading ? 'Starting…' : isRunning ? 'Pipeline Running…' : '⚡ Parallel Resol'}
+        </button>
+
         {/* Sync Show */}
         <button
           type="button"
           onClick={onSyncShow}
           disabled={syncDisabled}
-          title={syncDisabled && !pipelineSyncing ? 'No episodes ready to sync' : ''}
+          title={syncDisabled && !pipelineSyncing ? 'GCP not complete for all episodes yet' : ''}
           style={{
             padding: '8px 16px',
             borderRadius: 6,
@@ -890,6 +949,16 @@ export default function ShowOverviewPage() {
                   await startPipelineRun({
                     selectedId,
                     force: false,
+                    setPipelineLoading,
+                    setPipelineError,
+                    setPipelineRunId,
+                    setPipelineRun,
+                  });
+                }}
+                onParallelResol={async () => {
+                  if (!confirm('Parallel Resol re-runs the lab for every episode across all ~120 workers at once, then continues to GCP/combine/QC. Continue?')) return;
+                  await startParallelResol({
+                    selectedId,
                     setPipelineLoading,
                     setPipelineError,
                     setPipelineRunId,
@@ -1431,6 +1500,20 @@ function EpisodeActions({ row, onActionDone }) {
     body: JSON.stringify({ episodeId: epId, s3Url: row.s3_url, codec: 'h265' }),
   });
 
+  // Bitrate Resol — one worker per candidate bitrate, early-cancel higher ones
+  // once a lower bitrate passes VMAF (lib/parallelResolLab.runEpisodeBitrateResol).
+  const handleBitrateResolH264 = () => apiCall('bres264', '/api/bitrate-resol/episode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ episodeId: epId, s3Url: row.s3_url, codec: 'h264' }),
+  });
+
+  const handleBitrateResolH265 = () => apiCall('bres265', '/api/bitrate-resol/episode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ episodeId: epId, s3Url: row.s3_url, codec: 'h265' }),
+  });
+
   const handleProbe = () => apiCall('probe', '/api/probe-source', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1558,6 +1641,20 @@ function EpisodeActions({ row, onActionDone }) {
           disabled={!row.s3_url || labH265Running}
           loading={busy.lab265}
           onClick={handleRunLabH265}
+        />
+        <ActionBtn
+          label={labH264Running ? 'Bitrate Resol H.264 Running…' : '▶ Bitrate Resol H.264'}
+          color="#c026d3"
+          disabled={!row.s3_url || labH264Running}
+          loading={busy.bres264}
+          onClick={handleBitrateResolH264}
+        />
+        <ActionBtn
+          label={labH265Running ? 'Bitrate Resol H.265 Running…' : '▶ Bitrate Resol H.265'}
+          color="#c026d3"
+          disabled={!row.s3_url || labH265Running}
+          loading={busy.bres265}
+          onClick={handleBitrateResolH265}
         />
         <ActionBtn
           label="Calculate FPS & Res"

@@ -16,29 +16,18 @@ export async function POST(request, { params }) {
       );
     }
 
-    const client = await clientPromise();
-    const episode = await client
-      .db('chai_q_lab')
-      .collection('video_episodes')
-      .findOne({ episode_id: id }, { projection: { combined_master_m3u8_url: 1 } });
-
-    if (!episode?.combined_master_m3u8_url) {
-      return NextResponse.json(
-        { error: 'Combined master URL not ready — create it first' },
-        { status: 400 },
-      );
-    }
-
+    // The QC Lambda reads the edge-signed combined URL from master.showcache
+    // itself (by episode_id), so we only pass the id. If the episode isn't in
+    // showcache yet, the Lambda records overall=ERROR ('not published').
     const cmd = new InvokeCommand({
       FunctionName: lambdaArn,
       InvocationType: 'Event', // async — don't wait for result
-      Payload: Buffer.from(
-        JSON.stringify({ episode_id: id, combined_url: episode.combined_master_m3u8_url }),
-      ),
+      Payload: Buffer.from(JSON.stringify({ episode_id: id })),
     });
     await lambda.send(cmd);
 
     // Mark as running in MongoDB so GET can return status
+    const client = await clientPromise();
     await client
       .db('chai_q_lab')
       .collection('video_episodes')

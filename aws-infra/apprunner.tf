@@ -100,16 +100,20 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
       {
         Sid      = "ManageBatchJobs"
         Effect   = "Allow"
-        Action   = ["batch:ListJobs", "batch:TerminateJob"]
+        Action   = ["batch:ListJobs", "batch:DescribeJobs", "batch:TerminateJob"]
         Resource = "*"
       },
       {
-        # Submit the on-demand audio ViSQOL "Calculate" job (dashboard /api/audio/visqol).
-        Sid    = "SubmitAudioVisqolJob"
+        # Submit on-demand Batch jobs:
+        #  - audio ViSQOL "Calculate" (dashboard /api/audio/visqol)
+        #  - Parallel Resol research encodes (dashboard /api/parallel-resol/start
+        #    -> lib/parallelResolLab.js submits chai-q-worker jobs directly)
+        Sid    = "SubmitOnDemandBatchJobs"
         Effect = "Allow"
         Action = "batch:SubmitJob"
         Resource = [
           aws_batch_job_definition.audio_visqol_def.arn,
+          aws_batch_job_definition.chai_q_worker_def.arn,
           aws_batch_job_queue.chai_q_queue.arn,
         ]
       },

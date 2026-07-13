@@ -113,6 +113,35 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
     }
   };
 
+  // "Run lab · Resol" — same lab, but the 3 resolutions run as 3 parallel
+  // workers (binary search kept per resolution). Lab-only, like handlePush.
+  const handlePushResol = async (codec) => {
+    setPushing(codec);
+    setPushError(null);
+    try {
+      if (!videoUrl) {
+        throw new Error('No s3_url found for this episode — check showcache data.');
+      }
+      const res = await fetch('/api/parallel-resol/episode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodeId, s3Url: videoUrl, codec }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Resol lab failed');
+      setPushing(null);
+      startPolling();
+    } catch (err) {
+      setPushError(err.message);
+      setPushing(null);
+    }
+  };
+
+  const handleRerunResol = (codec) => {
+    if (!window.confirm(`This will delete all H.${codec === 'h264' ? '264' : '265'} research data and re-run (3 parallel resolution workers). Continue?`)) return;
+    handlePushResol(codec);
+  };
+
   const handleRerun = (codec) => {
     if (!window.confirm(`This will delete all H.${codec === 'h264' ? '264' : '265'} research data and re-run. Continue?`)) return;
     handlePush(codec);
@@ -211,7 +240,9 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
             pushing={pushing === codec}
             stopping={stopping === codec}
             onPush={() => handlePush(codec)}
+            onPushResol={() => handlePushResol(codec)}
             onRerun={() => handleRerun(codec)}
+            onRerunResol={() => handleRerunResol(codec)}
             onStop={() => handleStop(codec)}
           />
         );
@@ -255,7 +286,9 @@ function LabSection({
   pushing,
   stopping,
   onPush,
+  onPushResol,
   onRerun,
+  onRerunResol,
   onStop,
   defaultsApplied,
 }) {
@@ -394,28 +427,51 @@ function LabSection({
       )}
 
       {labComplete ? (
-        <button
-          onClick={onRerun}
-          disabled={pushing}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            background: pushing ? '#1e1e1e' : '#334155',
-            color: pushing ? '#555' : '#e2e8f0',
-            border: '1px solid #475569',
-            borderRadius: 8,
-            padding: '10px 20px',
-            fontSize: 14,
-            fontWeight: 600,
-            cursor: pushing ? 'not-allowed' : 'pointer',
-            transition: 'background 0.2s',
-            width: '100%',
-            justifyContent: 'center',
-          }}
-        >
-          ↻ Rerun {label} Lab
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={onRerun}
+            disabled={pushing}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              background: pushing ? '#1e1e1e' : '#334155',
+              color: pushing ? '#555' : '#e2e8f0',
+              border: '1px solid #475569',
+              borderRadius: 8,
+              padding: '10px 20px',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: pushing ? 'not-allowed' : 'pointer',
+              transition: 'background 0.2s',
+              flex: 1,
+              justifyContent: 'center',
+            }}
+          >
+            ↻ Rerun {label} Lab
+          </button>
+          <button
+            onClick={onRerunResol}
+            disabled={pushing}
+            title="Re-run with all 3 resolutions in parallel (3 workers)"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              background: pushing ? '#1f150f' : '#7c3a0f',
+              color: pushing ? '#6a4a2a' : '#fbbf24',
+              border: '1px solid #9a5b16',
+              borderRadius: 8,
+              padding: '10px 16px',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: pushing ? 'not-allowed' : 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ⚡ Resol
+          </button>
+        </div>
       ) : (
         <div style={{ display: 'flex', gap: 8 }}>
           <button
@@ -447,6 +503,27 @@ function LabSection({
             ) : (
               `▶ Run lab ${label}`
             )}
+          </button>
+          <button
+            onClick={onPushResol}
+            disabled={pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)}
+            title="Run the lab with all 3 resolutions in parallel (3 workers) — binary search kept per resolution"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              background: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#1f150f' : '#7c3a0f',
+              color: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#6a4a2a' : '#fbbf24',
+              border: '1px solid #9a5b16',
+              borderRadius: 8,
+              padding: '10px 16px',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? 'not-allowed' : 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ⚡ Resol
           </button>
           {(isRunning || (!isDone && serverRunning)) && (
             <button
