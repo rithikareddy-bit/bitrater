@@ -1,161 +1,159 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { BatchClient, ListJobsCommand, DescribeJobsCommand } from '@aws-sdk/client-batch';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// Per-codec lab/GCP states that consume one worker slot each.
-// An episode runs H264 + H265 in parallel, so a single LAB_RUNNING episode
-// occupies up to 2 lab worker slots — we count them separately here.
-const LAB_ACTIVE = new Set(['STARTING', 'RUNNING']);
+// GCP transcode runs on GCP (not AWS Batch), so GCP worker counts stay
+// Mongo-derived. AWS worker counts come from Batch directly (below) because one
+// episode can fan out to many workers: Run Lab = 1, Resol = 3, Bitrate Resol
+// = ~25. Counting 1 per active episode-codec (the old approach) under-reported.
 const GCP_ACTIVE = new Set(['STARTING', 'RUNNING']);
 
 const AWS_WORKER_CAPACITY = 128;
 const GCP_WORKER_CAPACITY = 45;
+
+const REGION = process.env.AWS_REGION || 'us-east-1';
+const BATCH_QUEUE = process.env.BATCH_JOB_QUEUE || 'chai-q-queue';
+const batch = new BatchClient({ region: REGION });
+
+// Batch statuses that occupy a compute slot (an actually-running worker).
+const BATCH_ACTIVE_STATUSES = ['RUNNING', 'STARTING'];
+
+async function listJobIds(status) {
+  const ids = [];
+  let nextToken;
+  do {
+    const resp = await batch.send(new ListJobsCommand({
+      jobQueue: BATCH_QUEUE, jobStatus: status, nextToken, maxResults: 100,
+    }));
+    for (const j of resp.jobSummaryList || []) ids.push(j.jobId);
+    nextToken = resp.nextToken;
+  } while (nextToken);
+  return ids;
+}
+
+// Describe jobs (chunks of 100) and pull EPISODE_ID + CODEC from each job's env.
+async function describeJobs(jobIds) {
+  const out = [];
+  for (let i = 0; i < jobIds.length; i += 100) {
+    const resp = await batch.send(new DescribeJobsCommand({ jobs: jobIds.slice(i, i + 100) }));
+    for (const j of resp.jobs || []) {
+      const env = {};
+      for (const e of j.container?.environment || []) env[e.name] = e.value;
+      out.push({ status: j.status, episodeId: env.EPISODE_ID || null, codec: env.CODEC || null });
+    }
+  }
+  return out;
+}
+
+async function resolveEpisodesToShows(client, episodeIds) {
+  const map = new Map();
+  if (!episodeIds.length) return map;
+  const masterDb = client.db('master');
+  const lookup = await masterDb.collection('showcache')
+    .find({ 'episodes.id': { $in: episodeIds } }, { projection: { _id: 1, slug: 1, title: 1, 'episodes.id': 1 } })
+    .toArray();
+  const wanted = new Set(episodeIds);
+  for (const s of lookup) {
+    for (const ep of s.episodes || []) {
+      if (ep?.id && wanted.has(String(ep.id))) {
+        map.set(String(ep.id), { show_id: String(s._id), show_slug: s.slug || null, show_title: s.title || 'Untitled' });
+      }
+    }
+  }
+  return map;
+}
 
 export async function GET() {
   try {
     const client = await clientPromise();
     const db = client.db('chai_q_lab');
 
-    const runs = await db.collection('pipeline_runs')
-      .find(
-        { status: 'RUNNING' },
-        {
-          projection: {
-            show_id: 1,
-            show_slug: 1,
-            show_title: 1,
-            kind: 1,
-            lab_workers: 1,
-            max_gcp: 1,
-            'episodes.status': 1,
-            'episodes.episode_id': 1,
-            'episodes.lab_h264_status': 1,
-            'episodes.lab_h265_status': 1,
-            'episodes.gcp_h264_status': 1,
-            'episodes.gcp_h265_status': 1,
-          },
+    // 1. Active pipeline_runs — show metadata + GCP counts + which episodes are
+    //    part of a run (vs a standalone rerun).
+    const runs = await db.collection('pipeline_runs').find(
+      { status: 'RUNNING' },
+      {
+        projection: {
+          show_id: 1, show_slug: 1, show_title: 1, kind: 1,
+          'episodes.status': 1, 'episodes.episode_id': 1,
+          'episodes.gcp_h264_status': 1, 'episodes.gcp_h265_status': 1,
         },
-      )
-      .toArray();
+      },
+    ).toArray();
 
-    const perShow = new Map();
-    let awsUsed = 0;
-    let gcpUsed = 0;
-
+    const epIdsInRuns = new Set();
     for (const run of runs) {
-      const key = String(run.show_id || run._id);
-      let row = perShow.get(key);
-      if (!row) {
-        row = {
-          show_id: key,
-          show_slug: run.show_slug || null,
-          show_title: run.show_title || 'Untitled',
-          kind: run.kind || 'episode',
-          aws_h264: 0,
-          aws_h265: 0,
-          aws_running: 0,
-          gcp_h264: 0,
-          gcp_h265: 0,
-          gcp_running: 0,
-        };
-        perShow.set(key, row);
-      }
+      for (const ep of run.episodes || []) if (ep.episode_id) epIdsInRuns.add(String(ep.episode_id));
+    }
 
-      const eps = Array.isArray(run.episodes) ? run.episodes : [];
-      for (const ep of eps) {
-        // Per-codec lab worker slots (H264 + H265 run in parallel per episode).
-        if (LAB_ACTIVE.has(ep.lab_h264_status)) { row.aws_h264 += 1; row.aws_running += 1; awsUsed += 1; }
-        if (LAB_ACTIVE.has(ep.lab_h265_status)) { row.aws_h265 += 1; row.aws_running += 1; awsUsed += 1; }
-        // Per-codec GCP worker slots. COMBINING is a post-GCP single slot — bucket under H264 col.
+    // 2. Real AWS Batch jobs = accurate worker count (captures Resol/Bitrate fan-out).
+    const activeIds = (await Promise.all(BATCH_ACTIVE_STATUSES.map(listJobIds))).flat();
+    const activeJobs = activeIds.length ? await describeJobs(activeIds) : [];
+    const awsUsed = activeJobs.length; // every active Batch job consumes the shared 128-slot pool
+    const videoJobs = activeJobs.filter(
+      (j) => (j.codec === 'libx264' || j.codec === 'libx265') && j.episodeId,
+    );
+
+    const epToShow = await resolveEpisodesToShows(client, [...new Set(videoJobs.map((j) => j.episodeId))]);
+
+    const shows = new Map();  // show_id -> row (episode in an active pipeline_run)
+    const reruns = new Map(); // show_id -> row (standalone rerun activity)
+    const blankRow = (meta) => ({
+      show_id: meta.show_id, show_slug: meta.show_slug, show_title: meta.show_title, kind: 'episode',
+      aws_h264: 0, aws_h265: 0, aws_running: 0,
+      gcp_h264: 0, gcp_h265: 0, gcp_running: 0,
+    });
+
+    // 3. GCP counts (Mongo) — seed show rows from active runs.
+    let gcpUsed = 0;
+    for (const run of runs) {
+      const meta = { show_id: String(run.show_id || run._id), show_slug: run.show_slug || null, show_title: run.show_title || 'Untitled' };
+      let row = shows.get(meta.show_id);
+      if (!row) { row = blankRow(meta); row.kind = run.kind || 'episode'; shows.set(meta.show_id, row); }
+      for (const ep of run.episodes || []) {
         if (GCP_ACTIVE.has(ep.gcp_h264_status)) { row.gcp_h264 += 1; row.gcp_running += 1; gcpUsed += 1; }
         if (GCP_ACTIVE.has(ep.gcp_h265_status)) { row.gcp_h265 += 1; row.gcp_running += 1; gcpUsed += 1; }
         if (ep.status === 'COMBINING')          { row.gcp_h264 += 1; row.gcp_running += 1; gcpUsed += 1; }
       }
     }
 
-    const shows = [...perShow.values()].sort(
-      (a, b) => (b.aws_running + b.gcp_running) - (a.aws_running + a.gcp_running),
-    );
-
-    // ── Reruns: episodes active in `video_episodes` but NOT covered by any
-    // active pipeline_runs doc (per-episode reruns bypass the run wrapper).
-    // We still need their worker consumption in the totals, otherwise the
-    // AWS/GCP "Used" counts under-report what the cloud is actually doing.
-    const epIdsInRuns = new Set();
-    for (const run of runs) {
-      for (const ep of run.episodes || []) {
-        if (ep.episode_id) epIdsInRuns.add(String(ep.episode_id));
-      }
+    // 4. AWS counts (Batch) — attribute each running video job to its show/codec.
+    for (const j of videoJobs) {
+      const meta = epToShow.get(j.episodeId) || { show_id: '_unknown', show_slug: null, show_title: 'Unknown show' };
+      const map = epIdsInRuns.has(j.episodeId) ? shows : reruns;
+      let row = map.get(meta.show_id);
+      if (!row) { row = blankRow(meta); map.set(meta.show_id, row); }
+      row.aws_running += 1;
+      if (j.codec === 'libx264') row.aws_h264 += 1; else row.aws_h265 += 1;
     }
 
-    const activeVideoEps = await db.collection('video_episodes')
-      .find(
-        {
-          $or: [
-            { lab_status_h264: { $in: [...LAB_ACTIVE] } },
-            { lab_status_h265: { $in: [...LAB_ACTIVE] } },
-            { gcp_job_status_h264: { $in: [...GCP_ACTIVE] } },
-            { gcp_job_status_h265: { $in: [...GCP_ACTIVE] } },
-          ],
-        },
-        {
-          projection: {
-            episode_id: 1,
-            lab_status_h264: 1,
-            lab_status_h265: 1,
-            gcp_job_status_h264: 1,
-            gcp_job_status_h265: 1,
-          },
-        },
-      )
-      .toArray();
-
-    const orphanEps = activeVideoEps.filter(d => !epIdsInRuns.has(String(d.episode_id)));
-
-    // Resolve episode_id → {show_id, show_title, show_slug} via master.showcache.
-    // Only scan if there are orphans, and pull only what we need.
-    const perRerunShow = new Map();
-    if (orphanEps.length > 0) {
-      const orphanIds = new Set(orphanEps.map(d => String(d.episode_id)));
-      const masterDb = client.db('master');
-      const showsForLookup = await masterDb.collection('showcache')
-        .find({ 'episodes.id': { $in: [...orphanIds] } }, { projection: { _id: 1, slug: 1, title: 1, 'episodes.id': 1 } })
-        .toArray();
-
-      const epToShow = new Map();
-      for (const s of showsForLookup) {
-        for (const ep of s.episodes || []) {
-          if (ep?.id && orphanIds.has(String(ep.id))) {
-            epToShow.set(String(ep.id), { show_id: String(s._id), show_slug: s.slug || null, show_title: s.title || 'Untitled' });
-          }
-        }
-      }
-
-      for (const d of orphanEps) {
-        const meta = epToShow.get(String(d.episode_id)) || { show_id: '_unknown', show_slug: null, show_title: 'Unknown show' };
-        let row = perRerunShow.get(meta.show_id);
-        if (!row) {
-          row = {
-            show_id: meta.show_id,
-            show_slug: meta.show_slug,
-            show_title: meta.show_title,
-            aws_h264: 0, aws_h265: 0, aws_running: 0,
-            gcp_h264: 0, gcp_h265: 0, gcp_running: 0,
-          };
-          perRerunShow.set(meta.show_id, row);
-        }
-        if (LAB_ACTIVE.has(d.lab_status_h264))     { row.aws_h264 += 1; row.aws_running += 1; awsUsed += 1; }
-        if (LAB_ACTIVE.has(d.lab_status_h265))     { row.aws_h265 += 1; row.aws_running += 1; awsUsed += 1; }
+    // 5. GCP reruns — episodes running GCP outside any pipeline_run wrapper.
+    const activeVideoEps = await db.collection('video_episodes').find(
+      { $or: [
+        { gcp_job_status_h264: { $in: [...GCP_ACTIVE] } },
+        { gcp_job_status_h265: { $in: [...GCP_ACTIVE] } },
+      ] },
+      { projection: { episode_id: 1, gcp_job_status_h264: 1, gcp_job_status_h265: 1 } },
+    ).toArray();
+    const gcpOrphans = activeVideoEps.filter((d) => !epIdsInRuns.has(String(d.episode_id)));
+    if (gcpOrphans.length) {
+      const orphanToShow = await resolveEpisodesToShows(client, [...new Set(gcpOrphans.map((d) => String(d.episode_id)))]);
+      for (const d of gcpOrphans) {
+        const meta = orphanToShow.get(String(d.episode_id)) || { show_id: '_unknown', show_slug: null, show_title: 'Unknown show' };
+        let row = reruns.get(meta.show_id);
+        if (!row) { row = blankRow(meta); reruns.set(meta.show_id, row); }
         if (GCP_ACTIVE.has(d.gcp_job_status_h264)) { row.gcp_h264 += 1; row.gcp_running += 1; gcpUsed += 1; }
         if (GCP_ACTIVE.has(d.gcp_job_status_h265)) { row.gcp_h265 += 1; row.gcp_running += 1; gcpUsed += 1; }
       }
     }
 
-    const reruns = [...perRerunShow.values()].sort(
-      (a, b) => (b.aws_running + b.gcp_running) - (a.aws_running + a.gcp_running),
-    );
+    // Only surface rows that are actually consuming a worker right now.
+    const sortRows = (m) => [...m.values()]
+      .filter((r) => r.aws_running + r.gcp_running > 0)
+      .sort((a, b) => (b.aws_running + b.gcp_running) - (a.aws_running + a.gcp_running));
 
     const workers = {
       aws: { used: awsUsed, total: AWS_WORKER_CAPACITY, left: Math.max(0, AWS_WORKER_CAPACITY - awsUsed) },
@@ -163,7 +161,7 @@ export async function GET() {
     };
 
     return NextResponse.json(
-      { shows, reruns, workers, active_runs: runs.length },
+      { shows: sortRows(shows), reruns: sortRows(reruns), workers, active_runs: runs.length },
       { headers: { 'Cache-Control': 'no-store, max-age=0' } },
     );
   } catch (err) {

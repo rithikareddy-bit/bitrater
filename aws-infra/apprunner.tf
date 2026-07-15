@@ -111,9 +111,15 @@ resource "aws_iam_role_policy" "apprunner_runtime_policy" {
         Sid    = "SubmitOnDemandBatchJobs"
         Effect = "Allow"
         Action = "batch:SubmitJob"
+        # SubmitJob is called with the UNVERSIONED job-def name ("chai-q-worker"),
+        # so IAM authorizes against the unversioned ARN. A revision-pinned ARN
+        # (…/chai-q-worker:12, which is what `.arn` resolves to) does NOT match and
+        # Batch denies with AccessDenied — this silently broke Parallel/Bitrate Resol
+        # in prod. Grant the bare name + every revision so name-based submits pass.
         Resource = [
           aws_batch_job_definition.audio_visqol_def.arn,
-          aws_batch_job_definition.chai_q_worker_def.arn,
+          "arn:aws:batch:us-east-1:107647021172:job-definition/chai-q-worker",
+          "arn:aws:batch:us-east-1:107647021172:job-definition/chai-q-worker:*",
           aws_batch_job_queue.chai_q_queue.arn,
         ]
       },

@@ -600,7 +600,14 @@ export async function runEpisodeBitrateResol(episodeId, s3Url, codec) {
   // Launch everything up front (episode-scoped: <=47 jobs, within the pool).
   for (const item of initial) await submitItem(item);
 
-  const MAX_POLLS = 400; // ~4000s backstop (> per-job 3000s timeout)
+  // Wall-clock safety net. The chai-q-worker job def has NO per-attempt timeout,
+  // so THIS is the only thing that kills a hung job — but it also kills healthy
+  // ones still encoding. A bitrate fan-out is up to ~25 parallel single-bitrate
+  // encodes (long source → slow HEVC → VMAF), plus spot queue time, so give it a
+  // generous 3h ceiling. Too small (the old ~66min) killed the slower, higher-
+  // bitrate encodes before they finished, leaving only the lowest bitrates and a
+  // below-threshold winner.
+  const MAX_POLLS = 1080; // ~10800s (3h) at POLL_MS=10s
   let polls = 0;
   while (active.size > 0 && polls < MAX_POLLS) {
     polls++;

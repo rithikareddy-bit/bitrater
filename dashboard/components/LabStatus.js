@@ -142,6 +142,35 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
     handlePushResol(codec);
   };
 
+  // "Bitrate Resol" — one worker PER candidate bitrate (all resolutions at once),
+  // early-cancelling higher bitrates once a lower one passes (runEpisodeBitrateResol).
+  const handlePushBitrateResol = async (codec) => {
+    setPushing(codec);
+    setPushError(null);
+    try {
+      if (!videoUrl) {
+        throw new Error('No s3_url found for this episode — check showcache data.');
+      }
+      const res = await fetch('/api/bitrate-resol/episode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodeId, s3Url: videoUrl, codec }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Bitrate Resol lab failed');
+      setPushing(null);
+      startPolling();
+    } catch (err) {
+      setPushError(err.message);
+      setPushing(null);
+    }
+  };
+
+  const handleRerunBitrateResol = (codec) => {
+    if (!window.confirm(`This will delete all H.${codec === 'h264' ? '264' : '265'} research data and re-run BITRATE-WISE — one worker per candidate bitrate (~25/codec). Continue?`)) return;
+    handlePushBitrateResol(codec);
+  };
+
   const handleRerun = (codec) => {
     if (!window.confirm(`This will delete all H.${codec === 'h264' ? '264' : '265'} research data and re-run. Continue?`)) return;
     handlePush(codec);
@@ -241,8 +270,10 @@ export default function LabStatus({ episodeId, golden, videoUrl, onRunComplete }
             stopping={stopping === codec}
             onPush={() => handlePush(codec)}
             onPushResol={() => handlePushResol(codec)}
+            onPushBitrateResol={() => handlePushBitrateResol(codec)}
             onRerun={() => handleRerun(codec)}
             onRerunResol={() => handleRerunResol(codec)}
+            onRerunBitrateResol={() => handleRerunBitrateResol(codec)}
             onStop={() => handleStop(codec)}
           />
         );
@@ -287,8 +318,10 @@ function LabSection({
   stopping,
   onPush,
   onPushResol,
+  onPushBitrateResol,
   onRerun,
   onRerunResol,
+  onRerunBitrateResol,
   onStop,
   defaultsApplied,
 }) {
@@ -471,6 +504,27 @@ function LabSection({
           >
             ⚡ Resol
           </button>
+          <button
+            onClick={onRerunBitrateResol}
+            disabled={pushing}
+            title="Re-run BITRATE-WISE — one worker per candidate bitrate (~25/codec), early-cancel higher once a lower passes"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              background: pushing ? '#25102a' : '#86198f',
+              color: pushing ? '#6a2a6a' : '#f5d0fe',
+              border: '1px solid #c026d3',
+              borderRadius: 8,
+              padding: '10px 16px',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: pushing ? 'not-allowed' : 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ⚡ Bitrate Resol
+          </button>
         </div>
       ) : (
         <div style={{ display: 'flex', gap: 8 }}>
@@ -524,6 +578,27 @@ function LabSection({
             }}
           >
             ⚡ Resol
+          </button>
+          <button
+            onClick={onPushBitrateResol}
+            disabled={pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)}
+            title="Run BITRATE-WISE — one worker per candidate bitrate (~25/codec) all at once, early-cancel higher once a lower passes"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              background: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#25102a' : '#86198f',
+              color: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? '#6a2a6a' : '#f5d0fe',
+              border: '1px solid #c026d3',
+              borderRadius: 8,
+              padding: '10px 16px',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: (pushing || (!isDone && serverRunning) || (batchAllSucceeded && !hasGolden && !serverFailed)) ? 'not-allowed' : 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ⚡ Bitrate Resol
           </button>
           {(isRunning || (!isDone && serverRunning)) && (
             <button
