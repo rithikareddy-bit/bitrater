@@ -220,7 +220,11 @@ def handler(event, context):
     mongo_uri = os.environ["MONGO_URI"]
 
     gcp_project = os.environ["GCP_PROJECT"]
-    gcp_location = os.environ.get("GCP_LOCATION", "us-central1")
+    # Default must match the region where the GCS input/output buckets live
+    # (asia-south1 / Mumbai). The old us-central1 default was a dead fallback:
+    # if GCP_LOCATION ever went unset, jobs would target a region with no
+    # buckets and fail. The env var is always set to asia-south1 in prod.
+    gcp_location = os.environ.get("GCP_LOCATION", "asia-south1")
     gcs_output_bucket = os.environ["GCS_OUTPUT_BUCKET"]
 
     output_uri = f"gs://{gcs_output_bucket}/{episode_id}/"

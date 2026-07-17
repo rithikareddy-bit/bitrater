@@ -123,6 +123,13 @@
         "h264_master_m3u8_url.$": "$.Payload.h264_master_m3u8_url",
         "h265_master_m3u8_url.$": "$.Payload.h265_master_m3u8_url"
       },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.finalizeError",
+          "Next": "JobFailed"
+        }
+      ],
       "End": true
     },
     "JobFailed": {

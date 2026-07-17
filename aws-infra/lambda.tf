@@ -280,7 +280,11 @@ resource "aws_lambda_function" "gcp_copy" {
   handler          = "gcp_copy_s3_to_gcs.handler"
   runtime          = "python3.11"
   timeout          = 900
-  memory_size      = 512
+  # Streams the whole source video S3 -> GCS in one serial connection. Lambda
+  # network bandwidth scales with memory, so at 512MB large sources couldn't
+  # finish the transfer inside the 900s ceiling (both codecs hit Sandbox.Timedout).
+  # This copy is throughput-bound (one big stream), so more memory = more bandwidth.
+  memory_size      = 3008
   layers           = [aws_lambda_layer_version.gcp_deps.arn]
 
   environment {
@@ -328,7 +332,11 @@ resource "aws_lambda_function" "gcp_finalize" {
   role             = aws_iam_role.gcp_lambda_role.arn
   handler          = "gcp_finalize_hls.handler"
   runtime          = "python3.11"
-  timeout          = 300
+  # Copies transcoder output to the CDN bucket via rewrite() one segment at a
+  # time over a cross-continent (us-east-1 -> asia) API path. Long episodes have
+  # hundreds of segments, so 300s could get tight; 600s is headroom insurance.
+  # rewrite is server-side, so memory stays low.
+  timeout          = 600
   memory_size      = 256
   layers           = [aws_lambda_layer_version.gcp_deps.arn]
 

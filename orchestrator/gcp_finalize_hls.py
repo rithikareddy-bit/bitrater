@@ -464,7 +464,16 @@ def _build_name_map(slug_prefix, codec):
 
 
 def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec, name_map):
-    """Copy codec-specific transcoder output into CDN folder, renaming manifests."""
+    """Copy codec-specific transcoder output into CDN folder, renaming manifests.
+
+    Uses rewrite() rather than copy_blob(): the CDN bucket (chai-shots-manifests,
+    ASIA multi-region) is a different location than the transcoder output
+    (asia-south1 regional). copy_blob is a single-request copy with a 30s
+    server-side limit; large .m4s segments spanning locations exceed it and GCS
+    returns 503 "Copy spanning locations ... could not complete within 30
+    seconds. Please use the Rewrite method". rewrite() chunks the copy server-
+    side with no such limit (and completes in one call for small objects).
+    """
     client = gcs.Client(credentials=creds)
     src_bucket = client.bucket(source_bucket_name)
     dst_bucket = client.bucket(CDN_BUCKET)
@@ -479,7 +488,12 @@ def _copy_to_cdn_bucket(creds, source_bucket_name, episode_id, cdn_prefix, codec
         basename = os.path.basename(blob.name)
         dst_basename = name_map.get(basename, basename)
         dst_name = f"{cdn_prefix}/{dst_basename}"
-        dst_blob = src_bucket.copy_blob(blob, dst_bucket, new_name=dst_name)
+        dst_blob = dst_bucket.blob(dst_name)
+        token = None
+        while True:
+            token, _, _ = dst_blob.rewrite(blob, token=token)
+            if token is None:
+                break
         dst_blob.reload()
         if dst_blob.size != blob.size:
             raise RuntimeError(
@@ -632,6 +646,32 @@ def _fix_audio_name(creds, cdn_prefix, slug, manifest_name):
 # ---------------------------------------------------------------------------
 
 def handler(event, context):
+    """Wrapper: on ANY failure, mark this codec FAILED in Mongo before
+    re-raising, so a finalize crash can't leave the episode stuck showing
+    RUNNING (the transcoder set RUNNING; only this path clears it). Mirrors the
+    FAILED bookkeeping in gcp_check_status.
+    """
+    episode_id = event.get("episode_id")
+    codec = event.get("codec", "h265")
+    try:
+        return _finalize(event, context)
+    except Exception as e:
+        try:
+            db = pymongo.MongoClient(os.environ["MONGO_URI"])["chai_q_lab"]
+            db.video_episodes.update_one(
+                {"episode_id": episode_id},
+                {"$set": {
+                    f"gcp_job_status_{codec}": "FAILED",
+                    f"gcp_error_{codec}": f"finalize: {e}",
+                    f"gcp_finished_at_{codec}": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+        except Exception as e2:
+            print(f"[FINALIZE-CATCH] could not record FAILED: {e2}")
+        raise
+
+
+def _finalize(event, context):
     episode_id = event["episode_id"]
     output_uri = event["output_uri"]
     codec = event.get("codec", "h265")
