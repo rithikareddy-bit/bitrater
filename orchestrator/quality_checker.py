@@ -1,9 +1,9 @@
 """
 Quality Check Lambda: analyze encoded HLS video for visual artifacts.
 
-Checks 1080p H265 and 1080p H264 streams from the combined manifest.
+Checks the 1080p H264 stream from the per-codec H264 master.
 
-Checks performed per stream:
+Checks performed:
 - Blocking artifacts (compression macroblocking)
 - Blur (soft/degraded frames)
 - Frozen frames (stuck/repeated content)
@@ -12,10 +12,14 @@ Checks performed per stream:
 Input event:
   { "episode_id": "..." }
 
-The combined-master URL is NOT passed in. It is read from master.showcache
-(the edge-signed `signed_playback_url` for episodes, `gcpUrl` for trailers) so
-the fetch carries a valid token under CDN enforcement. Episodes that aren't in
-showcache yet (not published/synced) have no signed URL → recorded as ERROR.
+The master URL is NOT passed in. It is read from chai_q_lab.video_episodes
+(`h264_master_m3u8_url`), the same field the dashboard reads — not from
+master.showcache. That URL is unsigned, and only `*_combined.m3u8` is token-
+enforced at the edge, so the per-codec master and its children fetch openly.
+This decouples QC from publish/sync state and from token enforcement.
+
+Note: unlike the combined master, a per-codec master lists its variants as
+RELATIVE URIs, so extracted URIs must be resolved against the master's base.
 """
 
 import os
@@ -49,17 +53,18 @@ def _fetch_manifest(url):
 _MIN_1080P_SHORT_EDGE = 1000
 
 
-def _extract_1080p_streams(combined_url):
+def _extract_1080p_h264(master_url):
     """
-    Parse combined manifest and return (h265_url, h264_url) for the 1080p rung.
+    Parse the H264 master and return an absolute URL for the 1080p H264 rung.
 
     The rung is matched by resolution (short edge >= 1000) and codec, so it works
-    for any aspect ratio — not just exactly-portrait 1080x1920. When a codec has
-    more than one 1080p variant, the highest-BANDWIDTH one is chosen.
+    for any aspect ratio — not just exactly-portrait 1080x1920. When there is more
+    than one 1080p variant, the highest-BANDWIDTH one is chosen. Returns None if
+    the master has no 1080p H264 rung.
     """
-    text = _fetch_manifest(combined_url)
+    text = _fetch_manifest(master_url)
     lines = text.strip().split("\n")
-    best = {"h265": (-1, None), "h264": (-1, None)}  # codec -> (bandwidth, uri)
+    best_bw, best_uri = -1, None
     for i, line in enumerate(lines):
         if not line.startswith("#EXT-X-STREAM-INF"):
             continue
@@ -72,17 +77,15 @@ def _extract_1080p_streams(combined_url):
         uri = lines[i + 1] if i + 1 < len(lines) else ""
         if not uri or uri.startswith("#"):
             continue
-        if "hvc1" in line or "hev1" in line or "h265" in uri:
-            codec = "h265"
-        elif "avc1" in line or "h264" in uri:
-            codec = "h264"
-        else:
+        if not ("avc1" in line or "h264" in uri):
             continue
         bw_m = re.search(r"BANDWIDTH=(\d+)", line)
         bw = int(bw_m.group(1)) if bw_m else 0
-        if bw > best[codec][0]:
-            best[codec] = (bw, uri)
-    return best["h265"][1], best["h264"][1]
+        if bw > best_bw:
+            best_bw, best_uri = bw, uri
+    if not best_uri:
+        return None
+    return _to_absolute(best_uri, master_url.rsplit("/", 1)[0])
 
 
 def _to_absolute(uri, base_url):
@@ -258,35 +261,20 @@ def _build_stream_result(path, tag):
     }
 
 
-_TRAILER_ID_RE = re.compile(r"^trailer_([a-f0-9]{24})_(.+)$")
-
-
-def _get_showcache_url(mongo_uri, episode_id):
-    """Option B: return the edge-signed combined-master URL the resigner already
-    wrote to master.showcache — episodes use `signed_playback_url`, trailers use
-    `trailers_playback_urls.gcpUrl`. Returns None if the episode/trailer isn't in
-    showcache yet (i.e. not published/synced), so the caller can record ERROR.
+def _get_h264_master_url(mongo_uri, episode_id):
+    """Return the unsigned H264 master URL from chai_q_lab.video_episodes — the
+    same field the dashboard reads. Trailers live in this collection too (their
+    episode_id is the `trailer_<show>_<key>` string), so they need no special
+    case. Returns None if the episode has no H264 master yet (transcode for that
+    codec hasn't succeeded), so the caller can record ERROR.
     """
     client = pymongo.MongoClient(mongo_uri)
     try:
-        showcache = client["master"]["showcache"]
-        trailer_match = _TRAILER_ID_RE.match(episode_id)
-        if trailer_match:
-            from bson import ObjectId
-            show_id_hex, trailer_key = trailer_match.group(1), trailer_match.group(2)
-            show = showcache.find_one(
-                {"_id": ObjectId(show_id_hex), "trailers_playback_urls._key": trailer_key},
-                {"trailers_playback_urls.$": 1},
-            )
-            trailers = (show or {}).get("trailers_playback_urls") or []
-            return trailers[0].get("gcpUrl") if trailers else None
-
-        show = showcache.find_one(
-            {"episodes.id": episode_id},
-            {"episodes.$": 1},
+        doc = client["chai_q_lab"].video_episodes.find_one(
+            {"episode_id": episode_id},
+            {"h264_master_m3u8_url": 1},
         )
-        episodes = (show or {}).get("episodes") or []
-        return episodes[0].get("signed_playback_url") if episodes else None
+        return (doc or {}).get("h264_master_m3u8_url")
     finally:
         client.close()
 
@@ -310,34 +298,24 @@ def handler(event, context):
     print(f"[QC] Starting quality check for {episode_id}")
 
     try:
-        combined_url = _get_showcache_url(mongo_uri, episode_id)
-        if not combined_url:
+        master_url = _get_h264_master_url(mongo_uri, episode_id)
+        if not master_url:
             raise ValueError(
-                "Episode not in showcache (not published/synced yet) — "
-                "no signed playback URL to check"
+                "Episode has no h264_master_m3u8_url in chai_q_lab.video_episodes "
+                "— H264 transcode hasn't succeeded yet"
             )
-        print(f"[QC] Using showcache signed URL: {combined_url.split('?', 1)[0]}")
-        h265_url, h264_url = _extract_1080p_streams(combined_url)
-        if not h265_url and not h264_url:
-            raise ValueError("Could not find 1080p streams in combined manifest")
+        print(f"[QC] Using H264 master: {master_url}")
+        h264_url = _extract_1080p_h264(master_url)
+        if not h264_url:
+            raise ValueError("Could not find a 1080p H264 stream in the H264 master")
 
         streams = {}
-        if h265_url:
-            print(f"[QC] Downloading 1080p H265...")
-            _download_stream(h265_url, "/tmp/h265_1080p.mp4")
-            streams["h265_1080p"] = _build_stream_result("/tmp/h265_1080p.mp4", "h265")
-            print(f"[QC] H265 done — {streams['h265_1080p']['overall']}")
+        print(f"[QC] Downloading 1080p H264...")
+        _download_stream(h264_url, "/tmp/h264_1080p.mp4")
+        streams["h264_1080p"] = _build_stream_result("/tmp/h264_1080p.mp4", "h264")
+        print(f"[QC] H264 done — {streams['h264_1080p']['overall']}")
 
-        if h264_url:
-            print(f"[QC] Downloading 1080p H264...")
-            _download_stream(h264_url, "/tmp/h264_1080p.mp4")
-            streams["h264_1080p"] = _build_stream_result("/tmp/h264_1080p.mp4", "h264")
-            print(f"[QC] H264 done — {streams['h264_1080p']['overall']}")
-
-        all_issues = (
-            streams.get("h265_1080p", {}).get("issues", []) +
-            streams.get("h264_1080p", {}).get("issues", [])
-        )
+        all_issues = streams["h264_1080p"]["issues"]
         overall = "PASS" if not all_issues else "ISSUES_FOUND"
 
         result = {

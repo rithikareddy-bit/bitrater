@@ -7,9 +7,10 @@ set -euo pipefail
 # Run from: bitrater/ (project root)
 # Prerequisites: gcloud, aws cli, docker, terraform all installed
 #
-# Secrets are NOT in this repo. Either:
-#   • Create .env.deploy (gitignored): cp deploy.env.example .env.deploy
-#   • Or: export MONGO_URI='...' before running
+# Secrets are NOT in this repo. Terraform variables (mongo_uri, subtitle_mongo_uri,
+# cdn_base, bucket names, secret ARNs) live in aws-infra/terraform.tfvars, which
+# Terraform loads automatically — they are NOT passed from the shell.
+# .env.deploy is optional and only supplies shell-side values (e.g. AUDIO_BUCKET).
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,9 +20,13 @@ if [[ -f "${SCRIPT_DIR}/.env.deploy" ]]; then
   source "${SCRIPT_DIR}/.env.deploy"
   set +a
 fi
-if [[ -z "${MONGO_URI:-}" ]]; then
-  echo "ERROR: MONGO_URI is not set."
-  echo "  Copy deploy.env.example → .env.deploy and set MONGO_URI, or export MONGO_URI."
+# terraform.tfvars is the real prerequisite — Terraform prompts (or fails the
+# validation blocks in variables.tf) without it. Check it up front rather than
+# 5 minutes into a deploy, at Step 2.
+if [[ ! -f "${SCRIPT_DIR}/aws-infra/terraform.tfvars" ]]; then
+  echo "ERROR: aws-infra/terraform.tfvars not found."
+  echo "  It holds mongo_uri, subtitle_mongo_uri, cdn_base, bucket names and secret ARNs."
+  echo "  Terraform reads it automatically; without it Step 2 cannot run."
   exit 1
 fi
 
@@ -111,6 +116,18 @@ else
   echo "  Secret ARN: ${GCP_SECRET_ARN_FOR_TF}"
 fi
 
+# Terraform reads gcp_credentials_secret_arn from terraform.tfvars, not from
+# this variable. On an existing stack the secret is stable and they already
+# agree; this only bites when the secret is recreated with a new ARN.
+TFVARS_ARN=$(grep -E '^[[:space:]]*gcp_credentials_secret_arn' "${SCRIPT_DIR}/aws-infra/terraform.tfvars" 2>/dev/null | cut -d'"' -f2 || true)
+if [[ -n "${GCP_SECRET_ARN_FOR_TF}" && -n "${TFVARS_ARN}" && "${TFVARS_ARN}" != "${GCP_SECRET_ARN_FOR_TF}" ]]; then
+  echo ""
+  echo "  WARNING: terraform.tfvars gcp_credentials_secret_arn does not match the ARN above."
+  echo "    tfvars: ${TFVARS_ARN}"
+  echo "    actual: ${GCP_SECRET_ARN_FOR_TF}"
+  echo "    Terraform will use the tfvars value. Update terraform.tfvars before continuing."
+fi
+
 echo ""
 echo "========================================"
 echo "STEP 2: Terraform Apply"
@@ -136,18 +153,15 @@ fi
 
 terraform init -upgrade
 
-terraform apply -auto-approve \
-  -var="mongo_uri=${MONGO_URI}" \
-  -var="gcp_project=${GCP_PROJECT}" \
-  -var="gcp_location=${GCP_LOCATION}" \
-  -var="gcs_input_bucket=${GCS_INPUT_BUCKET}" \
-  -var="gcs_output_bucket=${GCS_OUTPUT_BUCKET}" \
-  -var="gcp_credentials_secret_arn=${GCP_SECRET_ARN_FOR_TF}" \
-  -var="subtitle_mongo_uri=${SUBTITLE_MONGO_URI:-}" \
-  -var="cdn_base=${CDN_BASE:-https://cdn.chaishots.in}" \
-  -var="vtt_worker_url=${VTT_WORKER_URL:-}" \
-  -var="vtt_worker_secret=${VTT_WORKER_SECRET:-}" \
-  -var="audio_bucket=${AUDIO_BUCKET:-chai-q-audio-transcoder}"
+# Variables come from aws-infra/terraform.tfvars, which Terraform loads
+# automatically. Do NOT pass them with -var from the shell: an unset shell
+# variable expands to "" and an explicit -var OUTRANKS terraform.tfvars, so a
+# missing .env.deploy entry silently blanks the value instead of failing. That
+# is how `-var="mongo_uri=${MONGO_URI}"` can wipe MONGO_URI from all 10
+# resources that consume it — including the App Runner dashboard. The
+# validation blocks in variables.tf now reject empty values at plan time, but
+# the flags themselves are the bug, so they are gone.
+terraform apply -auto-approve
 
 echo ""
 echo "========================================"

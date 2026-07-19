@@ -956,7 +956,7 @@ export async function orchestrate(runIdStr) {
 
       // Combine done → go straight to sync. Quality Check is NO LONGER part of
       // the pipeline; it's manual-only via the Check Quality button, which reads
-      // the edge-signed URL from showcache (see orchestrator/quality_checker.py).
+      // the H.264 master from chai_q_lab (see orchestrator/quality_checker.py).
       // Episode runs land in the terminal READY_TO_SYNC (manual Sync Show stays
       // authoritative); trailer runs park in SYNC_PENDING for Step 6.5 auto-sync.
       const combineAt = nowDate();

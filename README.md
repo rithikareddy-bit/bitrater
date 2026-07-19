@@ -509,16 +509,26 @@ Before running anything you need:
 
 ### 1. Set up secrets
 
-```bash
-cp deploy.env.example .env.deploy
+Terraform variables live in `aws-infra/terraform.tfvars`, which Terraform loads
+automatically. Create it with at least:
+
+```hcl
+mongo_uri          = "mongodb+srv://USER:PASSWORD@cluster.mongodb.net/master?retryWrites=true&w=majority"
+subtitle_mongo_uri = "..."
+cdn_base           = "https://cdn.chaishots.in"   # no trailing slash
+gcp_project        = "media-cdn-poc-466009"
+gcs_input_bucket   = "chai-q-transcoder-input"
+gcs_output_bucket  = "chai-q-transcoder-output"
+gcp_credentials_secret_arn = "arn:aws:secretsmanager:..."
 ```
 
-Edit `.env.deploy` and fill in your MongoDB URI:
-```
-MONGO_URI='mongodb+srv://USER:PASSWORD@cluster.mongodb.net/master?retryWrites=true&w=majority'
-```
+Never commit `terraform.tfvars` — it is gitignored. **Do not pass these values
+with `-var` from the shell**: an unset shell variable expands to `""` and
+overrides the file, blanking the value everywhere it is used. See
+`DEPLOY-RUNBOOK.md` §4.
 
-Never commit `.env.deploy` — it is gitignored.
+`.env.deploy` (optional, from `deploy.env.example`) supplies only shell-side
+values such as `AUDIO_BUCKET`; it no longer feeds Terraform.
 
 ### 2. Run full deployment
 

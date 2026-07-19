@@ -1693,7 +1693,7 @@ function EpisodeActions({ row, onActionDone }) {
         <ActionBtn
           label="Check Quality"
           color="#16803c"
-          disabled={!hasCombined}
+          disabled={!row.has_h264_url}
           loading={busy.qc}
           onClick={handleQC}
         />

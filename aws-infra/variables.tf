@@ -1,12 +1,30 @@
+// Required secrets/config: these have no default on purpose, and every one of
+// them is read from terraform.tfvars. The validation blocks exist because an
+// unset shell variable expands to "" — so `-var="mongo_uri=${MONGO_URI}"` with
+// MONGO_URI unset silently overrides tfvars with an empty string, and Terraform
+// would otherwise accept it (an empty string is a valid `string`). mongo_uri
+// alone feeds 10 resources including the App Runner dashboard, so a blank value
+// is a platform-wide outage. Fail at plan time instead.
+
 variable "mongo_uri" {
   description = "MongoDB Atlas connection string for the chai_q_lab database"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.mongo_uri)) > 0
+    error_message = "mongo_uri must not be empty. Drop the -var flag so terraform.tfvars applies, or check that MONGO_URI is exported."
+  }
 }
 
 variable "gcp_project" {
   description = "GCP project ID for the Transcoder API"
   type        = string
+
+  validation {
+    condition     = length(trimspace(var.gcp_project)) > 0
+    error_message = "gcp_project must not be empty. Drop the -var flag so terraform.tfvars applies."
+  }
 }
 
 variable "gcp_location" {
@@ -18,28 +36,53 @@ variable "gcp_location" {
 variable "gcs_input_bucket" {
   description = "GCS bucket for Transcoder input (source videos copied from S3)"
   type        = string
+
+  validation {
+    condition     = length(trimspace(var.gcs_input_bucket)) > 0
+    error_message = "gcs_input_bucket must not be empty. Drop the -var flag so terraform.tfvars applies."
+  }
 }
 
 variable "gcs_output_bucket" {
   description = "GCS bucket for Transcoder output (HLS playlists and segments)"
   type        = string
+
+  validation {
+    condition     = length(trimspace(var.gcs_output_bucket)) > 0
+    error_message = "gcs_output_bucket must not be empty. Drop the -var flag so terraform.tfvars applies."
+  }
 }
 
 variable "gcp_credentials_secret_arn" {
   description = "Secrets Manager secret ARN (plain string). If you paste full describe-secret JSON by mistake, Terraform will extract .ARN."
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.gcp_credentials_secret_arn)) > 0
+    error_message = "gcp_credentials_secret_arn must not be empty. Drop the -var flag so terraform.tfvars applies."
+  }
 }
 
 variable "subtitle_mongo_uri" {
   description = "MongoDB URI for subtitle VTT lookup (gld2sqs database)"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.subtitle_mongo_uri)) > 0
+    error_message = "subtitle_mongo_uri must not be empty. Drop the -var flag so terraform.tfvars applies."
+  }
 }
 
 variable "cdn_base" {
   description = "CDN base URL for GCS manifests — no trailing slash (e.g. https://cdn.chaishots.in). Must exactly match the prefix written into h264/h265_master_m3u8_url in MongoDB."
   type        = string
+
+  validation {
+    condition     = length(trimspace(var.cdn_base)) > 0 && !endswith(var.cdn_base, "/")
+    error_message = "cdn_base must not be empty and must not end with a slash — it is string-prefixed onto manifest URLs stored in MongoDB."
+  }
 }
 
 variable "vtt_worker_url" {

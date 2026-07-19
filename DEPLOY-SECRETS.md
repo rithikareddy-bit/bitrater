@@ -6,9 +6,12 @@
    Atlas → Database Access → user → Edit → new password. The old password was in public Git history and must be treated as compromised.
 
 2. **Local deploy only**
-   - Copy `deploy.env.example` → `.env.deploy` (never committed).
-   - Put the **new** `MONGO_URI` there.
-   - Run `./deploy.sh` from your machine only.
+   - Put the **new** URI in `aws-infra/terraform.tfvars` (never committed) as
+     `mongo_uri`. Terraform loads that file automatically.
+   - Run `terraform apply` from `aws-infra/`, or `./deploy.sh` for a full deploy,
+     from your machine only.
+   - `.env.deploy` no longer feeds Terraform — setting `MONGO_URI` there has no
+     effect on the deployed value. See `DEPLOY-RUNBOOK.md` §4.
 
 3. **GitHub security alert**
    After rotating: in the alert, choose **revoke** / close as resolved once the old credential is disabled.

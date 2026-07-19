@@ -656,8 +656,8 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
         </div>
       )}
 
-      {/* Quality Check button — visible only when combined URL exists */}
-      {combinedUrl && (
+      {/* Quality Check button — QC reads the H.264 master, so gate on it (not combined) */}
+      {status?.h264_master_m3u8_url && (
         <div style={{ marginTop: 12 }}>
           <button
             onClick={handleCheckQuality}

@@ -16,9 +16,9 @@ export async function POST(request, { params }) {
       );
     }
 
-    // The QC Lambda reads the edge-signed combined URL from master.showcache
-    // itself (by episode_id), so we only pass the id. If the episode isn't in
-    // showcache yet, the Lambda records overall=ERROR ('not published').
+    // The QC Lambda reads the unsigned h264_master_m3u8_url from
+    // chai_q_lab.video_episodes itself (by episode_id), so we only pass the id.
+    // If the episode has no H.264 master yet, the Lambda records overall=ERROR.
     const cmd = new InvokeCommand({
       FunctionName: lambdaArn,
       InvocationType: 'Event', // async — don't wait for result
@@ -26,14 +26,18 @@ export async function POST(request, { params }) {
     });
     await lambda.send(cmd);
 
-    // Mark as running in MongoDB so GET can return status
+    // Mark as running in MongoDB so GET can return status. Replace the whole
+    // quality_check field (not dot-notation keys): auto-pipeline start/cancel
+    // leave it as scalar `null`, and `$set: {'quality_check.overall': ...}` on a
+    // null field throws MongoServerError code 28. The Lambda overwrites the whole
+    // field on completion, so there is no partial result to preserve here.
     const client = await clientPromise();
     await client
       .db('chai_q_lab')
       .collection('video_episodes')
       .updateOne(
         { episode_id: id },
-        { $set: { 'quality_check.overall': 'RUNNING', 'quality_check.checked_at': null } },
+        { $set: { quality_check: { overall: 'RUNNING', checked_at: null } } },
       );
 
     return NextResponse.json({ status: 'RUNNING' });

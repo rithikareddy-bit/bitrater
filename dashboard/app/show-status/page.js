@@ -103,6 +103,27 @@ export default function ShowStatusPage() {
   const [activeLoading, setActiveLoading] = useState(false);
   const [activeError, setActiveError] = useState(null);
   const [activeOpen, setActiveOpen] = useState(false);
+  const [vtt, setVtt] = useState(null);
+  const [vttLoading, setVttLoading] = useState(false);
+  const [vttError, setVttError] = useState(null);
+  const [vttOpen, setVttOpen] = useState(false);
+
+  const checkVtts = () => {
+    setVttOpen(true);
+    setVttLoading(true);
+    setVttError(null);
+    fetch('/api/show-status/vtt-check')
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((d) => {
+        if (d.error) throw new Error(d.error);
+        setVtt(d);
+      })
+      .catch((e) => setVttError(e.message || 'Failed to run VTT check'))
+      .finally(() => setVttLoading(false));
+  };
 
   const checkAll = () => {
     setActiveOpen(true);
@@ -191,7 +212,33 @@ export default function ShowStatusPage() {
         >
           Check all
         </button>
+        <button
+          type="button"
+          onClick={checkVtts}
+          style={{
+            padding: '8px 14px',
+            borderRadius: 8,
+            border: '1px solid #a78bfa',
+            background: '#241c44',
+            color: '#ddd6fe',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Check VTTs
+        </button>
       </div>
+
+      {vttOpen && (
+        <VttCheckPanel
+          data={vtt}
+          loading={vttLoading}
+          error={vttError}
+          onClose={() => setVttOpen(false)}
+          onRefresh={checkVtts}
+        />
+      )}
 
       {activeOpen && (
         <ActiveRunsPanel
@@ -387,6 +434,236 @@ export default function ShowStatusPage() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function VttCheckPanel({ data, loading, error, onClose, onRefresh }) {
+  const shows = data?.shows || [];
+  const [syncing, setSyncing] = useState(null); // null | 'all' | slug
+  const [syncResult, setSyncResult] = useState(null);
+  const [syncError, setSyncError] = useState(null);
+
+  const runSync = (slug, label) => {
+    const count = slug
+      ? shows.find((s) => s.slug === slug)?.unsynced_count ?? 0
+      : data?.unsynced_episodes ?? 0;
+    if (!window.confirm(
+      `Write vtt_url into showcache for ${count} episode(s) of ${label}?\n\n`
+      + 'This modifies the production database. Existing vtt_url values are never overwritten.',
+    )) return;
+
+    setSyncing(slug || 'all');
+    setSyncError(null);
+    setSyncResult(null);
+    fetch('/api/show-status/vtt-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(slug ? { slug, confirm: true } : { confirm: true }),
+    })
+      .then((r) => r.json().then((d) => {
+        if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+        return d;
+      }))
+      .then((d) => {
+        setSyncResult({ ...d, label });
+        onRefresh(); // re-run the check so the panel reflects the new state
+      })
+      .catch((e) => setSyncError(e.message || 'Sync failed'))
+      .finally(() => setSyncing(null));
+  };
+
+  const btn = {
+    padding: '4px 10px',
+    borderRadius: 6,
+    border: '1px solid #333',
+    background: '#111',
+    color: '#aaa',
+    fontSize: 12,
+    cursor: 'pointer',
+  };
+
+  return (
+    <div
+      style={{
+        background: '#161616',
+        border: '1px solid #2a2a2a',
+        borderRadius: 10,
+        padding: '16px 18px',
+        marginBottom: 18,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#e2e8f0' }}>VTT check — active shows</div>
+        <span style={{ color: '#666', fontSize: 12 }}>
+          {data
+            ? `${data.shows_with_missing} of ${data.active_shows} show(s) · ${data.missing_episodes}/${data.total_episodes} episodes missing`
+            : ''}
+        </span>
+        {data && data.missing_episodes > 0 && (
+          <>
+            <span style={{ color: '#f59e0b', fontSize: 12, fontWeight: 600 }}>
+              {data.unsynced_episodes} not synced
+            </span>
+            <span style={{ color: '#ef4444', fontSize: 12, fontWeight: 600 }}>
+              {data.no_vtt_episodes} no VTT
+            </span>
+            {data.no_source_episodes > 0 && (
+              <span style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600 }}>
+                {data.no_source_episodes} no source
+              </span>
+            )}
+          </>
+        )}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          {data && data.unsynced_episodes > 0 && (
+            <button
+              type="button"
+              disabled={syncing !== null}
+              onClick={() => runSync(null, 'all active shows')}
+              style={{
+                padding: '4px 12px',
+                borderRadius: 6,
+                border: '1px solid #f59e0b',
+                background: syncing ? '#1a1a1a' : '#2a2110',
+                color: syncing ? '#666' : '#fbbf24',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: syncing ? 'default' : 'pointer',
+              }}
+            >
+              {syncing === 'all' ? 'Syncing…' : `Sync all ${data.unsynced_episodes}`}
+            </button>
+          )}
+          <button type="button" onClick={onRefresh} style={btn}>Refresh</button>
+          <button type="button" onClick={onClose} style={btn}>Close</button>
+        </div>
+      </div>
+
+      {syncError && <p style={{ color: '#f87171', fontSize: 13 }}>Sync failed: {syncError}</p>}
+      {syncResult && (
+        <div
+          style={{
+            border: '1px solid #22c55e',
+            background: 'rgba(34,197,94,0.08)',
+            borderRadius: 8,
+            padding: '8px 12px',
+            marginBottom: 12,
+            fontSize: 12,
+            color: '#86efac',
+          }}
+        >
+          Synced {syncResult.synced} episode(s) for {syncResult.label} — showcache updated:{' '}
+          {syncResult.showcache_updated}, episode docs updated: {syncResult.episode_updated}.
+          {syncResult.no_vtt_available > 0 && (
+            <span style={{ color: '#fca5a5' }}>
+              {' '}{syncResult.no_vtt_available} episode(s) had no VTT to sync — those need generation.
+            </span>
+          )}
+        </div>
+      )}
+
+      {loading && <p style={{ color: '#888', fontSize: 13 }}>Checking vtt_url for every active show…</p>}
+      {error && <p style={{ color: '#f87171', fontSize: 13 }}>{error}</p>}
+
+      {!loading && !error && data && shows.length === 0 && (
+        <p style={{ color: '#22c55e', fontSize: 13 }}>
+          All {data.total_episodes} episode(s) across {data.active_shows} active show(s) have a vtt_url.
+        </p>
+      )}
+
+      {!loading && !error && shows.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {shows.map((s) => (
+            <div
+              key={String(s._id)}
+              style={{ border: '1px solid #2a2a2a', borderRadius: 8, padding: '10px 12px', background: '#111' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                <Link
+                  href={`/show?selected=${encodeURIComponent(String(s._id))}`}
+                  style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 13 }}
+                >
+                  {s.title}
+                </Link>
+                <span style={{ color: '#555', fontSize: 11 }}>{s.slug || String(s._id)}</span>
+                <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: '#94a3b8' }}>
+                  {s.missing_count}/{s.episode_total} missing
+                  {s.unsynced_count > 0 && <span style={{ color: '#f59e0b' }}> · {s.unsynced_count} not synced</span>}
+                  {s.no_vtt_count > 0 && <span style={{ color: '#ef4444' }}> · {s.no_vtt_count} no VTT</span>}
+                  {s.no_source_count > 0 && <span style={{ color: '#94a3b8' }}> · {s.no_source_count} no source</span>}
+                </span>
+                {s.unsynced_count > 0 && (
+                  <button
+                    type="button"
+                    disabled={syncing !== null}
+                    onClick={() => runSync(s.slug || s.title, s.title)}
+                    style={{
+                      padding: '3px 10px',
+                      borderRadius: 6,
+                      border: '1px solid #f59e0b',
+                      background: syncing ? '#1a1a1a' : '#2a2110',
+                      color: syncing ? '#666' : '#fbbf24',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: syncing ? 'default' : 'pointer',
+                    }}
+                  >
+                    {syncing === (s.slug || s.title) ? 'Syncing…' : `Sync ${s.unsynced_count}`}
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                {s.missing.map((ep, i) => {
+                  const unsynced = ep.state === 'unsynced';
+                  const noSource = ep.state === 'no_source';
+                  const tone = unsynced
+                    ? { border: '#f59e0b', color: '#fbbf24' }
+                    : noSource
+                      ? { border: '#475569', color: '#94a3b8' }
+                      : { border: '#ef4444', color: '#fca5a5' };
+                  return (
+                    <span
+                      key={ep.id || i}
+                      style={{
+                        fontSize: 11,
+                        padding: '3px 8px',
+                        borderRadius: 4,
+                        background: '#0e0e0e',
+                        border: `1px solid ${tone.border}`,
+                        color: tone.color,
+                      }}
+                      title={
+                        unsynced
+                          ? `VTT exists in episode_vtt but not written to showcache — ${ep.id || ''}`
+                          : noSource
+                            ? `Episode has no s3_url — no source video to build a VTT from — ${ep.id || ''}`
+                            : `No VTT generated yet — ${ep.id || ''}`
+                      }
+                    >
+                      Ep {ep.episode_number ?? '?'} · {ep.title || ep.id || '—'}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: '#555', marginTop: 12, lineHeight: 1.5 }}>
+        Checks <code>master.showcache.episodes[].vtt_url</code> for every show with{' '}
+        <code>active: true</code>.{' '}
+        <span style={{ color: '#fbbf24' }}>Amber = not synced</span>: a VTT exists in{' '}
+        <code>master.episode_vtt</code> but was never written back to showcache (no
+        regeneration needed).{' '}
+        <span style={{ color: '#fca5a5' }}>Red = no VTT</span>: source exists, nothing
+        generated yet — run the worker.{' '}
+        <span style={{ color: '#94a3b8' }}>Grey = no source</span>: the episode has no{' '}
+        <code>s3_url</code>, so there is no video to build a VTT from — an ingest problem,
+        not a VTT one. Matching uses <code>episode_id</code> first, then the source-file
+        name, so re-ingested episodes (new id, same file) are still found.
+      </div>
     </div>
   );
 }
