@@ -20,6 +20,27 @@ def _get_gcp_credentials():
     return service_account.Credentials.from_service_account_info(info)
 
 
+
+
+# ---------------------------------------------------------------------------
+# Audio-Video field namespace
+# ---------------------------------------------------------------------------
+# Runs started from the /audio-video page write their status and master URLs
+# under an `av_` prefix, so a classic Lab/GCP run on the same episode keeps its
+# own records.
+
+def _field_prefix(golden_recipes):
+    """Field namespace for this run.
+
+    "av_" only when the run was started from the /audio-video page, which marks
+    its Step Function payload with `av_run`. NOT derived from the ladder: the
+    show pipeline and the episode page must keep writing the classic fields for
+    every episode — including one that happens to have an Audio-Video ladder
+    saved — or their polling of gcp_job_status_* would never see completion.
+    """
+    return "av_" if (golden_recipes or {}).get("av_run") is True else ""
+
+
 def handler(event, context):
     gcp_job_name = event["gcp_job_name"]
     episode_id = event["episode_id"]
@@ -36,9 +57,10 @@ def handler(event, context):
         mongo_uri = os.environ["MONGO_URI"]
         db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
         codec = event.get("codec", "h265")
-        status_key = f"gcp_job_status_{codec}"
-        error_key = f"gcp_error_{codec}"
-        finished_key = f"gcp_finished_at_{codec}"
+        pfx = _field_prefix(event.get("golden_recipes"))
+        status_key = f"{pfx}gcp_job_status_{codec}"
+        error_key = f"{pfx}gcp_error_{codec}"
+        finished_key = f"{pfx}gcp_finished_at_{codec}"
         error_msg = getattr(job.error, "message", "Unknown error") if job.error else "Unknown error"
         db.video_episodes.update_one(
             {"episode_id": episode_id},

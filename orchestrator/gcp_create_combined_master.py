@@ -164,15 +164,24 @@ def handler(event, context):
         raise ValueError(f"Unknown variant: {variant}")
     mongo_uri = os.environ["MONGO_URI"]
 
+    # The podcastvideo variant combines the Audio-Video run's masters
+    # (`av_*`), which are kept separate from the classic Lab/GCP run's URLs so
+    # neither overwrites the other.
+    pfx = "av_" if variant == PODCAST_VIDEO_VARIANT else ""
+    h264_field = f"{pfx}h264_master_m3u8_url"
+    h265_field = f"{pfx}h265_master_m3u8_url"
+
     mongo_client = pymongo.MongoClient(mongo_uri)
     episode = mongo_client["chai_q_lab"].video_episodes.find_one(
         {"episode_id": episode_id},
-        {"h264_master_m3u8_url": 1, "h265_master_m3u8_url": 1},
+        {h264_field: 1, h265_field: 1},
     )
-    h264_url = episode.get("h264_master_m3u8_url") if episode else None
-    h265_url = episode.get("h265_master_m3u8_url") if episode else None
+    h264_url = episode.get(h264_field) if episode else None
+    h265_url = episode.get(h265_field) if episode else None
     if not h264_url or not h265_url:
-        raise ValueError(f"Missing h264/h265 URLs for episode {episode_id}")
+        raise ValueError(
+            f"Missing {h264_field}/{h265_field} for episode {episode_id}"
+        )
 
     creds = _get_gcp_credentials()
     gcs_client = gcs.Client(credentials=creds)

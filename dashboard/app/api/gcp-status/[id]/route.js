@@ -8,13 +8,16 @@ const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 const SFN_TERMINAL_STATES = new Set(['FAILED', 'TIMED_OUT', 'ABORTED']);
 
-async function resolveCodecStatus(db, episodeId, episode, codec) {
-  const statusKey = `gcp_job_status_${codec}`;
-  const execArnKey = `gcp_execution_arn_${codec}`;
-  const startedAtKey = `gcp_started_at_${codec}`;
-  const finishedAtKey = `gcp_finished_at_${codec}`;
-  const errorKey = `gcp_error_${codec}`;
-  const jobNameKey = `gcp_job_name_${codec}`;
+// `pfx` selects the field namespace: '' for the classic Lab/GCP run,
+// 'av_' for a run started from the Audio-Video page. The two sets are kept
+// apart so neither overwrites the other's status or master URLs.
+async function resolveCodecStatus(db, episodeId, episode, codec, pfx = '') {
+  const statusKey = `${pfx}gcp_job_status_${codec}`;
+  const execArnKey = `${pfx}gcp_execution_arn_${codec}`;
+  const startedAtKey = `${pfx}gcp_started_at_${codec}`;
+  const finishedAtKey = `${pfx}gcp_finished_at_${codec}`;
+  const errorKey = `${pfx}gcp_error_${codec}`;
+  const jobNameKey = `${pfx}gcp_job_name_${codec}`;
 
   let gcpStatus = episode[statusKey] || null;
   let gcpError = episode[errorKey] || null;
@@ -70,13 +73,17 @@ export async function GET(request, { params }) {
       combined_master_m3u8_url: 1,
       podcastvideo_m3u8_url: 1,
     };
+    projection.av_h264_master_m3u8_url = 1;
+    projection.av_h265_master_m3u8_url = 1;
     for (const codec of ['h264', 'h265']) {
-      projection[`gcp_job_status_${codec}`] = 1;
-      projection[`gcp_execution_arn_${codec}`] = 1;
-      projection[`gcp_started_at_${codec}`] = 1;
-      projection[`gcp_finished_at_${codec}`] = 1;
-      projection[`gcp_error_${codec}`] = 1;
-      projection[`gcp_job_name_${codec}`] = 1;
+      for (const pfx of ['', 'av_']) {
+        projection[`${pfx}gcp_job_status_${codec}`] = 1;
+        projection[`${pfx}gcp_execution_arn_${codec}`] = 1;
+        projection[`${pfx}gcp_started_at_${codec}`] = 1;
+        projection[`${pfx}gcp_finished_at_${codec}`] = 1;
+        projection[`${pfx}gcp_error_${codec}`] = 1;
+        projection[`${pfx}gcp_job_name_${codec}`] = 1;
+      }
     }
 
     let thumb_vtt = null;
@@ -112,17 +119,27 @@ export async function GET(request, { params }) {
       return NextResponse.json({ h264: null, h265: null, thumb_vtt });
     }
 
-    const [h264, h265] = await Promise.all([
+    const [h264, h265, avH264, avH265] = await Promise.all([
       resolveCodecStatus(db, id, episode, 'h264'),
       resolveCodecStatus(db, id, episode, 'h265'),
+      resolveCodecStatus(db, id, episode, 'h264', 'av_'),
+      resolveCodecStatus(db, id, episode, 'h265', 'av_'),
     ]);
 
     return NextResponse.json({
+      // Classic Lab/GCP run — unchanged shape for every existing consumer.
       h264,
       h265,
       h264_master_m3u8_url: episode.h264_master_m3u8_url || null,
       h265_master_m3u8_url: episode.h265_master_m3u8_url || null,
       combined_master_m3u8_url: episode.combined_master_m3u8_url || null,
+      // Audio-Video run — its own status and masters.
+      av: {
+        h264: avH264,
+        h265: avH265,
+        h264_master_m3u8_url: episode.av_h264_master_m3u8_url || null,
+        h265_master_m3u8_url: episode.av_h265_master_m3u8_url || null,
+      },
       podcastvideo_m3u8_url: episode.podcastvideo_m3u8_url || null,
       thumb_vtt,
     });

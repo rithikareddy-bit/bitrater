@@ -51,6 +51,8 @@ export async function GET(request) {
           av_ladder_saved_at: 1,
           gcp_job_status_h264: 1,
           gcp_job_status_h265: 1,
+          av_gcp_job_status_h264: 1,
+          av_gcp_job_status_h265: 1,
         },
       },
     );
@@ -125,10 +127,23 @@ export async function POST(request) {
 
     const existing = await labDb.collection('video_episodes').findOne(
       { episode_id: episodeId },
-      { projection: { gcp_job_status_h264: 1, gcp_job_status_h265: 1, source_fps: 1 } },
+      {
+        projection: {
+          gcp_job_status_h264: 1, gcp_job_status_h265: 1,
+          av_gcp_job_status_h264: 1, av_gcp_job_status_h265: 1,
+          source_fps: 1,
+        },
+      },
     );
+    // Block on either namespace: an Audio-Video run (av_*) is the usual case
+    // here, but a classic run on the same episode also means the ladder is
+    // mid-flight and must not change underneath it.
     const active = ['PENDING', 'RUNNING'];
-    if (active.includes(existing?.gcp_job_status_h264) || active.includes(existing?.gcp_job_status_h265)) {
+    const anyActive = [
+      existing?.gcp_job_status_h264, existing?.gcp_job_status_h265,
+      existing?.av_gcp_job_status_h264, existing?.av_gcp_job_status_h265,
+    ].some((s) => active.includes(s));
+    if (anyActive) {
       return NextResponse.json(
         { error: 'A GCP job is active for this episode — wait for it to finish before changing bitrates.' },
         { status: 409 },

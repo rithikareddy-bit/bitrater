@@ -52,7 +52,7 @@ async function sourceHasAudio(s3Url) {
 
 export async function POST(request) {
   try {
-    const { episodeId, codec } = await request.json();
+    const { episodeId, codec, avRun } = await request.json();
 
     if (!episodeId) {
       return NextResponse.json({ error: 'episodeId is required' }, { status: 400 });
@@ -72,7 +72,16 @@ export async function POST(request) {
 
     const episode = await labDb.collection('video_episodes').findOne({ episode_id: episodeId });
 
-    const statusKey = `gcp_job_status_${codec}`;
+    // Runs started from the /audio-video page keep their own status/URL fields
+    // (`av_` prefix) so a classic Lab/GCP run on the same episode is never
+    // overwritten, and the two never block each other's "already active" check.
+    // Scoped to the RUN, not the episode: the show pipeline and episode page
+    // send no flag and therefore keep writing the classic fields for every
+    // episode — including one that has an Audio-Video ladder saved.
+    const isAvRun = avRun === true;
+    const pfx = isAvRun ? 'av_' : '';
+
+    const statusKey = `${pfx}gcp_job_status_${codec}`;
     const status = episode?.[statusKey];
     if (status === 'RUNNING' || status === 'PENDING') {
       return NextResponse.json(
@@ -148,12 +157,12 @@ export async function POST(request) {
 
     const hasAudio = await sourceHasAudio(s3Url);
 
-    const urlKey = codec === 'h264' ? 'h264_master_m3u8_url' : 'h265_master_m3u8_url';
-    const execArnKey = `gcp_execution_arn_${codec}`;
-    const startedAtKey = `gcp_started_at_${codec}`;
-    const errorKey = `gcp_error_${codec}`;
-    const finishedAtKey = `gcp_finished_at_${codec}`;
-    const jobNameKey = `gcp_job_name_${codec}`;
+    const urlKey = `${pfx}${codec}_master_m3u8_url`;
+    const execArnKey = `${pfx}gcp_execution_arn_${codec}`;
+    const startedAtKey = `${pfx}gcp_started_at_${codec}`;
+    const errorKey = `${pfx}gcp_error_${codec}`;
+    const finishedAtKey = `${pfx}gcp_finished_at_${codec}`;
+    const jobNameKey = `${pfx}gcp_job_name_${codec}`;
     const now = new Date().toISOString();
 
     await labDb.collection('video_episodes').updateOne(
@@ -174,7 +183,10 @@ export async function POST(request) {
     const input = JSON.stringify({
       episode_id: episodeId,
       s3_url: s3Url,
-      golden_recipes: goldenRecipes,
+      // `av_run` rides along inside golden_recipes because that object already
+      // flows through every state of the Step Function to finalize. It is not
+      // persisted to Mongo, and the transcoder reads only `resolutions`.
+      golden_recipes: isAvRun ? { ...goldenRecipes, av_run: true } : goldenRecipes,
       codec,
       source_fps: sourceFps,
       has_audio: hasAudio,

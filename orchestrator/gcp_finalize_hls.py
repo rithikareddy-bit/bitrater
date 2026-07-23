@@ -452,6 +452,25 @@ def _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks):
 # Clear codec-specific CDN files + copy transcoder output
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Audio-Video field namespace
+# ---------------------------------------------------------------------------
+# Runs started from the /audio-video page write their status and master URLs
+# under an `av_` prefix, so a classic Lab/GCP run on the same episode keeps its
+# own records.
+
+def _field_prefix(golden_recipes):
+    """Field namespace for this run.
+
+    "av_" only when the run was started from the /audio-video page, which marks
+    its Step Function payload with `av_run`. NOT derived from the ladder: the
+    show pipeline and the episode page must keep writing the classic fields for
+    every episode — including one that happens to have an Audio-Video ladder
+    saved — or their polling of gcp_job_status_* would never see completion.
+    """
+    return "av_" if (golden_recipes or {}).get("av_run") is True else ""
+
+
 def _build_name_map(slug_prefix, codec):
     """Map original GCP Transcoder output filenames to slug-prefixed names.
 
@@ -701,6 +720,7 @@ def handler(event, context):
     """
     episode_id = event.get("episode_id")
     codec = event.get("codec", "h265")
+    pfx = _field_prefix(event.get("golden_recipes"))
     try:
         return _finalize(event, context)
     except Exception as e:
@@ -709,9 +729,9 @@ def handler(event, context):
             db.video_episodes.update_one(
                 {"episode_id": episode_id},
                 {"$set": {
-                    f"gcp_job_status_{codec}": "FAILED",
-                    f"gcp_error_{codec}": f"finalize: {e}",
-                    f"gcp_finished_at_{codec}": datetime.now(timezone.utc).isoformat(),
+                    f"{pfx}gcp_job_status_{codec}": "FAILED",
+                    f"{pfx}gcp_error_{codec}": f"finalize: {e}",
+                    f"{pfx}gcp_finished_at_{codec}": datetime.now(timezone.utc).isoformat(),
                 }},
             )
         except Exception as e2:
@@ -723,6 +743,7 @@ def _finalize(event, context):
     episode_id = event["episode_id"]
     output_uri = event["output_uri"]
     codec = event.get("codec", "h265")
+    pfx = _field_prefix(event.get("golden_recipes"))
     mongo_uri = os.environ["MONGO_URI"]
     gcs_output_bucket = os.environ["GCS_OUTPUT_BUCKET"]
 
@@ -762,7 +783,7 @@ def _finalize(event, context):
             _patch_master_manifest(creds, cdn_prefix, master_filename, subtitle_tracks)
         except Exception as e:
             print(f"[SUBS] Subtitle injection failed (non-fatal): {e}")
-            finished_key = f"gcp_finished_at_{codec}"
+            finished_key = f"{pfx}gcp_finished_at_{codec}"
             db.video_episodes.update_one(
                 {"episode_id": episode_id},
                 {"$set": {
@@ -773,9 +794,9 @@ def _finalize(event, context):
 
     url_value = f"{CDN_BASE}/{cdn_prefix}/{master_filename}"
 
-    url_key = f"{codec}_master_m3u8_url"
-    status_key = f"gcp_job_status_{codec}"
-    finished_key = f"gcp_finished_at_{codec}"
+    url_key = f"{pfx}{codec}_master_m3u8_url"
+    status_key = f"{pfx}gcp_job_status_{codec}"
+    finished_key = f"{pfx}gcp_finished_at_{codec}"
     update = {
         status_key: "SUCCEEDED",
         finished_key: now_iso,
@@ -793,12 +814,12 @@ def _finalize(event, context):
     # Preserve existing URL for the other codec when $set
     existing = db.video_episodes.find_one(
         {"episode_id": episode_id},
-        {"h264_master_m3u8_url": 1, "h265_master_m3u8_url": 1},
+        {f"{pfx}h264_master_m3u8_url": 1, f"{pfx}h265_master_m3u8_url": 1},
     )
     if codec == "h264":
-        h265_url = existing.get("h265_master_m3u8_url")
+        h265_url = existing.get(f"{pfx}h265_master_m3u8_url")
     else:
-        h264_url = existing.get("h264_master_m3u8_url")
+        h264_url = existing.get(f"{pfx}h264_master_m3u8_url")
 
     mongo_client.close()
 
@@ -808,6 +829,6 @@ def _finalize(event, context):
 
     return {
         "episode_id": episode_id,
-        "h264_master_m3u8_url": h264_url,
-        "h265_master_m3u8_url": h265_url,
+        f"{pfx}h264_master_m3u8_url": h264_url,
+        f"{pfx}h265_master_m3u8_url": h265_url,
     }

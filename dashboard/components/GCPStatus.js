@@ -17,9 +17,10 @@ export default function GCPStatus({
   episodeId,
   goldenRecipes,
   runLabel = 'Run GCP',
-  // Audio-Video page only. Adds a second master button that writes
-  // podcastvideo.m3u8 — same manifest, filename the CDN does not token-enforce.
-  // Off everywhere else, so the episode/trailer pages are unchanged.
+  // Audio-Video page only. Switches this panel to the `av_` field namespace
+  // (its own job status + master URLs, kept apart from the classic Lab/GCP run)
+  // and adds the podcastvideo.m3u8 button. Off everywhere else, so the
+  // episode/trailer pages read and write exactly the fields they always did.
   showPodcastVideo = false,
 }) {
   const [status, setStatus] = useState(null);
@@ -36,6 +37,15 @@ export default function GCPStatus({
   const [pvBusy, setPvBusy] = useState(false);
   const [pvError, setPvError] = useState(null);
   const [pvUrl, setPvUrl] = useState(null);
+  /** Sync-to-podcast picker: episode list, the chosen target, and the write. */
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [podcastEpisodes, setPodcastEpisodes] = useState([]);
+  const [pickerSearch, setPickerSearch] = useState('');
+  const [pickedEpisode, setPickedEpisode] = useState(null);
+  const [pvSyncing, setPvSyncing] = useState(false);
+  const [pvSyncError, setPvSyncError] = useState(null);
+  const [pvSyncOk, setPvSyncOk] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
   const [syncOk, setSyncOk] = useState(null);
@@ -59,7 +69,11 @@ export default function GCPStatus({
     try {
       const res = await fetch(`/api/gcp-status/${episodeId}`);
       const data = await res.json();
-      setStatus(data);
+      // In Audio-Video mode read the `av` sub-object, flattened to the same
+      // shape the rest of this component expects.
+      setStatus(showPodcastVideo && data?.av
+        ? { ...data, ...data.av }
+        : data);
       if (data.combined_master_m3u8_url) {
         setCombinedUrl(data.combined_master_m3u8_url);
       }
@@ -67,8 +81,9 @@ export default function GCPStatus({
         setPvUrl(data.podcastvideo_m3u8_url);
       }
 
-      const h264Done = !data.h264?.gcp_job_status || !['PENDING', 'RUNNING'].includes(data.h264.gcp_job_status);
-      const h265Done = !data.h265?.gcp_job_status || !['PENDING', 'RUNNING'].includes(data.h265.gcp_job_status);
+      const src = showPodcastVideo && data?.av ? data.av : data;
+      const h264Done = !src.h264?.gcp_job_status || !['PENDING', 'RUNNING'].includes(src.h264.gcp_job_status);
+      const h265Done = !src.h265?.gcp_job_status || !['PENDING', 'RUNNING'].includes(src.h265.gcp_job_status);
       if (h264Done && h265Done) {
         clearInterval(pollingRef.current);
         pollingRef.current = null;
@@ -76,7 +91,7 @@ export default function GCPStatus({
     } catch {
       // transient
     }
-  }, [episodeId]);
+  }, [episodeId, showPodcastVideo]);
 
   const startPolling = useCallback(() => {
     if (pollingRef.current) return;
@@ -128,7 +143,7 @@ export default function GCPStatus({
         fetch('/api/gcp', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ episodeId, codec: 'h264' }),
+          body: JSON.stringify({ episodeId, codec: 'h264', avRun: showPodcastVideo }),
         }),
       ];
       if (!isTrailer) {
@@ -199,7 +214,7 @@ export default function GCPStatus({
       const res = await fetch('/api/gcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ episodeId, codec }),
+        body: JSON.stringify({ episodeId, codec, avRun: showPodcastVideo }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'GCP push failed');
@@ -334,6 +349,49 @@ export default function GCPStatus({
       setPvError(err.message);
     } finally {
       setPvBusy(false);
+    }
+  };
+
+  const openPodcastPicker = async () => {
+    setPickerOpen(true);
+    setPvSyncError(null);
+    setPvSyncOk(null);
+    if (podcastEpisodes.length > 0) return;
+    setPickerLoading(true);
+    try {
+      const r = await fetch('/api/audio-video/podcast-episodes');
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Failed to load podcast episodes');
+      setPodcastEpisodes(d.episodes || []);
+    } catch (err) {
+      setPvSyncError(err.message);
+    } finally {
+      setPickerLoading(false);
+    }
+  };
+
+  const handleSyncPodcast = async () => {
+    if (!pickedEpisode) return;
+    setPvSyncing(true);
+    setPvSyncError(null);
+    setPvSyncOk(null);
+    try {
+      const r = await fetch('/api/audio-video/sync-podcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodeId, podcastEpisodeId: pickedEpisode.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Sync failed');
+      setPvSyncOk(`Synced video_url to "${d.episodeTitle || pickedEpisode.title}" (${d.showSlug})`);
+      setPickerOpen(false);
+      setPodcastEpisodes((prev) => prev.map((e) => (
+        e.id === pickedEpisode.id ? { ...e, hasVideoUrl: true, videoUrl: d.video_url } : e
+      )));
+    } catch (err) {
+      setPvSyncError(err.message);
+    } finally {
+      setPvSyncing(false);
     }
   };
 
@@ -543,8 +601,13 @@ export default function GCPStatus({
           {pushing === 'h265' ? <><Spinner /> Running…</> : `▶ ${runLabel} H.265`}
         </button>
 
-        {/* Combined master URL button — enabled only when both codec URLs are ready */}
-        {(() => {
+        {/* Combined master URL button — enabled only when both codec URLs are ready.
+            Hidden in Audio-Video mode: this panel is showing the `av_` masters,
+            while this button's Lambda combines the classic run's URLs. Mixing the
+            two would build a master from the wrong set. The Audio-Video page uses
+            the podcastvideo button below instead; the episode/show pages keep
+            this button exactly as before. */}
+        {!showPodcastVideo && (() => {
           const canCombine =
             !!status?.h264_master_m3u8_url &&
             !!status?.h265_master_m3u8_url &&
@@ -615,6 +678,109 @@ export default function GCPStatus({
         }}>
           <strong style={{ color: '#4ade80' }}>podcastvideo.m3u8 (untokenised):</strong>{' '}
           <span style={{ color: '#e2e8f0' }}>{pvUrl}</span>
+        </div>
+      )}
+
+      {/* Sync → pick a podcast episode by title → write video_url */}
+      {showPodcastVideo && pvUrl && (
+        <div style={{ marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={() => (pickerOpen ? setPickerOpen(false) : openPodcastPicker())}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: '#1d4ed8', color: '#fff',
+              border: 'none', borderRadius: 8, padding: '10px 20px',
+              fontSize: 14, fontWeight: 600,
+              width: '100%', justifyContent: 'center',
+            }}
+          >
+            {pickerOpen ? '✕ Close' : '↗ Sync to podcast_showcache (video_url)'}
+          </button>
+
+          {pickerOpen && (
+            <div style={{
+              marginTop: 8, border: '1px solid #1e293b', borderRadius: 8,
+              background: '#0b1220', padding: 10,
+            }}>
+              <input
+                value={pickerSearch}
+                onChange={(e) => setPickerSearch(e.target.value)}
+                placeholder="Search episode titles…"
+                style={{
+                  width: '100%', background: '#0d0d0d', border: '1px solid #333',
+                  borderRadius: 6, padding: '7px 9px', color: '#e8e8e8', fontSize: 12,
+                  marginBottom: 8,
+                }}
+              />
+              {pickerLoading && <div style={{ color: '#888', fontSize: 12 }}>Loading episodes…</div>}
+              {!pickerLoading && (
+                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                  {podcastEpisodes
+                    .filter((e) => {
+                      const q = pickerSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return String(e.title ?? '').toLowerCase().includes(q);
+                    })
+                    .map((e) => {
+                      const picked = pickedEpisode?.id === e.id;
+                      return (
+                        <button
+                          key={e.id}
+                          type="button"
+                          onClick={() => setPickedEpisode(e)}
+                          style={{
+                            display: 'block', width: '100%', textAlign: 'left',
+                            background: picked ? '#1e3a5f' : 'transparent',
+                            border: `1px solid ${picked ? '#3b82f6' : 'transparent'}`,
+                            borderRadius: 6, padding: '6px 8px', marginBottom: 2,
+                            color: picked ? '#dbeafe' : '#cbd5e1', fontSize: 12,
+                          }}
+                        >
+                          <span style={{ fontWeight: 600 }}>
+                            {e.title || <em style={{ color: '#64748b' }}>Untitled</em>}
+                          </span>
+                          {e.hasVideoUrl && (
+                            <span style={{ color: '#f59e0b', fontSize: 10, marginLeft: 6 }}>
+                              has video_url — will overwrite
+                            </span>
+                          )}
+                          <div style={{ color: '#64748b', fontSize: 10, marginTop: 1 }}>
+                            {e.showSlug} · ep {e.episodeNumber ?? '—'}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  {podcastEpisodes.length === 0 && (
+                    <div style={{ color: '#64748b', fontSize: 12 }}>No podcast episodes found.</div>
+                  )}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleSyncPodcast}
+                disabled={!pickedEpisode || pvSyncing}
+                style={{
+                  marginTop: 8, width: '100%',
+                  background: (pickedEpisode && !pvSyncing) ? '#166534' : '#1e1e1e',
+                  color: (pickedEpisode && !pvSyncing) ? '#fff' : '#555',
+                  border: 'none', borderRadius: 8, padding: '9px 16px',
+                  fontSize: 13, fontWeight: 600,
+                  cursor: (pickedEpisode && !pvSyncing) ? 'pointer' : 'not-allowed',
+                }}
+              >
+                {pvSyncing
+                  ? 'Syncing…'
+                  : pickedEpisode
+                    ? `✓ Selected — sync to "${pickedEpisode.title || pickedEpisode.id}"`
+                    : 'Select an episode above'}
+              </button>
+            </div>
+          )}
+
+          {pvSyncError && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>{pvSyncError}</div>}
+          {pvSyncOk && <div style={{ color: '#22c55e', fontSize: 12, marginTop: 6 }}>{pvSyncOk}</div>}
         </div>
       )}
 
