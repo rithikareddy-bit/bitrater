@@ -453,13 +453,21 @@ def _patch_master_manifest(creds, cdn_prefix, manifest_name, subtitle_tracks):
 # ---------------------------------------------------------------------------
 
 def _build_name_map(slug_prefix, codec):
-    """Map original GCP Transcoder output filenames to slug-prefixed names."""
+    """Map original GCP Transcoder output filenames to slug-prefixed names.
+
+    The source names are the MuxStream keys set in gcp_transcoder.py — keep the
+    two in lockstep: a key renamed there without a matching change here means
+    the rename silently no-ops and files land on the CDN under raw names.
+    """
     name_map = {
         f"{codec}_master.m3u8": f"{slug_prefix}_{codec}.m3u8",
-        f"mux_{codec}_audio.m3u8": f"{slug_prefix}_{codec}_audio.m3u8",
+        f"{codec}_audio.m3u8": f"{slug_prefix}_{codec}_audio.m3u8",
     }
-    for res in ["720p", "480p", "1080p"]:
-        name_map[f"mux_{res}_{codec}_video.m3u8"] = f"{slug_prefix}_{res}_{codec}_video.m3u8"
+    # Covers both ladders: classic 3-rung (1080/720/480) and the 4-rung
+    # Audio-Video ladder (adds 144p). Entries for rungs the job did not produce
+    # are simply never looked up.
+    for res in ["144p", "720p", "480p", "1080p"]:
+        name_map[f"{res}_{codec}_video.m3u8"] = f"{slug_prefix}_{res}_{codec}_video.m3u8"
     return name_map
 
 
@@ -557,7 +565,15 @@ def _correct_init_byterange(creds, cdn_prefix, name_map):
 
 
 def _rename_manifest_refs(creds, cdn_prefix, master_name, name_map):
-    """Replace old sub-manifest filenames inside the master with new slug-prefixed names."""
+    """Replace old sub-manifest filenames inside the master with new slug-prefixed names.
+
+    Matches only at a name boundary. The transcoder's raw names ('720p_h264_video.m3u8')
+    are a *suffix* of their slug-prefixed replacements, so a plain str.replace would
+    re-match an already-renamed reference and double-prefix it on a second pass.
+    A raw reference is always preceded by a quote, slash or line start; a renamed one
+    by the '_' joining it to the slug — so the lookbehind cleanly separates them and
+    makes this idempotent.
+    """
     client = gcs.Client(credentials=creds)
     bucket = client.bucket(CDN_BUCKET)
     blob = bucket.blob(f"{cdn_prefix}/{master_name}")
@@ -566,27 +582,57 @@ def _rename_manifest_refs(creds, cdn_prefix, master_name, name_map):
     text = blob.download_as_text(encoding="utf-8")
     for old_name, new_name in name_map.items():
         if old_name != master_name:
-            text = text.replace(old_name, new_name)
+            text = re.sub(rf'(?<![\w.-]){re.escape(old_name)}', new_name, text)
     blob.cache_control = "public, max-age=2592000"
     blob.upload_from_string(text, content_type=CONTENT_TYPE_M3U8)
     print(f"[RENAME] Updated sub-manifest refs in {master_name}")
 
 
+# Classic 3-rung ladder: 720p first so playback starts on a good-looking rung
+# and can drop to 480p. The 4-rung Audio-Video ladder instead starts on the
+# lowest rung (144p) — see _order_map.
 _RESOLUTION_ORDER = {"720p": 0, "480p": 1, "1080p": 2}
+_LOW_RUNG = "144p"
+_AV_RESOLUTION_ORDER = {"144p": 0, "720p": 1, "480p": 2, "1080p": 3}
 
-def _resolution_rank(stream_inf_line):
-    """Return sort key for a #EXT-X-STREAM-INF line based on RESOLUTION= attribute."""
+
+def _res_tag(stream_inf_line):
+    """Resolution tag for a #EXT-X-STREAM-INF line, or None if it has no RESOLUTION.
+
+    Portrait renditions are WxH with the *width* carrying the rung (144x256,
+    480x854, 720x1280, 1080x1920), so the thresholds walk the width.
+    """
     m = re.search(r'RESOLUTION=(\d+)x(\d+)', stream_inf_line)
     if not m:
-        return 99
+        return None
     width = int(m.group(1))
+    if width <= 144:
+        return "144p"
     if width <= 480:
-        tag = "480p"
-    elif width <= 720:
-        tag = "720p"
-    else:
-        tag = "1080p"
-    return _RESOLUTION_ORDER.get(tag, 99)
+        return "480p"
+    if width <= 720:
+        return "720p"
+    return "1080p"
+
+
+def _order_map(stream_inf_lines):
+    """Pick the rung ordering for this manifest.
+
+    A manifest carrying the 144p rung is an Audio-Video ladder and starts there;
+    anything else keeps the legacy 720p→480p→1080p order untouched.
+    """
+    tags = {_res_tag(line) for line in stream_inf_lines}
+    if _LOW_RUNG in tags:
+        return _AV_RESOLUTION_ORDER
+    return _RESOLUTION_ORDER
+
+
+def _resolution_rank(stream_inf_line, order=None):
+    """Return sort key for a #EXT-X-STREAM-INF line based on RESOLUTION= attribute."""
+    tag = _res_tag(stream_inf_line)
+    if tag is None:
+        return 99
+    return (order or _RESOLUTION_ORDER).get(tag, 99)
 
 
 def _reorder_streams_in_manifest(creds, cdn_prefix, manifest_name):
@@ -614,16 +660,18 @@ def _reorder_streams_in_manifest(creds, cdn_prefix, manifest_name):
             header.append(line)
             i += 1
 
-    stream_blocks.sort(key=lambda b: _resolution_rank(b[0]))
+    order = _order_map([inf for inf, _ in stream_blocks])
+    stream_blocks.sort(key=lambda b: _resolution_rank(b[0], order))
 
     reordered = list(header)
     for inf_line, uri_line in stream_blocks:
         reordered.append(inf_line)
         reordered.append(uri_line)
 
+    order_desc = "→".join(sorted(order, key=order.get))
     blob.cache_control = "public, max-age=2592000"
     blob.upload_from_string("\n".join(reordered) + "\n", content_type=CONTENT_TYPE_M3U8)
-    print(f"[REORDER] Reordered streams in {manifest_name} to 720p→480p→1080p")
+    print(f"[REORDER] Reordered streams in {manifest_name} to {order_desc}")
 
 
 def _fix_audio_name(creds, cdn_prefix, slug, manifest_name):

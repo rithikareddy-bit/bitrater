@@ -2,15 +2,26 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+/**
+ * Ready to run when every rung the recipe carries has a bitrate for this codec.
+ * The rung set is whatever golden_recipes holds — the Lab's 1080/720/480, or
+ * the 4-rung Audio-Video ladder — so this must not assume a fixed list.
+ */
 function hasGoldenForCodec(resolutions, codec) {
-  if (!resolutions) return false;
-  for (const r of ['1080p', '720p', '480p']) {
-    if (!resolutions[r]?.[codec]) return false;
-  }
-  return true;
+  const rungs = Object.keys(resolutions || {});
+  if (rungs.length === 0) return false;
+  return rungs.every((r) => resolutions[r]?.[codec]?.bitrate_kbps != null);
 }
 
-export default function GCPStatus({ episodeId, goldenRecipes }) {
+export default function GCPStatus({
+  episodeId,
+  goldenRecipes,
+  runLabel = 'Run GCP',
+  // Audio-Video page only. Adds a second master button that writes
+  // podcastvideo.m3u8 — same manifest, filename the CDN does not token-enforce.
+  // Off everywhere else, so the episode/trailer pages are unchanged.
+  showPodcastVideo = false,
+}) {
   const [status, setStatus] = useState(null);
   const [pushing, setPushing] = useState(null);
   /** GCP transcoding errors — separate per leg so H.264 + thumbnail VTT do not share one banner. */
@@ -22,6 +33,9 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
   const [combining, setCombining] = useState(false);
   const [combineError, setCombineError] = useState(null);
   const [combinedUrl, setCombinedUrl] = useState(null);
+  const [pvBusy, setPvBusy] = useState(false);
+  const [pvError, setPvError] = useState(null);
+  const [pvUrl, setPvUrl] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
   const [syncOk, setSyncOk] = useState(null);
@@ -48,6 +62,9 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
       setStatus(data);
       if (data.combined_master_m3u8_url) {
         setCombinedUrl(data.combined_master_m3u8_url);
+      }
+      if (data.podcastvideo_m3u8_url) {
+        setPvUrl(data.podcastvideo_m3u8_url);
       }
 
       const h264Done = !data.h264?.gcp_job_status || !['PENDING', 'RUNNING'].includes(data.h264.gcp_job_status);
@@ -301,6 +318,25 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
     }
   };
 
+  const handleCreatePodcastVideo = async () => {
+    setPvBusy(true);
+    setPvError(null);
+    try {
+      const res = await fetch('/api/create-combined-master', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episodeId, variant: 'podcastvideo' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create podcastvideo.m3u8');
+      setPvUrl(data.podcastvideo_m3u8_url);
+    } catch (err) {
+      setPvError(err.message);
+    } finally {
+      setPvBusy(false);
+    }
+  };
+
   const fetchSubsEligibility = useCallback(async () => {
     try {
       const r = await fetch(`/api/resync-subtitles?episodeId=${encodeURIComponent(episodeId)}`);
@@ -489,7 +525,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
             transition: 'background 0.2s', width: '100%', justifyContent: 'center',
           }}
         >
-          {pushing === 'h264' ? <><Spinner /> Running…</> : '▶ Run GCP H.264'}
+          {pushing === 'h264' ? <><Spinner /> Running…</> : `▶ ${runLabel} H.264`}
         </button>
         <button
           onClick={() => handleRunGCP('h265')}
@@ -504,7 +540,7 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
             transition: 'background 0.2s', width: '100%', justifyContent: 'center',
           }}
         >
-          {pushing === 'h265' ? <><Spinner /> Running…</> : '▶ Run GCP H.265'}
+          {pushing === 'h265' ? <><Spinner /> Running…</> : `▶ ${runLabel} H.265`}
         </button>
 
         {/* Combined master URL button — enabled only when both codec URLs are ready */}
@@ -532,7 +568,55 @@ export default function GCPStatus({ episodeId, goldenRecipes }) {
             </button>
           );
         })()}
+
+        {/* Audio-Video only: the same manifest under a filename the CDN does not
+            token-enforce. Independent of the combined button above — neither
+            affects the other's URL or Mongo field. */}
+        {showPodcastVideo && (() => {
+          const canPv =
+            !!status?.h264_master_m3u8_url &&
+            !!status?.h265_master_m3u8_url &&
+            !pvBusy;
+          return (
+            <button
+              onClick={handleCreatePodcastVideo}
+              disabled={!canPv}
+              title={canPv
+                ? 'Writes podcastvideo.m3u8 — same ladder, served without an edge-cache-token'
+                : 'Run both GCP codecs first'}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                background: canPv ? '#166534' : '#1e1e1e',
+                color: canPv ? '#fff' : '#555',
+                border: 'none', borderRadius: 8, padding: '10px 20px',
+                fontSize: 14, fontWeight: 600,
+                cursor: canPv ? 'pointer' : 'not-allowed',
+                transition: 'background 0.2s', width: '100%', justifyContent: 'center',
+                marginTop: 4,
+              }}
+            >
+              {pvBusy ? <><Spinner color="#166534" /> Creating…</> : '⊕ Create podcastvideo.m3u8 (no token)'}
+            </button>
+          );
+        })()}
       </div>
+
+      {showPodcastVideo && pvError && (
+        <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>
+          podcastvideo.m3u8: {pvError}
+        </div>
+      )}
+
+      {showPodcastVideo && pvUrl && (
+        <div style={{
+          marginTop: 10, padding: '8px 12px',
+          background: '#0b2417', border: '1px solid #166534',
+          borderRadius: 6, fontSize: 12, wordBreak: 'break-all',
+        }}>
+          <strong style={{ color: '#4ade80' }}>podcastvideo.m3u8 (untokenised):</strong>{' '}
+          <span style={{ color: '#e2e8f0' }}>{pvUrl}</span>
+        </div>
+      )}
 
       {gcpErr264 && (
         <div style={{ color: '#ef4444', fontSize: 12, marginTop: 8 }}>

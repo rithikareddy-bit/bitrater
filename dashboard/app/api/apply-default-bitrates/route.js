@@ -3,6 +3,7 @@ import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 import { findEpisodeInShowcache, findTrailerInShowcase } from '@/lib/showcacheLookup';
 import { probeTrailerFps } from '@/lib/trailerPrep';
+import { isAudioVideoRecipe } from '@/lib/avLadder';
 
 const TRAILER_ID_RE = /^trailer_([a-f0-9]{24})_(.+)$/;
 
@@ -60,11 +61,26 @@ export async function POST(request) {
 
     const existing = await labDb.collection('video_episodes').findOne(
       { episode_id: episodeId },
-      { projection: { lab_status_h264: 1, lab_status_h265: 1 } },
+      { projection: { lab_status_h264: 1, lab_status_h265: 1, golden_recipes: 1 } },
     );
     if (existing?.lab_status_h264 === 'RUNNING' || existing?.lab_status_h265 === 'RUNNING') {
       return NextResponse.json(
         { error: 'A lab run is currently active for this episode — stop it before applying defaults.' },
+        { status: 409 },
+      );
+    }
+    // This button writes the classic 1080/720/480 ladder. On an episode set up
+    // from the Audio-Video page that would silently drop the 144p rung (and its
+    // loudness normalization) — so refuse and send the operator to the page that
+    // owns that ladder.
+    if (isAudioVideoRecipe(existing?.golden_recipes)) {
+      return NextResponse.json(
+        {
+          error:
+            'This episode uses the Audio-Video ladder (144p/720p/480p/1080p). '
+            + 'Applying the classic defaults here would drop the 144p rung. '
+            + 'Edit its bitrates on the Audio-Video page instead.',
+        },
         { status: 409 },
       );
     }

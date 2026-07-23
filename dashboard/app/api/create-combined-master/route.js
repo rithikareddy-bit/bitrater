@@ -6,7 +6,7 @@ const lambda = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' 
 
 export async function POST(request) {
   try {
-    const { episodeId } = await request.json();
+    const { episodeId, variant } = await request.json();
 
     if (!episodeId) {
       return NextResponse.json({ error: 'episodeId is required' }, { status: 400 });
@@ -40,7 +40,14 @@ export async function POST(request) {
       );
     }
 
-    const payload = JSON.stringify({ episode_id: episodeId });
+    // `variant: 'podcastvideo'` writes the same manifest under podcastvideo.m3u8,
+    // which the CDN serves without a token (enforcement matches *_combined.m3u8).
+    // Omitted → the classic tokenised combined master, unchanged.
+    const isPodcastVideo = variant === 'podcastvideo';
+    const payload = JSON.stringify({
+      episode_id: episodeId,
+      ...(isPodcastVideo ? { variant: 'podcastvideo' } : {}),
+    });
     const cmd = new InvokeCommand({
       FunctionName: lambdaArn,
       Payload: Buffer.from(payload),
@@ -55,9 +62,11 @@ export async function POST(request) {
       return NextResponse.json({ error: errMsg }, { status: 500 });
     }
 
-    return NextResponse.json({
-      combined_master_m3u8_url: responsePayload.combined_master_m3u8_url,
-    });
+    return NextResponse.json(
+      isPodcastVideo
+        ? { podcastvideo_m3u8_url: responsePayload.podcastvideo_m3u8_url }
+        : { combined_master_m3u8_url: responsePayload.combined_master_m3u8_url },
+    );
   } catch (err) {
     console.error('[POST /api/create-combined-master]', err);
     return NextResponse.json({ error: 'Failed to create combined master URL' }, { status: 500 });

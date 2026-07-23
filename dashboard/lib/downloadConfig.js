@@ -6,6 +6,18 @@
 export const RESOLUTIONS = ['1080p', '720p', '480p'];
 export const CODEC_KEYS = ['h264', 'h265'];
 
+/**
+ * Rungs to emit for one recipe: always the classic three (so every existing
+ * download_config keeps its exact shape, null cells included), plus any extra
+ * rung the recipe actually carries — the Audio-Video ladder's 144p. A
+ * classic 3-rung recipe therefore produces a byte-identical document.
+ */
+function rungsFor(goldenRecipes) {
+  const extra = Object.keys(goldenRecipes?.resolutions || {})
+    .filter((res) => !RESOLUTIONS.includes(res));
+  return [...RESOLUTIONS, ...extra];
+}
+
 const FORMULA_LABEL = '(bitrate_kbps * duration_seconds) / 8 / 1024';
 
 /** Coerce to finite number for BSON Double in Mongo (not string). */
@@ -66,7 +78,7 @@ export function buildDownloadConfig(goldenRecipes, durationSeconds, durationSour
   const dur = num(durationSeconds);
   const durationSec = dur != null && dur >= 0 ? dur : 0;
 
-  for (const res of RESOLUTIONS) {
+  for (const res of rungsFor(goldenRecipes)) {
     resolutions[res] = { h264: null, h265: null };
     const resData = goldenRecipes?.resolutions?.[res];
     if (!resData) continue;

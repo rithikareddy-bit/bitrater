@@ -1,6 +1,8 @@
 import { VMAF_THRESHOLDS } from '@/lib/constants';
 
-const RESOLUTIONS = ['1080p', '720p', '480p'];
+// Every rung a ladder can carry: the Lab's three, plus the low rung the
+// Audio-Video ladder adds. Rungs absent from a recipe come back as null.
+const RESOLUTIONS = ['1080p', '720p', '480p', '144p'];
 
 export function stripGolden(gr, codec) {
   const out = {};
@@ -97,10 +99,11 @@ export function buildShowStats(rows, durationById) {
   let withDuration = 0;
   let h264LadderMb = 0;
   let h265LadderMb = 0;
-  const perResMb = {
-    h264: { '1080p': 0, '720p': 0, '480p': 0 },
-    h265: { '1080p': 0, '720p': 0, '480p': 0 },
-  };
+  // Keyed off RESOLUTIONS so the per-rung breakdown always adds up to the
+  // ladder total — including the Audio-Video ladder's low rungs. Consumers read
+  // fixed keys ('1080p', …) and ignore the rest.
+  const zeroPerRes = () => Object.fromEntries(RESOLUTIONS.map((res) => [res, 0]));
+  const perResMb = { h264: zeroPerRes(), h265: zeroPerRes() };
   let episodesWithH264Recipe = 0;
   let episodesWithH265Recipe = 0;
 
@@ -139,7 +142,7 @@ export function buildShowStats(rows, durationById) {
     if (d > 0) {
       if (sum264 > 0) h264LadderMb += kbpsSecondsToEpisodePageMb(sum264, d);
       if (sum265 > 0) h265LadderMb += kbpsSecondsToEpisodePageMb(sum265, d);
-      for (const res of ['1080p', '720p', '480p']) {
+      for (const res of RESOLUTIONS) {
         const a = singleResKbps(row.golden_h264, res);
         const b = singleResKbps(row.golden_h265, res);
         if (a > 0) perResMb.h264[res] += kbpsSecondsToEpisodePageMb(a, d);
@@ -169,11 +172,15 @@ export function buildShowStats(rows, durationById) {
       h265_720_only_display: fmtMb(perResMb.h265['720p']),
       h264_480_only_display: fmtMb(perResMb.h264['480p']),
       h265_480_only_display: fmtMb(perResMb.h265['480p']),
-      per_res: {
-        '1080p': { h264_mb: perResMb.h264['1080p'], h265_mb: perResMb.h265['1080p'] },
-        '720p':  { h264_mb: perResMb.h264['720p'],  h265_mb: perResMb.h265['720p'] },
-        '480p':  { h264_mb: perResMb.h264['480p'],  h265_mb: perResMb.h265['480p'] },
-      },
+      // One entry per rung in RESOLUTIONS, so the per-rung numbers always sum to
+      // *_full_ladder_mb. Low rungs are 0 for classic 3-rung ladders; consumers
+      // read fixed keys ('1080p', …) and ignore the rest.
+      per_res: Object.fromEntries(
+        RESOLUTIONS.map((res) => [
+          res,
+          { h264_mb: perResMb.h264[res], h265_mb: perResMb.h265[res] },
+        ]),
+      ),
       episodesCountedH264: episodesWithH264Recipe,
       episodesCountedH265: episodesWithH265Recipe,
     },

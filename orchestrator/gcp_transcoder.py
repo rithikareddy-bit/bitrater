@@ -20,9 +20,35 @@ PORTRAIT_DIMS = {
     "1080p": (1080, 1920),
     "720p":  (720, 1280),
     "480p":  (480, 854),
+    # Low rung — used by the Audio-Video ladder. Portrait, same 9:16 shape as
+    # the rest of the table: (width, height).
+    "144p":  (144, 256),
 }
 
-RESOLUTIONS = ["720p", "480p", "1080p"]
+# Every rung the pipeline knows how to build, in playlist order
+# (144p first, then the classic 720→480→1080 sequence). A rung is only encoded
+# when golden_recipes carries a bitrate for it (see the `if recipe:` guards
+# below), so the classic 3-rung ladder (1080/720/480) is unaffected by the low
+# rung living in this list.
+RESOLUTIONS = ["144p", "720p", "480p", "1080p"]
+
+# Podcast/spoken-word loudness target, identical to the audio pipeline's
+# AUDIO_LOUDNESS_LUFS default (gcp_audio_transcoder.py). Applied only to
+# Audio-Video ladders — see _build_job_config.
+AUDIO_LUFS = -16.0
+
+
+def _is_audio_video_ladder(golden_recipes):
+    """True for a ladder saved by the /audio-video page.
+
+    Matches on the explicit marker the dashboard writes, falling back to the
+    presence of the 144p rung — the same signal the finalize and combined-master
+    Lambdas use to recognise an Audio-Video ladder.
+    """
+    if (golden_recipes or {}).get("ladder") == "audio_video":
+        return True
+    return "144p" in (golden_recipes or {}).get("resolutions", {})
+
 
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
@@ -111,8 +137,8 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
     codec_lower = (codec or "h265").lower()
 
     if codec_lower == "h264":
-        h264_video_mux_keys = []
-        h264_audio_mux_key = "mux_h264_audio"
+        h264_video_stream_keys = []
+        h264_audio_stream_key = "h264_audio"
         for res_tag in RESOLUTIONS:
             width, height = PORTRAIT_DIMS[res_tag]
             res_recipes = resolutions_data.get(res_tag, {})
@@ -121,19 +147,19 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
                 elementary_streams.append(
                     _build_h264_video_stream(res_tag, h264_recipe["bitrate_kbps"], width, height, frame_rate, gop_dur)
                 )
-                video_mux_key = f"mux_{res_tag}_h264_video"
+                video_stream_key = f"{res_tag}_h264_video"
                 mux_streams.append(types.MuxStream(
-                    key=video_mux_key,
+                    key=video_stream_key,
                     container="fmp4",
                     elementary_streams=[f"{res_tag}_h264"],
                     segment_settings=types.SegmentSettings(
                         segment_duration=gop_dur,
                     ),
                 ))
-                h264_video_mux_keys.append(video_mux_key)
+                h264_video_stream_keys.append(video_stream_key)
         if has_audio:
             mux_streams.append(types.MuxStream(
-                key=h264_audio_mux_key,
+                key=h264_audio_stream_key,
                 container="fmp4",
                 elementary_streams=["audio_aac"],
                 segment_settings=types.SegmentSettings(
@@ -144,13 +170,13 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
             types.Manifest(
                 file_name="h264_master.m3u8",
                 type_=types.Manifest.ManifestType.HLS,
-                mux_streams=h264_video_mux_keys + ([h264_audio_mux_key] if has_audio else []),
+                mux_streams=h264_video_stream_keys + ([h264_audio_stream_key] if has_audio else []),
             ),
         ]
 
     else:
-        h265_mux_keys = []
-        h265_audio_mux_key = "mux_h265_audio"
+        h265_video_stream_keys = []
+        h265_audio_stream_key = "h265_audio"
         for res_tag in RESOLUTIONS:
             width, height = PORTRAIT_DIMS[res_tag]
             res_recipes = resolutions_data.get(res_tag, {})
@@ -159,20 +185,20 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
                 elementary_streams.append(
                     _build_h265_video_stream(res_tag, h265_recipe["bitrate_kbps"], width, height, frame_rate, gop_dur)
                 )
-                video_mux_key = f"mux_{res_tag}_h265_video"
+                video_stream_key = f"{res_tag}_h265_video"
                 mux_streams.append(types.MuxStream(
-                    key=video_mux_key,
+                    key=video_stream_key,
                     container="fmp4",
                     elementary_streams=[f"{res_tag}_h265"],
                     segment_settings=types.SegmentSettings(
                         segment_duration=gop_dur,
                     ),
                 ))
-                h265_mux_keys.append(video_mux_key)
+                h265_video_stream_keys.append(video_stream_key)
 
         if has_audio:
             mux_streams.append(types.MuxStream(
-                key=h265_audio_mux_key,
+                key=h265_audio_stream_key,
                 container="fmp4",
                 elementary_streams=["audio_aac"],
                 segment_settings=types.SegmentSettings(
@@ -183,7 +209,7 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
             types.Manifest(
                 file_name="h265_master.m3u8",
                 type_=types.Manifest.ManifestType.HLS,
-                mux_streams=h265_mux_keys + ([h265_audio_mux_key] if has_audio else []),
+                mux_streams=h265_video_stream_keys + ([h265_audio_stream_key] if has_audio else []),
             ),
         ]
 
@@ -199,8 +225,23 @@ def _build_job_config(gcs_input_uri, golden_recipes, output_uri, codec, frame_ra
         )
         elementary_streams.append(audio_stream)
 
+    # Audio-Video episodes get the same loudness treatment as the podcast audio
+    # pipeline (gcp_audio_transcoder.py): normalize to AUDIO_LUFS so the video's
+    # audio track and the standalone podcast rendition sit at the same level and
+    # the audio↔video toggle has no volume jump. The classic catalog ladder is
+    # left as-is — passing the source through unnormalized, as it always has.
+    job_input = types.Input(key="input0", uri=gcs_input_uri)
+    if has_audio and _is_audio_video_ladder(golden_recipes):
+        job_input = types.Input(
+            key="input0",
+            uri=gcs_input_uri,
+            preprocessing_config=types.PreprocessingConfig(
+                audio=types.PreprocessingConfig.Audio(lufs=AUDIO_LUFS),
+            ),
+        )
+
     return types.JobConfig(
-        inputs=[types.Input(key="input0", uri=gcs_input_uri)],
+        inputs=[job_input],
         elementary_streams=elementary_streams,
         mux_streams=mux_streams,
         manifests=manifests,

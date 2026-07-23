@@ -94,15 +94,24 @@ export async function POST(request) {
       );
     }
 
+    // The ladder is whatever golden_recipes carries — 1080/720/480 from the
+    // Lab, or the 4-rung Audio-Video ladder (144p added). Every rung that
+    // is present must have a recipe for this codec, otherwise the two codecs
+    // would produce ladders of different heights.
     const resolutions = goldenRecipes.resolutions;
-    for (const res of ['1080p', '720p', '480p']) {
-      const recipe = resolutions[res]?.[codec];
-      if (!recipe) {
-        return NextResponse.json(
-          { error: `Missing ${codec.toUpperCase()} golden recipe for ${res} — run the lab first` },
-          { status: 400 },
-        );
-      }
+    const rungs = Object.keys(resolutions);
+    const missing = rungs.filter((res) => !resolutions[res]?.[codec]?.bitrate_kbps);
+    if (rungs.length === 0 || missing.length === rungs.length) {
+      return NextResponse.json(
+        { error: `No ${codec.toUpperCase()} bitrates found — run the lab or save an Audio-Video ladder first` },
+        { status: 400 },
+      );
+    }
+    if (missing.length > 0) {
+      return NextResponse.json(
+        { error: `Missing ${codec.toUpperCase()} bitrate for ${missing.join(', ')}` },
+        { status: 400 },
+      );
     }
 
     // Resolve source URL + (for trailers) the slug prefix seed that the

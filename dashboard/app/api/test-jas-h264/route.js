@@ -47,7 +47,7 @@ function buildH264JobConfig(inputUri, outputUri) {
   }));
   const elementaryStreams = [];
   const muxStreams = [];
-  const videoMuxKeys = [];
+  const videoStreamKeys = [];
   for (const r of ladder) {
     const esKey = `${r.tag}_h264`;
     const bps = r.kbps * 1000;
@@ -71,21 +71,21 @@ function buildH264JobConfig(inputUri, outputUri) {
         },
       },
     });
-    const muxKey = `mux_${r.tag}_h264_video`;
+    const streamKey = `${r.tag}_h264_video`;
     muxStreams.push({
-      key: muxKey,
+      key: streamKey,
       container: 'fmp4',
       elementaryStreams: [esKey],
       segmentSettings: { segmentDuration: gopDuration },
     });
-    videoMuxKeys.push(muxKey);
+    videoStreamKeys.push(streamKey);
   }
   elementaryStreams.push({
     key: 'audio_aac',
     audioStream: { codec: 'aac', bitrateBps: 128000, channelCount: 2, sampleRateHertz: 48000 },
   });
   muxStreams.push({
-    key: 'mux_h264_audio',
+    key: 'h264_audio',
     container: 'fmp4',
     elementaryStreams: ['audio_aac'],
     segmentSettings: { segmentDuration: gopDuration },
@@ -97,7 +97,7 @@ function buildH264JobConfig(inputUri, outputUri) {
     manifests: [{
       fileName: 'h264_master.m3u8',
       type: 'HLS',
-      muxStreams: [...videoMuxKeys, 'mux_h264_audio'],
+      muxStreams: [...videoStreamKeys, 'h264_audio'],
     }],
     output: { uri: outputUri },
   };
