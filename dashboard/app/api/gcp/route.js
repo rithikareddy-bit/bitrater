@@ -1,31 +1,14 @@
 import { NextResponse } from 'next/server';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 import { findEpisodeInShowcache, findTrailerInShowcase } from '@/lib/showcacheLookup';
+import { resolveSourceUrl } from '@/lib/sourceUrl';
 
 const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const execFileAsync = promisify(execFile);
-
-function parseS3Url(url) {
-  const parsed = new URL(url);
-  const host = parsed.hostname;
-  const path = parsed.pathname.replace(/^\//, '');
-  if (host.startsWith('s3') && host.endsWith('.amazonaws.com')) {
-    const bucket = path.split('/', 1)[0];
-    const key = path.slice(bucket.length + 1);
-    const segments = host.split('.');
-    const region = segments.length >= 4 ? segments[1] : undefined;
-    return { bucket, key, region };
-  }
-  const bucket = host.split('.s3')[0];
-  const match = host.match(/\.s3\.([^.]+)\./);
-  return { bucket, key: path, region: match ? match[1] : undefined };
-}
 
 // Detect whether the source has an audio track. GCP Transcoder rejects the job
 // ("atom ... does not have any inputs with an audio track") when the config
@@ -33,15 +16,13 @@ function parseS3Url(url) {
 // On any probe failure we default to true to preserve prior behavior.
 async function sourceHasAudio(s3Url) {
   try {
-    const { bucket, key, region } = parseS3Url(s3Url);
-    const s3 = new S3Client({ region: region || process.env.AWS_REGION || 'ap-south-2' });
-    const presigned = await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: 120 });
+    const { url: probeUrl } = await resolveSourceUrl(s3Url, { expiresIn: 120 });
     const { stdout } = await execFileAsync('ffprobe', [
       '-v', 'error',
       '-select_streams', 'a',
       '-show_entries', 'stream=codec_type',
       '-of', 'csv=p=0',
-      presigned,
+      probeUrl,
     ], { timeout: 30000 });
     return stdout.trim().length > 0;
   } catch (err) {

@@ -1,8 +1,7 @@
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import clientPromise from '@/lib/mongodb';
+import { resolveSourceUrl } from '@/lib/sourceUrl';
 
 const execFileAsync = promisify(execFile);
 
@@ -19,37 +18,11 @@ export function isCombinedUrl(url) {
   return path.endsWith(COMBINED_SUFFIX);
 }
 
-function parseS3Url(url) {
-  const parsed = new URL(url);
-  const host = parsed.hostname;
-  const path = parsed.pathname.replace(/^\//, '');
-
-  if (host.startsWith('s3') && host.endsWith('.amazonaws.com')) {
-    const parts = path.split('/', 1);
-    const bucket = parts[0];
-    const key = path.slice(bucket.length + 1);
-    const segments = host.split('.');
-    const region = segments.length >= 4 ? segments[1] : undefined;
-    return { bucket, key, region };
-  }
-
-  const bucket = host.split('.s3')[0];
-  const key = path;
-  const match = host.match(/\.s3\.([^.]+)\./);
-  const region = match ? match[1] : undefined;
-  return { bucket, key, region };
-}
-
 export async function probeTrailerFps(s3Url) {
-  const { bucket, key, region } = parseS3Url(s3Url);
-  const s3 = new S3Client({ region: region || process.env.AWS_REGION || 'ap-south-2' });
   // URL must outlive the ffprobe timeout below — otherwise a slow probe retries
-  // against an already-expired URL and fails with 403.
-  const presigned = await getSignedUrl(
-    s3,
-    new GetObjectCommand({ Bucket: bucket, Key: key }),
-    { expiresIn: 300 },
-  );
+  // against an already-expired URL and fails with 403. (Only presigned S3 URLs
+  // expire; a direct non-S3 URL is returned unchanged.)
+  const { url: probeUrl, label } = await resolveSourceUrl(s3Url, { expiresIn: 300 });
 
   let stdout;
   try {
@@ -60,7 +33,7 @@ export async function probeTrailerFps(s3Url) {
         '-select_streams', 'v:0',
         '-show_entries', 'stream=r_frame_rate',
         '-of', 'json',
-        presigned,
+        probeUrl,
       ],
       { timeout: 120000, maxBuffer: 1024 * 1024 },
     );
@@ -76,7 +49,7 @@ export async function probeTrailerFps(s3Url) {
       stderr ? `stderr=${stderr}` : null,
     ].filter(Boolean);
     const suffix = parts.length ? ` (${parts.join(' · ')})` : '';
-    const wrapped = new Error(`ffprobe failed for ${bucket}/${key}${suffix}`);
+    const wrapped = new Error(`ffprobe failed for ${label}${suffix}`);
     wrapped.cause = err;
     throw wrapped;
   }

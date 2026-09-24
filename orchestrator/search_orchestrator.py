@@ -321,6 +321,31 @@ def _resolve_pending_for_resolution(
     res_state["test_count"] = _count_non_discarded(tested)
 
 
+def _raise_if_no_scores(res_state, resolution_tag):
+    """Fail the lab when jobs are dying before producing any VMAF score.
+
+    A job that fails after its retry (bad source URL, unreadable file, Mongo
+    write error) says nothing about bitrate, so the binary search would treat
+    it as FAIL, walk the whole ladder on the same failure, and finalize the
+    highest candidate as a fake winner. Raising here routes the Step Function
+    to MarkLabFailed with a real reason instead.
+    """
+    tested = res_state["tested"].values()
+    if any(entry.get("vmaf") is not None for entry in tested):
+        return
+    job_failures = [
+        entry.get("reason") for entry in tested
+        if entry.get("status") == "FAIL" and entry.get("reason") != "FAIL_THRESHOLD"
+    ]
+    if job_failures:
+        raise RuntimeError(
+            f"{resolution_tag}: {len(job_failures)} Batch job(s) failed without a VMAF "
+            f"result ({', '.join(sorted(set(job_failures)))}). The worker could not "
+            f"encode or score this source; check the chai-q-worker logs in "
+            f"/aws/batch/job for the source URL error."
+        )
+
+
 def _choose_best_available(res_state):
     tested = res_state["tested"]
     pass_bitrates = []
@@ -676,6 +701,7 @@ def handler(event, context):
                     run_id=run_id,
                 )
 
+                _raise_if_no_scores(rs, active)
                 actions = _advance_binary(rs)
                 if actions.get("discard"):
                     _discard_jobs(batch_client, rs, actions["discard"])

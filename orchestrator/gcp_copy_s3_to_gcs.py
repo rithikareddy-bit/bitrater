@@ -1,25 +1,35 @@
 """
-State 1 of GCP-Orchestrator: Copy source video from S3 to GCS.
+State 1 of GCP-Orchestrator: Copy source video from S3 (or a direct HTTP(S)
+origin, e.g. Azure Blob) to GCS.
 
-GCP Transcoder requires GCS input. The source lives in S3 (us-east-1) but the
-GCS buckets live in asia-south1 (Mumbai). A single serial upload stream over
-that ~200ms transcontinental RTT is TCP-window-limited (throughput ~= window /
-RTT) regardless of Lambda bandwidth, so large sources couldn't finish inside
-the 900s Lambda ceiling.
+GCP Transcoder requires GCS input. The source usually lives in S3 (us-east-1)
+but the GCS buckets live in asia-south1 (Mumbai). A single serial upload
+stream over that ~200ms transcontinental RTT is TCP-window-limited (throughput
+~= window / RTT) regardless of Lambda bandwidth, so large sources couldn't
+finish inside the 900s Lambda ceiling.
 
 Fix: transfer the source in PARALLEL. Split it into fixed-size byte ranges,
-run up to MAX_WORKERS concurrent S3-range -> GCS-part uploads, then GCS-compose
+run up to MAX_WORKERS concurrent range -> GCS-part uploads, then GCS-compose
 the parts into the final source.mp4. Many streams defeat the single-window
 limit; aggregate throughput is capped only by the Lambda's (memory-scaled)
 network allocation. Small sources take a simple single-shot path to avoid the
 compose overhead.
+
+Some `s3_url` values are not actually S3 (e.g. Sanity dev-store episodes
+uploaded to Azure Blob Storage). Those are public, range-capable HTTPS
+origins, so a plain `urllib` HEAD/ranged-GET fetcher covers them without any
+new credentials — only the byte-fetching layer differs; ranging, retries,
+parallelism, and GCS compose are identical for both sources. See `_S3Source`
+and `_HttpSource` below.
 """
 
+import io
 import os
 import json
+import urllib.request
 import boto3
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from google.cloud import storage as gcs
 from google.oauth2 import service_account
 
@@ -42,44 +52,120 @@ def _get_gcp_credentials():
     return service_account.Credentials.from_service_account_info(info)
 
 
-def _parse_s3_url(s3_url):
-    """Return (bucket, key, region) for both path- and virtual-hosted URLs."""
+class _S3Source:
+    """Fetches ranges from a private S3 object via the S3 API (SigV4 auth)."""
+
+    def __init__(self, bucket, key, region):
+        self.bucket = bucket
+        self.key = key
+        self.client = boto3.client("s3", region_name=region) if region else boto3.client("s3")
+        self.label = f"s3://{bucket}/{key}"
+
+    def content_length(self):
+        return self.client.head_object(Bucket=self.bucket, Key=self.key)["ContentLength"]
+
+    def get_range(self, start, end):
+        """Inclusive [start, end], S3 Range semantics."""
+        resp = self.client.get_object(
+            Bucket=self.bucket, Key=self.key, Range=f"bytes={start}-{end}"
+        )
+        return resp["Body"].read()
+
+    def open_stream(self):
+        return self.client.get_object(Bucket=self.bucket, Key=self.key)["Body"]
+
+
+class _HttpSource:
+    """Fetches ranges from a direct, range-capable HTTPS origin (no auth) --
+    e.g. Azure Blob Storage. Same Range-header semantics as S3: [start, end]
+    inclusive, so no other call site needs to know which source it's talking to.
+    """
+
+    def __init__(self, url):
+        self.url = url
+        self.label = url
+
+    def content_length(self):
+        req = urllib.request.Request(self.url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            length = resp.getheader("Content-Length")
+            if length is None:
+                raise IOError(f"no Content-Length header from {self.url}")
+            return int(length)
+
+    def get_range(self, start, end):
+        req = urllib.request.Request(self.url, headers={"Range": f"bytes={start}-{end}"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            if resp.status not in (200, 206):
+                raise IOError(f"unexpected status {resp.status} fetching range from {self.url}")
+            return resp.read()
+
+    def open_stream(self):
+        # GCS's resumable upload calls stream.tell() up front to check
+        # position (it supports resuming a partial upload). A raw
+        # http.client.HTTPResponse has no tell()/seek() -- only botocore's
+        # StreamingBody (used by _S3Source) happens to support that. Buffer
+        # into BytesIO instead; this path is only used below PART_SIZE
+        # (64 MiB), consistent with the in-memory part buffers used elsewhere
+        # in this module.
+        with urllib.request.urlopen(self.url, timeout=60) as resp:
+            return io.BytesIO(resp.read())
+
+
+def _parse_source_url(s3_url):
+    """Classify `s3_url` and return a fetcher exposing content_length()/
+    get_range()/open_stream(). S3 URLs (path- or virtual-hosted style) get a
+    real S3 client; everything else is treated as a direct HTTPS origin (e.g.
+    Azure Blob) and fetched with plain ranged HTTP -- same interface, so the
+    copy logic below never branches on provider.
+    """
+    s3_url = s3_url.strip()
     parsed = urlparse(s3_url)
-    host = parsed.netloc
-    path = parsed.path.lstrip("/")
+    host = parsed.hostname or ""
+    # S3 keys are stored URL-encoded in some records ("Ep%20-%207"); the S3 API
+    # wants the literal key. _HttpSource keeps the URL as-is.
+    path = unquote(parsed.path.lstrip("/"))
+
+    if parsed.scheme == "s3":
+        # s3://bucket/key (orchestrator/lambda_trigger.py)
+        return _S3Source(parsed.netloc, path, None)
+
     if host.startswith("s3") and host.endswith(".amazonaws.com"):
         parts = path.split("/", 1)
-        s3_bucket = parts[0]
-        s3_key = parts[1] if len(parts) > 1 else ""
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
         region = host.split(".")[1] if host.count(".") >= 3 else None
-    else:
-        s3_bucket = host.split(".s3")[0]
-        s3_key = path
+        return _S3Source(bucket, key, region)
+
+    if host.endswith(".amazonaws.com") and ".s3" in host:
+        bucket = host.split(".s3")[0]
         region = host.split(".s3.")[1].split(".")[0] if ".s3." in host else None
-    return s3_bucket, s3_key, region
+        return _S3Source(bucket, path, region)
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"unsupported source url scheme: {parsed.scheme!r} ({s3_url})")
+    return _HttpSource(s3_url)
 
 
-def _upload_one_part(s3, s3_bucket, s3_key, bucket, part_name, start, end):
-    """Fetch a single S3 byte range and upload it as an independent GCS blob.
+def _upload_one_part(source, bucket, part_name, start, end):
+    """Fetch a single byte range from `source` and upload it as an
+    independent GCS blob.
 
     The range is held as an immutable bytes object (one copy) so the upload is
-    fully retryable. `end` is inclusive (S3 Range semantics).
+    fully retryable. `end` is inclusive.
     """
     length = end - start + 1
     last_err = None
     for attempt in range(1, PART_RETRIES + 1):
         try:
-            resp = s3.get_object(
-                Bucket=s3_bucket, Key=s3_key, Range=f"bytes={start}-{end}"
-            )
-            data = resp["Body"].read()
+            data = source.get_range(start, end)
             if len(data) != length:
                 raise IOError(
                     f"short read on {part_name}: got {len(data)}, expected {length}"
                 )
             bucket.blob(part_name).upload_from_string(data, content_type="video/mp4")
             return part_name
-        except Exception as e:  # transient S3/GCS errors -> retry the range
+        except Exception as e:  # transient source/GCS errors -> retry the range
             last_err = e
             print(f"[PART] {part_name} attempt {attempt}/{PART_RETRIES} failed: {e}")
     raise RuntimeError(f"part {part_name} failed after {PART_RETRIES} attempts: {last_err}")
@@ -144,8 +230,7 @@ def handler(event, context):
     s3_url = event["s3_url"]
     gcs_input_bucket = os.environ["GCS_INPUT_BUCKET"]
 
-    s3_bucket, s3_key, region = _parse_s3_url(s3_url)
-    s3 = boto3.client("s3", region_name=region) if region else boto3.client("s3")
+    source = _parse_source_url(s3_url)
 
     creds = _get_gcp_credentials()
     gcs_client = gcs.Client(credentials=creds, project=os.environ["GCP_PROJECT"])
@@ -163,13 +248,12 @@ def handler(event, context):
     final_name = f"{episode_id}/source.mp4"
     final_blob = bucket.blob(final_name)
 
-    total_size = s3.head_object(Bucket=s3_bucket, Key=s3_key)["ContentLength"]
+    total_size = source.content_length()
 
     if total_size <= PART_SIZE:
         # Small source: a single stream is already fast enough; skip the
         # parts/compose machinery entirely.
-        obj = s3.get_object(Bucket=s3_bucket, Key=s3_key)
-        final_blob.upload_from_file(obj["Body"], content_type="video/mp4")
+        final_blob.upload_from_file(source.open_stream(), content_type="video/mp4")
         print(f"[OK] Copied {total_size} bytes (single-stream) → gs://{gcs_input_bucket}/{final_name}")
     else:
         parts_prefix = f"{episode_id}/{PARTS_SUBDIR}"
@@ -187,10 +271,10 @@ def handler(event, context):
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
                 futures = [
                     pool.submit(
-                        _upload_one_part, s3, s3_bucket, s3_key, bucket,
-                        part_names[i], s, e
+                        _upload_one_part, source, bucket,
+                        part_names[i], start, end
                     )
-                    for (i, s, e) in ranges
+                    for (i, start, end) in ranges
                 ]
                 for fut in as_completed(futures):
                     fut.result()  # re-raise any part failure
@@ -208,7 +292,7 @@ def handler(event, context):
             _delete_quietly([bucket.blob(n) for n in part_names] + intermediates)
 
     gcs_uri = f"gs://{gcs_input_bucket}/{final_name}"
-    print(f"[OK] Copied s3://{s3_bucket}/{s3_key} → {gcs_uri}")
+    print(f"[OK] Copied {source.label} → {gcs_uri}")
 
     if "source_fps" not in event:
         raise ValueError("Missing source_fps in event payload")

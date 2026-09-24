@@ -168,6 +168,11 @@ async function aggregateGrid(db, episodeId, codec) {
     .collection('video_vmaf_research')
     .find({ episode_id: episodeId, codec: codecLib })
     .toArray();
+  // Every worker failed before writing a trial (bad source URL, unreadable file).
+  // Throw so callers mark the lab FAILED instead of COMPLETE with no winners.
+  if (!results.some((r) => r.vmaf_score != null)) {
+    throw new Error(`no VMAF results for ${episodeId}/${codec} — all Batch jobs failed; check the chai-q-worker logs in /aws/batch/job`);
+  }
 
   const existing = await db.collection('video_episodes').findOne(
     { episode_id: episodeId },
@@ -422,6 +427,19 @@ export async function runParallelResolLab(runIdStr) {
   // Final sweep: aggregate any grid that finished on the very last tick (or whose
   // aggregate write blipped) so no episode is left un-COMPLETE.
   await aggregateReadyGrids();
+
+  // Grids still un-aggregated after the final sweep are real failures (e.g. no
+  // trial ever landed) — surface them instead of leaving the lab RUNNING forever.
+  for (const key of gridsToRun) {
+    if (gridAggregated.has(key)) continue;
+    const sep = key.indexOf('|');
+    const episodeId = key.slice(0, sep);
+    const codec = key.slice(sep + 1);
+    await db.collection('video_episodes').updateOne(
+      { episode_id: episodeId },
+      { $set: { [`lab_status_${codec}`]: 'FAILED', [`lab_error_${codec}`]: 'Aggregation failed: no VMAF results — all Batch jobs failed; check the chai-q-worker logs in /aws/batch/job' } },
+    ).catch((err) => console.warn(`[parallelResol] mark FAILED ${key} failed:`, err.message));
+  }
 
   // All grids terminal. Release the engine lock. orchestrate() (running as the
   // driver) has been enqueuing GCP per episode as each grid completed, and keeps

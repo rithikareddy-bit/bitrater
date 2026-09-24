@@ -1,5 +1,5 @@
-import os, subprocess, json, sys, re, pymongo, boto3
-from urllib.parse import urlparse
+import os, subprocess, json, sys, re, shutil, urllib.request, pymongo, boto3
+from urllib.parse import urlparse, unquote
 from datetime import datetime, timezone
 from fractions import Fraction
 
@@ -30,6 +30,40 @@ def _get_video_info(path):
 
 def get_s3_client():
     return boto3.client('s3')
+
+def _download_source(url, dest):
+    """Download the source video to `dest`. `S3_URL` is not always S3: Sanity
+    dev-store episodes point at public Azure Blob URLs. Dispatch on the host
+    (mirrors dashboard/lib/sourceUrl.js) -- the old parser sent every non-path-
+    style URL down the virtual-hosted S3 branch, so an Azure host became a bogus
+    bucket name and HeadObject 404'd."""
+    parsed = urlparse(url.strip())
+    host = parsed.hostname or ""
+    # S3 keys are stored URL-encoded in some records ("Ep%20-%207"); the S3 API
+    # wants the literal key. HTTP origins below get the URL untouched.
+    path = unquote(parsed.path.lstrip('/'))
+    if parsed.scheme == "s3":
+        # s3://bucket/key (orchestrator/lambda_trigger.py)
+        bucket, key, region = parsed.netloc, path, None
+    elif host.startswith("s3") and host.endswith(".amazonaws.com"):
+        # Path-style: https://s3.region.amazonaws.com/bucket/key
+        parts = path.split("/", 1)
+        bucket, key = parts[0], parts[1] if len(parts) > 1 else ""
+        region = host.split(".")[1] if host.count(".") >= 3 else None
+    elif host.endswith(".amazonaws.com") and ".s3" in host:
+        # Virtual-hosted: https://bucket.s3.region.amazonaws.com/key
+        bucket = host.split(".s3")[0]
+        key = path
+        region = host.split(".s3.")[1].split(".")[0] if ".s3." in host else None
+    else:
+        # Direct HTTP(S) origin (Azure Blob, CDN) -- stream to disk.
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Unsupported source URL scheme: {parsed.scheme!r}")
+        with urllib.request.urlopen(url.strip(), timeout=60) as resp, open(dest, "wb") as f:
+            shutil.copyfileobj(resp, f, length=8 * 1024 * 1024)
+        return
+    s3 = boto3.client('s3', region_name=region) if region else get_s3_client()
+    s3.download_file(bucket, key, dest)
 
 CODEC_TO_CONFIG = {"libx264": "h264", "libx265": "h265"}
 
@@ -118,21 +152,7 @@ def run_research():
     scale_w, scale_h = res_dims["width"], res_dims["height"]
     resolution_tag = f"{resolution}p"
 
-    parsed = urlparse(s3_url)
-    host = parsed.netloc
-    path = parsed.path.lstrip('/')
-    if host.startswith("s3") and host.endswith(".amazonaws.com"):
-        # Path-style: https://s3.region.amazonaws.com/bucket/key
-        parts = path.split("/", 1)
-        bucket, key = parts[0], parts[1] if len(parts) > 1 else ""
-        region = host.split(".")[1] if host.count(".") >= 3 else None
-    else:
-        # Virtual-hosted: https://bucket.s3.region.amazonaws.com/key
-        bucket = host.split(".s3")[0]
-        key = path
-        region = host.split(".s3.")[1].split(".")[0] if ".s3." in host else None
-    s3 = boto3.client('s3', region_name=region) if region else get_s3_client()
-    s3.download_file(bucket, key, 'source.mp4')
+    _download_source(s3_url, 'source.mp4')
 
     info = _get_video_info("source.mp4")
     w, h = info["width"], info["height"]
@@ -242,20 +262,8 @@ def run_search():
     candidates = search_cfg["candidates"]
     threshold = search_cfg["threshold"]
 
-    # Download source ONCE (same URL parsing as run_research).
-    parsed = urlparse(s3_url)
-    host = parsed.netloc
-    path = parsed.path.lstrip('/')
-    if host.startswith("s3") and host.endswith(".amazonaws.com"):
-        parts = path.split("/", 1)
-        bucket, key = parts[0], parts[1] if len(parts) > 1 else ""
-        region = host.split(".")[1] if host.count(".") >= 3 else None
-    else:
-        bucket = host.split(".s3")[0]
-        key = path
-        region = host.split(".s3.")[1].split(".")[0] if ".s3." in host else None
-    s3 = boto3.client('s3', region_name=region) if region else get_s3_client()
-    s3.download_file(bucket, key, 'source.mp4')
+    # Download source ONCE (same helper as run_research).
+    _download_source(s3_url, 'source.mp4')
 
     info = _get_video_info("source.mp4")
     w, h = info["width"], info["height"]
