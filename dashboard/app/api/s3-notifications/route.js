@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,7 @@ export async function GET(request) {
     const limit = Math.min(parseInt(searchParams.get('limit') || '100', 10), 200);
 
     const client = await clientPromise();
-    const db = client.db('master');
+    const db = client.db(DB_MASTER);
 
     const filter = {};
     if (showId) filter.show_id = showId;

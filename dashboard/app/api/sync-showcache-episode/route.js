@@ -1,13 +1,12 @@
 import { NextResponse } from 'next/server';
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { invokeFunction, needsLambdaArn } from '@/lib/invoke';
 import clientPromise from '@/lib/mongodb';
 import { buildDownloadConfig } from '@/lib/downloadConfig';
 import { resolveDurationForLabEpisode } from '@/lib/labEpisodeDuration';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-const lambda = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 /**
  * POST /api/sync-showcache-episode
@@ -31,7 +30,7 @@ export async function POST(request) {
     }
 
     const lambdaArn = process.env.RESIGN_PLAYBACK_URLS_LAMBDA_ARN;
-    if (!lambdaArn) {
+    if (!lambdaArn && needsLambdaArn('resign-playback-urls')) {
       return NextResponse.json(
         { error: 'RESIGN_PLAYBACK_URLS_LAMBDA_ARN not configured' },
         { status: 500 },
@@ -39,8 +38,8 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
-    const masterDb = client.db('master');
+    const labDb = client.db(DB_LAB);
+    const masterDb = client.db(DB_MASTER);
 
     const ve = await labDb.collection('video_episodes').findOne(
       { episode_id: episodeId },
@@ -72,10 +71,10 @@ export async function POST(request) {
       episode_id: episodeId,
       canonical_url: canonicalUrl,
     });
-    const result = await lambda.send(new InvokeCommand({
+    const result = await invokeFunction('resign-playback-urls', {
       FunctionName: lambdaArn,
       Payload: Buffer.from(payload),
-    }));
+    });
     const resigner = JSON.parse(Buffer.from(result.Payload).toString());
 
     if (result.FunctionError) {

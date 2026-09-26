@@ -4,6 +4,8 @@ import {
   getS3, UPLOAD_BUCKET, PART_SIZE, signUploadToken, buildEpisodeKey, sanitizeSlug, contentTypeFor,
 } from '@/lib/uploadConfig';
 import { getProdShowcase, findEpisode } from '@/lib/uploadMongo';
+import { UPLOAD_PROVIDER } from '@/lib/config';
+import { AZURE_ACCOUNT, AZURE_CONTAINER } from '@/lib/blobUpload';
 
 export async function POST(request) {
   try {
@@ -28,6 +30,29 @@ export async function POST(request) {
     }
 
     const key = buildEpisodeKey({ slug, episodeNumber, fileName });
+
+    // Azure Blob: nothing to create up front; blocks are committed at complete.
+    // The provider rides in the signed token so an upload always finishes where it started.
+    if (UPLOAD_PROVIDER === 'azure') {
+      const uploadToken = signUploadToken({
+        provider: 'azure',
+        slug,
+        episodeNumber,
+        account: AZURE_ACCOUNT,
+        container: AZURE_CONTAINER,
+        key,
+        contentType: contentTypeFor(fileName),
+        issuedAt: Date.now(),
+      });
+      return NextResponse.json({
+        uploadToken,
+        key,
+        bucket: AZURE_CONTAINER,
+        partSize: PART_SIZE,
+        existingS3Url: episode?.s3_url || null,
+      });
+    }
+
     const s3 = getS3();
     const out = await s3.send(new CreateMultipartUploadCommand({
       Bucket: UPLOAD_BUCKET,

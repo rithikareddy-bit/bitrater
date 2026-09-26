@@ -5,6 +5,7 @@ import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 import { findEpisodeInShowcache, findTrailerInShowcase } from '@/lib/showcacheLookup';
 import { resolveSourceUrl } from '@/lib/sourceUrl';
+import { DB_MASTER } from '@/lib/config';
 
 const TRAILER_ID_RE = /^trailer_([a-f0-9]{24})_(.+)$/;
 
@@ -20,7 +21,7 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const masterDb = client.db('master');
+    const masterDb = client.db(DB_MASTER);
     const trailerMatch = TRAILER_ID_RE.exec(episodeId);
     let s3Url;
     if (trailerMatch) {

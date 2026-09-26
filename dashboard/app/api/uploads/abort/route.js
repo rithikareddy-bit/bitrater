@@ -8,6 +8,8 @@ async function handle(request) {
     const body = text ? JSON.parse(text) : {};
     const t = verifyUploadToken(body.uploadToken);
     if (!t) return NextResponse.json({ error: 'invalid uploadToken' }, { status: 401 });
+    // Azure: uncommitted blocks are garbage-collected by the service after 7 days.
+    if (t.provider === 'azure') return NextResponse.json({ ok: true });
     await getS3().send(new AbortMultipartUploadCommand({
       Bucket: t.bucket, Key: t.key, UploadId: t.uploadId,
     }));

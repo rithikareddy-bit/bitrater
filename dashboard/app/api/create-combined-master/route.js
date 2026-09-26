@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { invokeFunction, needsLambdaArn } from '@/lib/invoke';
 import clientPromise from '@/lib/mongodb';
-
-const lambda = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
+import { DB_LAB } from '@/lib/config';
 
 export async function POST(request) {
   try {
@@ -13,7 +12,7 @@ export async function POST(request) {
     }
 
     const lambdaArn = process.env.CREATE_COMBINED_MASTER_LAMBDA_ARN;
-    if (!lambdaArn) {
+    if (!lambdaArn && needsLambdaArn('create-combined-master')) {
       return NextResponse.json(
         { error: 'CREATE_COMBINED_MASTER_LAMBDA_ARN not configured' },
         { status: 500 },
@@ -21,7 +20,7 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const db = client.db('chai_q_lab');
+    const db = client.db(DB_LAB);
     const episode = await db.collection('video_episodes').findOne(
       { episode_id: episodeId },
       { projection: { h264_master_m3u8_url: 1, h265_master_m3u8_url: 1 } },
@@ -48,12 +47,12 @@ export async function POST(request) {
       episode_id: episodeId,
       ...(isPodcastVideo ? { variant: 'podcastvideo' } : {}),
     });
-    const cmd = new InvokeCommand({
+    const cmd = {
       FunctionName: lambdaArn,
       Payload: Buffer.from(payload),
-    });
+    };
 
-    const result = await lambda.send(cmd);
+    const result = await invokeFunction('create-combined-master', cmd);
     const responsePayload = JSON.parse(Buffer.from(result.Payload).toString());
 
     if (result.FunctionError) {

@@ -3,6 +3,7 @@ import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 import { findEpisodeInShowcache, findTrailerInShowcase } from '@/lib/showcacheLookup';
 import { resolveDurationForLabEpisode } from '@/lib/labEpisodeDuration';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -15,7 +16,7 @@ export async function GET(request, { params }) {
   try {
     const client = await clientPromise();
 
-    const labDb = client.db('chai_q_lab');
+    const labDb = client.db(DB_LAB);
     const [research, golden] = await Promise.all([
       // No cap: an arbitrary .limit() can drop an entire codec from the R-D chart while
       // lab_status / golden_recipes still reflect a complete run (aggregator has no limit).
@@ -23,7 +24,7 @@ export async function GET(request, { params }) {
       labDb.collection('video_episodes').findOne({ episode_id: id }),
     ]);
 
-    const masterDb = client.db('master');
+    const masterDb = client.db(DB_MASTER);
     const trailerMatch = TRAILER_ID_RE.exec(id);
     let episodeMeta = null;
     let videoUrl = null;

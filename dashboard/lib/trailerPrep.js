@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import clientPromise from '@/lib/mongodb';
 import { resolveSourceUrl } from '@/lib/sourceUrl';
+import { DB_LAB } from '@/lib/config';
 
 const execFileAsync = promisify(execFile);
 
@@ -86,7 +87,7 @@ function buildGoldenRecipes() {
 
 async function readTrailerLabState(episodeId) {
   const client = await clientPromise();
-  const labDb = client.db('chai_q_lab');
+  const labDb = client.db(DB_LAB);
   return labDb.collection('video_episodes').findOne(
     { episode_id: episodeId },
     {
@@ -103,7 +104,7 @@ async function readTrailerLabState(episodeId) {
 
 export async function writeTrailerLabState({ episodeId, sourceFps, s3Url }) {
   const client = await clientPromise();
-  const labDb = client.db('chai_q_lab');
+  const labDb = client.db(DB_LAB);
   const goldenRecipes = buildGoldenRecipes();
   const nowIso = new Date().toISOString();
 
@@ -149,7 +150,7 @@ export async function prepareTrailer({ episodeId, s3Url }) {
     // Cache hit — ensure lab_status is COMPLETE but don't touch source_fps/golden.
     if (existing.lab_status_h264 !== 'COMPLETE' || existing.lab_status_h265 !== 'COMPLETE') {
       const client = await clientPromise();
-      const labDb = client.db('chai_q_lab');
+      const labDb = client.db(DB_LAB);
       await labDb.collection('video_episodes').updateOne(
         { episode_id: episodeId },
         { $set: { lab_status_h264: 'COMPLETE', lab_status_h265: 'COMPLETE' } },
@@ -182,7 +183,7 @@ export async function hasS3UrlDrifted({ episodeId, s3Url }) {
  */
 export async function readCombinedMasterUrl(episodeId) {
   const client = await clientPromise();
-  const labDb = client.db('chai_q_lab');
+  const labDb = client.db(DB_LAB);
   const doc = await labDb.collection('video_episodes').findOne(
     { episode_id: episodeId },
     { projection: { combined_master_m3u8_url: 1 } },

@@ -22,10 +22,12 @@ import requests
 from datetime import datetime, timezone
 from google.cloud import storage as gcs
 from google.oauth2 import service_account
+import runtime_config
+import secret_store
 
 
 CDN_BASE = os.environ["CDN_BASE"]
-CDN_BUCKET = "chai-shots-manifests"
+CDN_BUCKET = runtime_config.CDN_BUCKET
 
 # WebVTT and HLS manifests must be UTF-8 (Telugu, smart quotes, etc.).
 # Do not rely on HTTP Content-Type charset or requests' guessed encoding for VTT bodies.
@@ -243,9 +245,7 @@ def _get_gcp_credentials():
     if _gcp_credentials_cache is not None:
         return _gcp_credentials_cache
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
-    sm = boto3.client("secretsmanager")
-    secret = sm.get_secret_value(SecretId=secret_arn)
-    info = json.loads(secret["SecretString"])
+    info = secret_store.get_json(secret_arn)
     _gcp_credentials_cache = service_account.Credentials.from_service_account_info(info)
     return _gcp_credentials_cache
 
@@ -260,7 +260,7 @@ def _get_episode_meta(db, episode_id):
     up showcache.trailers_playback_urls by _key. Trailers have no episode_number
     or slug of their own so we substitute the _key for stable output file names.
     """
-    master_db = db.client["master"]
+    master_db = db.client[runtime_config.DB_MASTER]
 
     trailer_match = _TRAILER_ID_RE.match(episode_id)
     if trailer_match:
@@ -313,7 +313,7 @@ def _get_subtitle_vtt_urls(episode_id):
 
     client = pymongo.MongoClient(subtitle_uri)
     try:
-        db = client["gld2sqs"]
+        db = client[runtime_config.DB_SUBTITLES]
         doc = db["subtitles"].find_one(
             {"episodes.episode_id": episode_id},
             {"episodes.$": 1, "source_language": 1},
@@ -725,7 +725,7 @@ def handler(event, context):
         return _finalize(event, context)
     except Exception as e:
         try:
-            db = pymongo.MongoClient(os.environ["MONGO_URI"])["chai_q_lab"]
+            db = pymongo.MongoClient(os.environ["MONGO_URI"])[runtime_config.DB_LAB]
             db.video_episodes.update_one(
                 {"episode_id": episode_id},
                 {"$set": {
@@ -748,7 +748,7 @@ def _finalize(event, context):
     gcs_output_bucket = os.environ["GCS_OUTPUT_BUCKET"]
 
     mongo_client = pymongo.MongoClient(mongo_uri)
-    db = mongo_client["chai_q_lab"]
+    db = mongo_client[runtime_config.DB_LAB]
 
     _now = datetime.now(timezone.utc)
     folder_ts = _now.strftime("%d%m%Y_%H%M%S")

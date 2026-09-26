@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -34,8 +35,8 @@ export async function GET() {
   const alerts = [];
   try {
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
-    const masterDb = client.db('master');
+    const labDb = client.db(DB_LAB);
+    const masterDb = client.db(DB_MASTER);
 
     const runs = await labDb.collection('playback_resign_runs')
       .find({}, { projection: { started_at: 1, finished_at: 1, duration_s: 1, updated_count: 1, errors: 1 } })

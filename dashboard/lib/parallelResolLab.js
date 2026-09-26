@@ -17,12 +17,7 @@
 // This path is entirely separate from the serial "Run Pipeline" flow.
 
 import { ObjectId } from 'mongodb';
-import {
-  BatchClient,
-  SubmitJobCommand,
-  DescribeJobsCommand,
-  TerminateJobCommand,
-} from '@aws-sdk/client-batch';
+import { submitJob, describeJobs, terminateJob } from '@/lib/jobs';
 import { randomUUID } from 'crypto';
 import clientPromise from '@/lib/mongodb';
 import {
@@ -36,8 +31,8 @@ import {
   gridKey,
   resolutionEnvValue,
 } from '@/lib/gridLadders';
+import { DB_LAB } from '@/lib/config';
 
-const REGION = process.env.AWS_REGION || 'us-east-1';
 const JOB_QUEUE = process.env.BATCH_JOB_QUEUE || 'chai-q-queue';
 const JOB_DEFINITION = process.env.BATCH_JOB_DEFINITION || 'chai-q-worker';
 
@@ -49,8 +44,6 @@ const MAX_POOL = 128;
 const POLL_MS = 10_000; // Batch DescribeJobs cadence
 const MAX_ENCODE_RETRIES = 2; // requeue a spot-killed / failed encode this many times
 const DESCRIBE_CHUNK = 100; // DescribeJobs accepts <=100 job IDs per call
-
-const batch = new BatchClient({ region: REGION });
 
 function nowIso() {
   return new Date().toISOString();
@@ -67,24 +60,21 @@ async function submitUnit(unit, labRunId) {
   const jobName =
     `ParallelResol-${unit.episode_id.slice(0, 20)}-${unit.codec}-` +
     `${unit.resolution_env}-${randomUUID().slice(0, 6)}`;
-  const resp = await batch.send(
-    new SubmitJobCommand({
-      jobName: jobName.slice(0, 128),
-      jobQueue: JOB_QUEUE,
-      jobDefinition: JOB_DEFINITION,
-      containerOverrides: {
-        environment: [
-          { name: 'LAB_MODE', value: 'search' }, // triggers in-container binary search in worker.py
-          { name: 'CODEC', value: unit.codec_lib },
-          { name: 'RESOLUTION', value: unit.resolution_env },
-          { name: 'S3_URL', value: unit.s3_url },
-          { name: 'EPISODE_ID', value: unit.episode_id },
-          { name: 'LAB_RUN_ID', value: labRunId },
-        ],
-      },
-    }),
-  );
-  return resp.jobId;
+  return submitJob('lab', {
+    jobName: jobName.slice(0, 128),
+    jobQueue: JOB_QUEUE,
+    jobDefinition: JOB_DEFINITION,
+    containerOverrides: {
+      environment: [
+        { name: 'LAB_MODE', value: 'search' }, // triggers in-container binary search in worker.py
+        { name: 'CODEC', value: unit.codec_lib },
+        { name: 'RESOLUTION', value: unit.resolution_env },
+        { name: 'S3_URL', value: unit.s3_url },
+        { name: 'EPISODE_ID', value: unit.episode_id },
+        { name: 'LAB_RUN_ID', value: labRunId },
+      ],
+    },
+  });
 }
 
 // Submit ONE single-bitrate encode. No LAB_MODE → the worker runs run_research()
@@ -94,24 +84,21 @@ async function submitBitrate(item, labRunId) {
   const jobName =
     `BitrateResol-${item.episode_id.slice(0, 16)}-${item.codec}-` +
     `${item.resolution_env}-${item.bitrate}-${randomUUID().slice(0, 6)}`;
-  const resp = await batch.send(
-    new SubmitJobCommand({
-      jobName: jobName.slice(0, 128),
-      jobQueue: JOB_QUEUE,
-      jobDefinition: JOB_DEFINITION,
-      containerOverrides: {
-        environment: [
-          { name: 'CODEC', value: item.codec_lib },
-          { name: 'RESOLUTION', value: item.resolution_env },
-          { name: 'BITRATE', value: String(item.bitrate) },
-          { name: 'S3_URL', value: item.s3_url },
-          { name: 'EPISODE_ID', value: item.episode_id },
-          { name: 'LAB_RUN_ID', value: labRunId },
-        ],
-      },
-    }),
-  );
-  return resp.jobId;
+  return submitJob('lab', {
+    jobName: jobName.slice(0, 128),
+    jobQueue: JOB_QUEUE,
+    jobDefinition: JOB_DEFINITION,
+    containerOverrides: {
+      environment: [
+        { name: 'CODEC', value: item.codec_lib },
+        { name: 'RESOLUTION', value: item.resolution_env },
+        { name: 'BITRATE', value: String(item.bitrate) },
+        { name: 'S3_URL', value: item.s3_url },
+        { name: 'EPISODE_ID', value: item.episode_id },
+        { name: 'LAB_RUN_ID', value: labRunId },
+      ],
+    },
+  });
 }
 
 const TERMINAL_OK = 'SUCCEEDED';
@@ -123,8 +110,7 @@ async function describeTerminal(jobIds) {
   const terminal = new Map();
   for (let i = 0; i < jobIds.length; i += DESCRIBE_CHUNK) {
     const chunk = jobIds.slice(i, i + DESCRIBE_CHUNK);
-    const resp = await batch.send(new DescribeJobsCommand({ jobs: chunk }));
-    for (const job of resp.jobs || []) {
+    for (const job of await describeJobs(chunk)) {
       if (job.status === TERMINAL_OK || job.status === TERMINAL_FAIL) {
         terminal.set(job.jobId, job.status);
       }
@@ -135,11 +121,7 @@ async function describeTerminal(jobIds) {
 
 async function terminateAll(jobIds, reason) {
   await Promise.all(
-    jobIds.map((jobId) =>
-      batch
-        .send(new TerminateJobCommand({ jobId, reason }))
-        .catch(() => {}),
-    ),
+    jobIds.map((jobId) => terminateJob(jobId, reason).catch(() => {})),
   );
 }
 
@@ -221,7 +203,7 @@ export async function runParallelResolLab(runIdStr) {
   const runId = new ObjectId(runIdStr);
   const instanceId = `pr-${randomUUID().slice(0, 8)}`;
   const client = await clientPromise();
-  const db = client.db('chai_q_lab');
+  const db = client.db(DB_LAB);
   const col = db.collection('pipeline_runs');
 
   // Engine lock — SEPARATE from orchestrate()'s locked_by. orchestrate() is the
@@ -455,7 +437,7 @@ export async function runParallelResolLab(runIdStr) {
 // aggregateGrid so behaviour matches the show-level path.
 export async function runEpisodeGrid(episodeId, s3Url, codec) {
   const client = await clientPromise();
-  const db = client.db('chai_q_lab');
+  const db = client.db(DB_LAB);
   const veCol = db.collection('video_episodes');
   const codecLib = CODEC_LIB[codec];
   const labRunId = randomUUID();
@@ -559,7 +541,7 @@ export async function runEpisodeGrid(episodeId, s3Url, codec) {
 // winner is exact. LAB-ONLY (no GCP), matching runEpisodeGrid.
 export async function runEpisodeBitrateResol(episodeId, s3Url, codec) {
   const client = await clientPromise();
-  const db = client.db('chai_q_lab');
+  const db = client.db(DB_LAB);
   const veCol = db.collection('video_episodes');
   const codecLib = CODEC_LIB[codec];
   const labRunId = randomUUID();

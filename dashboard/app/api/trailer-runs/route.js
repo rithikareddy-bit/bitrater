@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -15,7 +16,7 @@ export async function GET(request) {
     const limit = Math.min(parseInt(searchParams.get('limit') || '30', 10), 200);
 
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
+    const labDb = client.db(DB_LAB);
 
     // Pull extra runs so the flattened per-trailer list has enough rows even
     // when some runs had only a handful of trailers.

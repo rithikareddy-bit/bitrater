@@ -1,6 +1,7 @@
 """Called from Step Function Catch when Map or aggregator fails — unblocks /api/push retries."""
 import os
 import pymongo
+import runtime_config
 
 
 def handler(event, context):
@@ -17,7 +18,7 @@ def handler(event, context):
     if not mongo_uri:
         return {"ok": False, "error": "MONGO_URI not set"}
 
-    db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
+    db = pymongo.MongoClient(mongo_uri)[runtime_config.DB_LAB]
     if codec in ("h264", "h265"):
         status_key = f"lab_status_{codec}"
         error_key = f"lab_error_{codec}"

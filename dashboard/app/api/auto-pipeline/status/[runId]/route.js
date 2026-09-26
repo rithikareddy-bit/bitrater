@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -14,7 +15,7 @@ export async function GET(request, { params }) {
     }
 
     const client = await clientPromise();
-    const run = await client.db('chai_q_lab').collection('pipeline_runs').findOne(
+    const run = await client.db(DB_LAB).collection('pipeline_runs').findOne(
       { _id: oid },
       {
         projection: {

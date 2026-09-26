@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,8 +20,8 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
-    const masterDb = client.db('master');
+    const labDb = client.db(DB_LAB);
+    const masterDb = client.db(DB_MASTER);
 
     // 1. Find show in showcase
     const show = await masterDb.collection('showcache').findOne({ _id: showObjectId });

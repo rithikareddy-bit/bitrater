@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
-import { SFNClient, StopExecutionCommand } from '@aws-sdk/client-sfn';
-import { BatchClient, ListJobsCommand, TerminateJobCommand } from '@aws-sdk/client-batch';
+import { stopWorkflow } from '@/lib/workflows';
+import { listActiveJobs, terminateJob } from '@/lib/jobs';
 import clientPromise from '@/lib/mongodb';
-
-const region = process.env.AWS_REGION || 'us-east-1';
-const sfn = new SFNClient({ region });
-const batch = new BatchClient({ region });
+import { DB_LAB } from '@/lib/config';
 
 const BATCH_ACTIVE_STATUSES = ['SUBMITTED', 'PENDING', 'RUNNABLE', 'STARTING', 'RUNNING'];
 
@@ -18,10 +15,7 @@ export const dynamic = 'force-dynamic';
 async function stopLabSfn(execArn) {
   if (!execArn) return false;
   try {
-    await sfn.send(new StopExecutionCommand({
-      executionArn: execArn,
-      cause: 'Pipeline cancelled by user',
-    }));
+    await stopWorkflow(execArn, 'Pipeline cancelled by user');
     return true;
   } catch {
     return false;
@@ -37,8 +31,7 @@ async function stopLabSfn(execArn) {
 // the SFN spawned already exist and must still be killed. Prefix matching is
 // the safety net.
 async function terminateBatchJobsForEpisodes(episodeIds) {
-  const queue = process.env.BATCH_JOB_QUEUE;
-  if (!queue || episodeIds.length === 0) return 0;
+  if (episodeIds.length === 0) return 0;
   // Serial lab jobs are named ChaiQSearch-{id[:24]}-; Parallel Resol jobs are
   // ParallelResol-{id[:20]}- (parallelResolLab.js). Sweep BOTH so a cancel kills
   // orphaned jobs even if the driving engine/process is already dead.
@@ -46,33 +39,16 @@ async function terminateBatchJobsForEpisodes(episodeIds) {
     `ChaiQSearch-${id.slice(0, 24)}-`,
     `ParallelResol-${id.slice(0, 20)}-`,
   ]);
+  // AWS queue (if configured) plus the Azure Batch lab job (if configured).
+  const jobs = await listActiveJobs('lab', { jobQueue: process.env.BATCH_JOB_QUEUE, statuses: BATCH_ACTIVE_STATUSES });
   let terminated = 0;
-  for (const status of BATCH_ACTIVE_STATUSES) {
-    let nextToken;
-    do {
-      let resp;
-      try {
-        resp = await batch.send(new ListJobsCommand({
-          jobQueue: queue,
-          jobStatus: status,
-          nextToken,
-        }));
-      } catch {
-        break;
-      }
-      for (const job of resp.jobSummaryList || []) {
-        if (!job.jobName) continue;
-        if (!prefixes.some(p => job.jobName.startsWith(p))) continue;
-        try {
-          await batch.send(new TerminateJobCommand({
-            jobId: job.jobId,
-            reason: 'Pipeline cancelled by user',
-          }));
-          terminated++;
-        } catch { /* may have already finished */ }
-      }
-      nextToken = resp.nextToken;
-    } while (nextToken);
+  for (const job of jobs) {
+    if (!job.jobName) continue;
+    if (!prefixes.some(p => job.jobName.startsWith(p))) continue;
+    try {
+      await terminateJob(job.jobId, 'Pipeline cancelled by user');
+      terminated++;
+    } catch { /* may have already finished */ }
   }
   return terminated;
 }
@@ -83,10 +59,7 @@ async function terminateBatchJobsForEpisodes(episodeIds) {
 async function stopGcpExecution(execArn) {
   if (!execArn) return false;
   try {
-    await sfn.send(new StopExecutionCommand({
-      executionArn: execArn,
-      cause: 'Pipeline cancelled by user',
-    }));
+    await stopWorkflow(execArn, 'Pipeline cancelled by user');
     return true;
   } catch {
     // Already terminal or transient SFN error — nothing more we can do.
@@ -108,7 +81,7 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
+    const labDb = client.db(DB_LAB);
     const col = labDb.collection('pipeline_runs');
     const videoEpisodesCol = labDb.collection('video_episodes');
 

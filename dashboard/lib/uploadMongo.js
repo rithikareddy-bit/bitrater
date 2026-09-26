@@ -1,8 +1,9 @@
 import clientPromise, { getDevClientPromise } from '@/lib/mongodb';
+import { DB_MASTER, DB_DEV } from '@/lib/config';
 
 export async function getProdShowcase() {
   const client = await clientPromise();
-  return client.db('master').collection('showcache');
+  return client.db(DB_MASTER).collection('showcache');
 }
 
 export async function getDevShowcase() {
@@ -10,7 +11,7 @@ export async function getDevShowcase() {
   if (!p) return null;
   try {
     const client = await p;
-    return client.db('gld2sqs').collection('showcache');
+    return client.db(DB_DEV).collection('showcache');
   } catch {
     return null;
   }

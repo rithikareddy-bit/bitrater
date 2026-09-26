@@ -1,0 +1,13 @@
+# Pinned from the live chai-q-gcp-deps Lambda layer (aws-infra/.gcp-layer, built from
+# aws-infra/lambda.tf gcp_layer_build) plus boto3 from the python3.11 Lambda runtime.
+# Azure images and the test venv install exactly these, so behaviour matches AWS prod.
+google-cloud-video-transcoder==1.19.0
+google-cloud-storage==3.10.0
+google-api-core==2.30.0
+google-auth==2.49.1
+protobuf==6.33.6
+grpcio==1.78.0
+pymongo[srv]==4.6.1
+requests==2.32.5
+cryptography==46.0.5
+boto3==1.34.69

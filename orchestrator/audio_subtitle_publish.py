@@ -24,6 +24,7 @@ import requests
 from google.cloud import storage as gcs
 
 from lang_codes import LANG_CODE_NAMES, ROMANIZED_DISPLAY_NAMES, normalize_lang_code
+import runtime_config
 
 
 CONTENT_TYPE_VTT = "text/vtt; charset=utf-8"
@@ -93,7 +94,7 @@ def _get_subtitle_vtt_urls(episode_id: str):
 
     client = pymongo.MongoClient(subtitle_uri)
     try:
-        doc = client["gld2sqs"]["podcast_subtitles"].find_one(
+        doc = client[runtime_config.DB_SUBTITLES]["podcast_subtitles"].find_one(
             {"episodes.episode_id": episode_id},
             {"episodes.$": 1, "source_language": 1},
         )

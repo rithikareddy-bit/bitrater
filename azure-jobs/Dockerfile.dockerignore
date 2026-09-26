@@ -1,0 +1,6 @@
+# Per-Dockerfile ignore (BuildKit): the root .dockerignore excludes orchestrator/,
+# which this image needs.
+**
+!requirements-lambda.txt
+!orchestrator/*.py
+!azure-jobs/run_job.py

@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
-import { BatchClient, SubmitJobCommand } from '@aws-sdk/client-batch';
 import clientPromise from '@/lib/mongodb';
-
-const region = process.env.AWS_REGION || 'us-east-1';
-const batch = new BatchClient({ region });
+import { CLOUD_PROVIDER, DB_LAB, DB_MASTER } from '@/lib/config';
+import { submitJob, jobsConfigError } from '@/lib/jobs';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,7 +17,9 @@ export async function POST(request) {
 
     const jobQueue = process.env.BATCH_JOB_QUEUE;
     const jobDefinition = process.env.AUDIO_VISQOL_JOB_DEFINITION;
-    if (!jobQueue || !jobDefinition) {
+    const azureConfigError = jobsConfigError('visqol');
+    if (azureConfigError) return NextResponse.json({ error: azureConfigError }, { status: 500 });
+    if (CLOUD_PROVIDER !== 'azure' && (!jobQueue || !jobDefinition)) {
       return NextResponse.json(
         { error: 'BATCH_JOB_QUEUE / AUDIO_VISQOL_JOB_DEFINITION not configured' },
         { status: 500 },
@@ -31,7 +31,7 @@ export async function POST(request) {
     // The public master to score — written best-effort by gcp_check_audio_status on SUCCEEDED.
     // If it's empty, publish hasn't run and the worker can't fetch the renditions over HTTPS;
     // reject with a clear message rather than submit a job doomed to fail (Gap G1 in the plan).
-    const lab = client.db('chai_q_lab');
+    const lab = client.db(DB_LAB);
     const status = await lab
       .collection('audio_episodes')
       .findOne({ episode_id: episodeId }, { projection: { public_master_url: 1 } });
@@ -45,7 +45,7 @@ export async function POST(request) {
 
     // The source master (podcast audio_url) lives in podcast_showcache.
     const show = await client
-      .db('master')
+      .db(DB_MASTER)
       .collection('podcast_showcache')
       .findOne({ 'episodes.id': episodeId }, { projection: { 'episodes.$': 1 } });
     const sourceUrl = show?.episodes?.[0]?.audio_url;
@@ -62,20 +62,19 @@ export async function POST(request) {
       { upsert: true },
     );
 
-    const res = await batch.send(
-      new SubmitJobCommand({
-        jobName: `audio-visqol-${episodeId.slice(0, 30).replace(/[^a-zA-Z0-9-_]/g, '-')}-${Date.now()}`,
-        jobQueue,
-        jobDefinition,
-        containerOverrides: {
-          environment: [
-            { name: 'EPISODE_ID', value: episodeId },
-            { name: 'MASTER_URL', value: masterUrl },
-            { name: 'SOURCE_URL', value: sourceUrl },
-          ],
-        },
-      }),
-    );
+    const jobId = await submitJob('visqol', {
+      jobName: `audio-visqol-${episodeId.slice(0, 30).replace(/[^a-zA-Z0-9-_]/g, '-')}-${Date.now()}`,
+      jobQueue,
+      jobDefinition,
+      containerOverrides: {
+        environment: [
+          { name: 'EPISODE_ID', value: episodeId },
+          { name: 'MASTER_URL', value: masterUrl },
+          { name: 'SOURCE_URL', value: sourceUrl },
+        ],
+      },
+    });
+    const res = { jobId };
 
     // Record the Batch job id for debugging a stuck CALCULATING (Gap G7).
     await lab.collection('audio_episodes').updateOne(

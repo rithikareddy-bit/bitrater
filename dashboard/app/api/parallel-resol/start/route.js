@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 import { orchestrate } from '@/lib/pipelineOrchestrator';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,8 +38,8 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
-    const masterDb = client.db('master');
+    const labDb = client.db(DB_LAB);
+    const masterDb = client.db(DB_MASTER);
 
     // Guard: refuse if ANY run (serial "Run Pipeline" OR a prior Parallel Resol)
     // is already active for this show — they share video_vmaf_research /

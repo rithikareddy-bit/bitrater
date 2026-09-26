@@ -16,13 +16,13 @@ import pymongo
 from google.cloud import storage as gcs
 from google.cloud.video import transcoder_v1
 from google.oauth2 import service_account
+import runtime_config
+import secret_store
 
 
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
-    sm = boto3.client("secretsmanager")
-    secret = sm.get_secret_value(SecretId=secret_arn)
-    info = json.loads(secret["SecretString"])
+    info = secret_store.get_json(secret_arn)
     return service_account.Credentials.from_service_account_info(info)
 
 
@@ -30,7 +30,7 @@ def _publish_to_public_bucket(creds, episode_id):
     """Copy gs://${GCS_OUTPUT_BUCKET}/output/<id>/* → gs://${AUDIO_PUBLIC_BUCKET}/<id>/*
     and return the public master playlist URL. The public bucket is renditions-only
     (no source masters) and world-readable, so the URL opens in a browser."""
-    out_bucket = os.environ["GCS_OUTPUT_BUCKET"]
+    out_bucket = os.environ.get("AUDIO_GCS_BUCKET") or os.environ["GCS_OUTPUT_BUCKET"]  # AUDIO_GCS_BUCKET: Azure runs audio + video in one app (shared GCS_* names)
     pub_bucket = os.environ["AUDIO_PUBLIC_BUCKET"]
     client = gcs.Client(credentials=creds, project=os.environ["GCP_PROJECT"])
     src = client.bucket(out_bucket)
@@ -51,7 +51,7 @@ def _publish_to_public_bucket(creds, episode_id):
 # (gcp_finalize_hls.CDN_BUCKET). Audio is delivered UNSIGNED via the CDN's `/hls/` route
 # (signedRequestMode=DISABLED), so renditions go under `hls/audio/<id>/<ts>/` — a versioned,
 # `/hls/`-prefixed (=unsigned) path. No signing, no URL rewriting (audio masters use relative URIs).
-CDN_BUCKET = "chai-shots-manifests"
+CDN_BUCKET = runtime_config.CDN_BUCKET
 
 
 def _publish_to_cdn(creds, episode_id, ts):
@@ -94,7 +94,7 @@ def _stamp_failed(episode_id, message):
     RUNNING when the poll itself crashed. Mirrors the helper in the transcoder."""
     try:
         from datetime import datetime, timezone as _tz
-        pymongo.MongoClient(os.environ["MONGO_URI"])["chai_q_lab"].audio_episodes.update_one(
+        pymongo.MongoClient(os.environ["MONGO_URI"])[runtime_config.DB_LAB].audio_episodes.update_one(
             {"episode_id": episode_id},
             {"$set": {
                 "gcp_job_status": "FAILED",
@@ -126,7 +126,7 @@ def handler(event, context):
     print(f"[CHECK] Audio job {gcp_job_name} state: {state}")
 
     if state in ("SUCCEEDED", "FAILED"):
-        db = pymongo.MongoClient(os.environ["MONGO_URI"])["chai_q_lab"]
+        db = pymongo.MongoClient(os.environ["MONGO_URI"])[runtime_config.DB_LAB]
         now = datetime.now(timezone.utc).isoformat()
         if state == "SUCCEEDED":
             fields = {

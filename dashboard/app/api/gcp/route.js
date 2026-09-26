@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
-import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
+import { startWorkflow, workflowConfigError } from '@/lib/workflows';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 import { findEpisodeInShowcache, findTrailerInShowcase } from '@/lib/showcacheLookup';
 import { resolveSourceUrl } from '@/lib/sourceUrl';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
-const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
 const execFileAsync = promisify(execFile);
 
 // Detect whether the source has an audio track. GCP Transcoder rejects the job
@@ -42,14 +42,14 @@ export async function POST(request) {
       return NextResponse.json({ error: 'codec must be "h264" or "h265"' }, { status: 400 });
     }
 
-    const gcpSfnArn = process.env.GCP_SFN_ARN;
-    if (!gcpSfnArn) {
-      return NextResponse.json({ error: 'GCP_SFN_ARN not configured' }, { status: 500 });
+    const configError = workflowConfigError('gcp');
+    if (configError) {
+      return NextResponse.json({ error: configError }, { status: 500 });
     }
 
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
-    const masterDb = client.db('master');
+    const labDb = client.db(DB_LAB);
+    const masterDb = client.db(DB_MASTER);
 
     const episode = await labDb.collection('video_episodes').findOne({ episode_id: episodeId });
 
@@ -177,8 +177,7 @@ export async function POST(request) {
 
     let result;
     try {
-      const cmd = new StartExecutionCommand({ stateMachineArn: gcpSfnArn, input });
-      result = await sfn.send(cmd);
+      result = await startWorkflow('gcp', input);
     } catch (sfnErr) {
       await labDb.collection('video_episodes').updateOne(
         { episode_id: episodeId },

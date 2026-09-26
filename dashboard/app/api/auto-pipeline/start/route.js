@@ -3,6 +3,7 @@ import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 import { orchestrate } from '@/lib/pipelineOrchestrator';
 import { isCombinedUrl, prepareTrailer, hasS3UrlDrifted } from '@/lib/trailerPrep';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,8 +23,8 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
-    const masterDb = client.db('master');
+    const labDb = client.db(DB_LAB);
+    const masterDb = client.db(DB_MASTER);
 
     // Guard: reject if a pipeline of this kind is already RUNNING for this show.
     // Legacy runs written before `kind` existed default to 'episode'.

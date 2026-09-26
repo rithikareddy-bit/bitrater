@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import { videoIdFromS3Url } from '@/lib/videoId';
 import { findEpisodeInShowcache } from '@/lib/showcacheLookup';
+import { VTT_ENABLED } from '@/lib/config';
 
 const DEFAULT_DB = process.env.MONGO_DATABASE || 'master';
 const EPISODE_COLLECTION = process.env.MONGO_EPISODE_COLLECTION || 'episode';
@@ -79,6 +80,11 @@ export async function POST(request) {
         vtt_url: existingVtt.vtt_url || null,
         sprite_url: existingVtt.sprite_url || null,
       });
+    }
+
+    // The vtt-worker (Cloud Run) writes prod Mongo/GCS, so the Azure shadow stamp disables it.
+    if (!VTT_ENABLED) {
+      return NextResponse.json({ error: 'VTT generation disabled (VTT_ENABLED=false)' }, { status: 501 });
     }
 
     const workerUrl = (

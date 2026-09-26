@@ -2,6 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../scripts/guard_no_aws_deploy.sh"
 INFRA_DIR="$SCRIPT_DIR/../aws-infra"
 
 echo "==> Getting ECR URL from Terraform outputs..."

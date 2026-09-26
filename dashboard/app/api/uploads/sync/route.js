@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { verifyUploadToken, publicS3Url } from '@/lib/uploadConfig';
+import { publicBlobUrl } from '@/lib/blobUpload';
 import { getProdShowcase, getDevShowcase, findEpisode } from '@/lib/uploadMongo';
+import { UPLOAD_DEV_SYNC_ENABLED } from '@/lib/config';
 
 async function strictWrite(col, { slug, episodeNumber, episodeId, expectedCurrent, finalUrl, previousUpdatedAt, now }) {
   const filter = { 'ep.episode_number': Number(episodeNumber) };
@@ -27,7 +29,7 @@ export async function POST(request) {
     const t = verifyUploadToken(body.uploadToken);
     if (!t) return NextResponse.json({ error: 'invalid uploadToken' }, { status: 401 });
 
-    const finalUrl = publicS3Url(t.key);
+    const finalUrl = t.provider === 'azure' ? publicBlobUrl(t.key, { account: t.account, container: t.container }) : publicS3Url(t.key);
     const overwrite = body.overwrite === true;
 
     // Prod pre-flight + overwrite gate.
@@ -62,8 +64,10 @@ export async function POST(request) {
     // Dev write — best effort, with dev's own state.
     let dev = { attempted: false };
     try {
-      const devCol = await getDevShowcase();
-      if (!devCol) {
+      const devCol = UPLOAD_DEV_SYNC_ENABLED ? await getDevShowcase() : null;
+      if (!UPLOAD_DEV_SYNC_ENABLED) {
+        dev = { attempted: false, reason: 'UPLOAD_DEV_SYNC_ENABLED=false' };
+      } else if (!devCol) {
         dev = { attempted: false, reason: 'SUBTITLE_MONGO_URI not configured' };
       } else {
         const devShow = await devCol.findOne({ slug: t.slug }, { projection: { episodes: 1 } });

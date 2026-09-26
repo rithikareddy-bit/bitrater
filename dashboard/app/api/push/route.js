@@ -1,13 +1,8 @@
 import { NextResponse } from 'next/server';
-import {
-  SFNClient,
-  StartExecutionCommand,
-  DescribeExecutionCommand,
-} from '@aws-sdk/client-sfn';
+import { startWorkflow, describeWorkflow, workflowConfigError } from '@/lib/workflows';
 import { randomUUID } from 'crypto';
 import clientPromise from '@/lib/mongodb';
-
-const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
+import { DB_LAB } from '@/lib/config';
 
 const TERMINAL = new Set(['FAILED', 'TIMED_OUT', 'ABORTED', 'SUCCEEDED']);
 
@@ -24,18 +19,14 @@ export async function POST(request) {
       return NextResponse.json({ error: 'codec must be "h264" or "h265"' }, { status: 400 });
     }
 
-    const sfnArn = codec === 'h264'
-      ? process.env.SFN_ARN_H264
-      : process.env.SFN_ARN_H265;
-    if (!sfnArn) {
-      return NextResponse.json(
-        { error: `SFN_ARN_${codec.toUpperCase()} not configured` },
-        { status: 500 },
-      );
+    const workflowKind = codec === 'h264' ? 'lab_h264' : 'lab_h265';
+    const configError = workflowConfigError(workflowKind);
+    if (configError) {
+      return NextResponse.json({ error: configError }, { status: 500 });
     }
 
     const client = await clientPromise();
-    const db = client.db('chai_q_lab');
+    const db = client.db(DB_LAB);
 
     const statusKey = `lab_status_${codec}`;
     const arnKey = `lab_execution_arn_${codec}`;
@@ -48,9 +39,7 @@ export async function POST(request) {
       const execArn = existing[arnKey];
       if (execArn) {
         try {
-          const desc = await sfn.send(
-            new DescribeExecutionCommand({ executionArn: execArn }),
-          );
+          const desc = await describeWorkflow(execArn);
           if (desc.status === 'RUNNING') {
             return NextResponse.json(
               { error: `A lab run (H.${codec === 'h264' ? '264' : '265'}) is already active for this episode` },
@@ -112,8 +101,7 @@ export async function POST(request) {
       codec,
       run_id: labRunId,
     });
-    const cmd = new StartExecutionCommand({ stateMachineArn: sfnArn, input });
-    const result = await sfn.send(cmd);
+    const result = await startWorkflow(workflowKind, input);
 
     await db.collection('video_episodes').updateOne(
       { episode_id: episodeId },

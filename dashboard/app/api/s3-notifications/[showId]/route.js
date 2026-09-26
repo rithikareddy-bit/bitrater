@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
+import { DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,7 @@ export async function GET(_request, { params }) {
     }
 
     const client = await clientPromise();
-    const db = client.db('master');
+    const db = client.db(DB_MASTER);
 
     // If the ID looks like an ObjectId, resolve it to the Sanity `id` field
     let sanityShowId = rawId;

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -10,7 +11,7 @@ export async function GET(request) {
     const limit = Math.min(parseInt(searchParams.get('limit') || '20', 10) || 20, 100);
 
     const client = await clientPromise();
-    const runs = await client.db('chai_q_lab')
+    const runs = await client.db(DB_LAB)
       .collection('playback_resign_runs')
       .find({}, {
         projection: {

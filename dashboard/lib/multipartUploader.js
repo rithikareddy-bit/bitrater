@@ -1,11 +1,12 @@
-// Browser-side S3 multipart uploader. Streams the file directly to S3
-// using presigned URLs minted by /api/uploads/sign-part. Reports progress
+// Browser-side multipart uploader. Streams the file directly to S3 (multipart
+// parts) or Azure Blob (blocks, UPLOAD_PROVIDER=azure) using presigned URLs
+// minted by /api/uploads/sign-part. Reports progress
 // via the onProgress callback. See UPLOAD-VIDEOS-PLAN.md for the full flow.
 
 const PARALLELISM = 4;
 const MAX_RETRIES = 3;
 
-function putPart(url, blob, onChunk, signal) {
+function putPart(url, blob, onChunk, signal, etagRequired = true) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url, true);
@@ -13,7 +14,7 @@ function putPart(url, blob, onChunk, signal) {
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         const etag = xhr.getResponseHeader('ETag');
-        if (!etag) reject(new Error('S3 did not return ETag — check bucket CORS ExposeHeaders'));
+        if (!etag && etagRequired) reject(new Error('S3 did not return ETag — check bucket CORS ExposeHeaders'));
         else resolve(etag);
       } else {
         reject(new Error(`PUT part failed: ${xhr.status} ${xhr.statusText}`));
@@ -78,14 +79,14 @@ export async function uploadFile({ file, slug, episodeNumber, overwrite, onProgr
           signal,
         });
         if (!signRes.ok) throw new Error((await signRes.json()).error || `sign ${signRes.status}`);
-        const { url } = await signRes.json();
+        const { url, blockId } = await signRes.json();
         partProgress[idx] = 0;
         reportProgress();
         const etag = await putPart(url, blob, (loaded) => {
           partProgress[idx] = loaded;
           reportProgress();
-        }, signal);
-        parts[idx] = { PartNumber: partNumber, ETag: etag };
+        }, signal, !blockId);
+        parts[idx] = blockId ? { PartNumber: partNumber, BlockId: blockId } : { PartNumber: partNumber, ETag: etag };
         partProgress[idx] = blob.size;
         reportProgress();
         return;

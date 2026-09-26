@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,7 @@ export async function GET() {
   try {
     const client = await clientPromise();
     const shows = await client
-      .db('master')
+      .db(DB_MASTER)
       .collection('podcast_showcache')
       .find({}, { projection: { slug: 1, title: 1, episodes: 1 } })
       .toArray();

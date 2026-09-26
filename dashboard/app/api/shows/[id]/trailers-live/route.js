@@ -8,6 +8,7 @@ import {
   durationByEpisode,
   buildShowStats,
 } from '@/lib/liveRowHelpers';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -33,8 +34,8 @@ export async function GET(_request, { params }) {
     }
 
     const client = await clientPromise();
-    const masterDb = client.db('master');
-    const labDb = client.db('chai_q_lab');
+    const masterDb = client.db(DB_MASTER);
+    const labDb = client.db(DB_LAB);
 
     const show = await masterDb.collection('showcache').findOne({ _id: new ObjectId(rawId) });
     if (!show) {

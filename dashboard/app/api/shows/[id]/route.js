@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 import { resolveShowPosterUrl } from '@/lib/posterUrl';
+import { DB_MASTER } from '@/lib/config';
 
 export async function GET(_request, { params }) {
   try {
@@ -11,7 +12,7 @@ export async function GET(_request, { params }) {
     }
 
     const client = await clientPromise();
-    const db = client.db('master');
+    const db = client.db(DB_MASTER);
     const show = await db.collection('showcache').findOne({ _id: new ObjectId(id) });
 
     if (!show) {

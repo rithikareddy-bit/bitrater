@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,7 @@ export async function GET(_request, { params }) {
     }
 
     const client = await clientPromise();
-    const db = client.db('master');
+    const db = client.db(DB_MASTER);
 
     const changes = await db
       .collection('s3_url_changes')

@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB } from '@/lib/config';
 
 // GET /api/url-health
 // Returns the most recent health-check run (or ?run_id=<id> for a specific one).
@@ -15,7 +16,7 @@ export async function GET(request) {
 
   try {
     const client = await clientPromise();
-    const col = client.db('chai_q_lab').collection('url_health_runs');
+    const col = client.db(DB_LAB).collection('url_health_runs');
 
     let run;
     if (runId) {

@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { invokeFunction, needsLambdaArn } from '@/lib/invoke';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-const lambda = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 const TRAILER_ID_RE = /^trailer_([a-f0-9]{24})_(.+)$/;
 
@@ -24,7 +23,7 @@ export async function POST(request) {
     const episodeId = body?.episode_id;
 
     const lambdaArn = process.env.RESIGN_PLAYBACK_URLS_LAMBDA_ARN;
-    if (!lambdaArn) {
+    if (!lambdaArn && needsLambdaArn('resign-playback-urls')) {
       return NextResponse.json(
         { error: 'RESIGN_PLAYBACK_URLS_LAMBDA_ARN not configured' },
         { status: 500 },
@@ -34,8 +33,8 @@ export async function POST(request) {
     let payload;
     if (episodeId) {
       const client = await clientPromise();
-      const labDb = client.db('chai_q_lab');
-      const masterDb = client.db('master');
+      const labDb = client.db(DB_LAB);
+      const masterDb = client.db(DB_MASTER);
 
       const ve = await labDb.collection('video_episodes').findOne(
         { episode_id: episodeId },
@@ -85,10 +84,23 @@ export async function POST(request) {
       payload = {};
     }
 
-    const result = await lambda.send(new InvokeCommand({
+    // Full sweep on Azure: fire-and-forget (the Functions HTTP front end cuts at ~230 s;
+    // on AWS the sync Lambda call is unchanged).
+    if (!episodeId && !needsLambdaArn('resign-playback-urls')) {
+      const started = await invokeFunction('resign-playback-urls', {
+        InvocationType: 'Event',
+        Payload: Buffer.from(JSON.stringify(payload)),
+      });
+      if (started.FunctionError) {
+        return NextResponse.json({ error: 'Failed to start resign sweep' }, { status: 502 });
+      }
+      return NextResponse.json({ started: true, async: true, ...JSON.parse(Buffer.from(started.Payload).toString() || '{}') }, { status: 202 });
+    }
+
+    const result = await invokeFunction('resign-playback-urls', {
       FunctionName: lambdaArn,
       Payload: Buffer.from(JSON.stringify(payload)),
-    }));
+    });
     const response = JSON.parse(Buffer.from(result.Payload).toString());
 
     if (result.FunctionError) {

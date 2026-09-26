@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -66,7 +67,7 @@ export async function POST(request) {
     const dryRun = body.confirm !== true;
 
     const client = await clientPromise();
-    const db = client.db('master');
+    const db = client.db(DB_MASTER);
     const showcache = db.collection('showcache');
 
     const query = { active: true };

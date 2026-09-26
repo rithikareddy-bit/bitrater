@@ -1,6 +1,7 @@
 import pymongo
 import os
 from datetime import datetime, timezone
+import runtime_config
 
 VMAF_THRESHOLDS = {
     "1080p": 88,
@@ -18,7 +19,7 @@ def handler(event, context):
 
     client = pymongo.MongoClient(mongo_uri)
     try:
-        db = client.chai_q_lab
+        db = client[runtime_config.DB_LAB]
 
         results = list(db.video_vmaf_research.find({"episode_id": episode_id}))
 

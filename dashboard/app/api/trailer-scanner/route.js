@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import { scanTrailersOnce } from '@/lib/trailerScanner';
+import { DB_LAB } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -9,7 +10,7 @@ const SETTINGS_ID = 'trailer_scanner';
 
 async function readSetting() {
   const client = await clientPromise();
-  const labDb = client.db('chai_q_lab');
+  const labDb = client.db(DB_LAB);
   const doc = await labDb.collection('scanner_settings').findOne({ _id: SETTINGS_ID });
   return {
     enabled: Boolean(doc?.enabled),
@@ -37,7 +38,7 @@ export async function POST(request) {
     const updatedBy = typeof body?.updatedBy === 'string' ? body.updatedBy : null;
 
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
+    const labDb = client.db(DB_LAB);
 
     // Detect OFF→ON edge so we can kick off an immediate scan — otherwise the
     // operator has to wait up to 5 min for the next scheduled tick.

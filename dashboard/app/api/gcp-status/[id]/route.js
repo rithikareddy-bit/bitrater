@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
-import { SFNClient, DescribeExecutionCommand } from '@aws-sdk/client-sfn';
+import { describeWorkflow } from '@/lib/workflows';
 import clientPromise from '@/lib/mongodb';
 import { videoIdFromS3Url } from '@/lib/videoId';
 import { findEpisodeInShowcache } from '@/lib/showcacheLookup';
-
-const sfn = new SFNClient({ region: process.env.AWS_REGION || 'us-east-1' });
+import { DB_LAB } from '@/lib/config';
 
 const SFN_TERMINAL_STATES = new Set(['FAILED', 'TIMED_OUT', 'ABORTED']);
 
@@ -27,9 +26,7 @@ async function resolveCodecStatus(db, episodeId, episode, codec, pfx = '') {
     episode[execArnKey]
   ) {
     try {
-      const desc = await sfn.send(
-        new DescribeExecutionCommand({ executionArn: episode[execArnKey] }),
-      );
+      const desc = await describeWorkflow(episode[execArnKey]);
       if (SFN_TERMINAL_STATES.has(desc.status)) {
         gcpStatus = 'FAILED';
         gcpError = `Step Function ${desc.status}${desc.cause ? `: ${desc.cause}` : ''}`;
@@ -63,7 +60,7 @@ export async function GET(request, { params }) {
 
   try {
     const client = await clientPromise();
-    const db = client.db('chai_q_lab');
+    const db = client.db(DB_LAB);
     const masterDb = client.db(process.env.MONGO_DATABASE || 'master');
     const vttCollection = process.env.MONGO_VTT_COLLECTION || 'episode_vtt';
 

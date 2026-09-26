@@ -1,0 +1,15 @@
+{
+  "_comment": "Records copied (read-only from prod) into master_shadow / chai_q_lab_shadow for the Azure test copy. Output URLs are stripped by seed_shadow.py. Chosen 2026-09-26 from a read-only survey.",
+  "show_slugs": [
+    "test-1234567",
+    "test-jas123",
+    "day-shift-night-shift",
+    "oh-my-dog",
+    "trial-marriage",
+    "girl-talks-deepa-thomas-podcast",
+    "girl-talks-ritika-nayak-podcast"
+  ],
+  "podcast_slugs": [
+    "radhe-govindha-podcast"
+  ]
+}

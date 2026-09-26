@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 
 import pymongo
 import urllib3
+import runtime_config
 
 CDN_BASE = os.environ.get("CDN_BASE", "https://cdn.chaishots.in")
 MAX_WORKERS = int(os.environ.get("URL_HEALTH_WORKERS", "20"))
@@ -88,7 +89,7 @@ def _collect_urls(mongo_client) -> list[dict]:
     entries = []
 
     # Build episode_id → (show_title, episode_name, episode_number) lookup from showcache
-    showcache = mongo_client["master"]["showcache"]
+    showcache = mongo_client[runtime_config.DB_MASTER]["showcache"]
     ep_meta = {}   # episode_id → {show_title, episode_name, episode_number}
 
     for show in showcache.find(
@@ -135,7 +136,7 @@ def _collect_urls(mongo_client) -> list[dict]:
                 })
 
     # Per-codec master manifests from chai_q_lab.video_episodes
-    q_lab = mongo_client["chai_q_lab"]
+    q_lab = mongo_client[runtime_config.DB_LAB]
     active_episode_ids = list(ep_meta.keys())
     if not active_episode_ids:
         return entries
@@ -198,7 +199,7 @@ def handler(event, context):
             },
         }
 
-        mongo_client["chai_q_lab"]["url_health_runs"].insert_one(run_doc)
+        mongo_client[runtime_config.DB_LAB]["url_health_runs"].insert_one(run_doc)
         run_id = str(run_doc["_id"])
 
         print(f"[URL-HEALTH] Done. {ok_count} OK / {failed_count} FAILED — run_id={run_id}")

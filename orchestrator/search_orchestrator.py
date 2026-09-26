@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 import boto3
 import pymongo
+import batch_jobs
+import runtime_config
 
 
 RESOLUTION_ORDER = ["1080p", "720p", "480p"]
@@ -653,8 +655,8 @@ def handler(event, context):
 
     mongo_client = pymongo.MongoClient(mongo_uri)
     try:
-        db = mongo_client["chai_q_lab"]
-        batch_client = boto3.client("batch")
+        db = mongo_client[runtime_config.DB_LAB]
+        batch_client = batch_jobs.client()
 
         search_state = event.get("search_state")
         if not search_state:

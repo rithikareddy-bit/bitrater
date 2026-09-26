@@ -2,6 +2,7 @@ import os, subprocess, json, sys, re, shutil, urllib.request, pymongo, boto3
 from urllib.parse import urlparse, unquote
 from datetime import datetime, timezone
 from fractions import Fraction
+DB_LAB = os.environ.get("DB_LAB", "chai_q_lab")  # Azure shadow isolation (AZURE-MIGRATION-PLAN.md P2)
 
 RESOLUTION_MAP = {
     "1080": {"width": 1080, "height": 1920},
@@ -202,7 +203,7 @@ def run_research():
 
     mongo_client = pymongo.MongoClient(mongo_uri)
     try:
-        db = mongo_client["chai_q_lab"]
+        db = mongo_client[DB_LAB]
         lab_run_id = os.getenv("LAB_RUN_ID")
         doc = {
             "episode_id":    episode_id,
@@ -285,7 +286,7 @@ def run_search():
     fps_int = round(fps_float)
     mongo_client = pymongo.MongoClient(mongo_uri)
     try:
-        db = mongo_client["chai_q_lab"]
+        db = mongo_client[DB_LAB]
         # Idempotent on Batch retry: drop this (episode,codec,resolution)'s trials.
         db["video_vmaf_research"].delete_many(
             {"episode_id": episode_id, "codec": codec, "resolution": resolution_tag}

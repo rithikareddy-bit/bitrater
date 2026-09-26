@@ -26,6 +26,8 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 
 import media_cdn_signer
+import runtime_config
+import secret_store
 
 
 CDN_BASE = os.environ["CDN_BASE"]
@@ -58,9 +60,7 @@ def _get_signing_key():
     """
     global _SIGNING_KEY
     if _SIGNING_KEY is None:
-        sm = boto3.client("secretsmanager")
-        secret = sm.get_secret_value(SecretId=os.environ["SIGNING_KEY_SECRET_ID"])
-        info = json.loads(secret["SecretString"])
+        info = secret_store.get_json(os.environ["SIGNING_KEY_SECRET_ID"])
         _SIGNING_KEY = (info["key_name"], info["private_key_b64url"])
     return _SIGNING_KEY
 
@@ -136,7 +136,7 @@ def _write_showcache(mongo_client, episode_id: str, url: str, now: datetime) -> 
     Returns {"matched": bool, "url": final_url, "expires_at": datetime|None}.
     """
     flt, update, array_filters, final_url, expires_at = _build_write(episode_id, url, now)
-    result = mongo_client["master"]["showcache"].update_one(flt, update, array_filters=array_filters)
+    result = mongo_client[runtime_config.DB_MASTER]["showcache"].update_one(flt, update, array_filters=array_filters)
     return {"matched": result.matched_count > 0, "url": final_url, "expires_at": expires_at}
 
 
@@ -148,7 +148,7 @@ def _build_update(set_ops: dict, exp_field: str, expires_at) -> dict:
 
 
 def _collect_sweep_targets(mongo_client) -> list:
-    showcache = mongo_client["master"]["showcache"]
+    showcache = mongo_client[runtime_config.DB_MASTER]["showcache"]
     targets = []
     cursor = showcache.find(
         {},
@@ -210,7 +210,7 @@ def handler(event, context):
         if _signing_enabled():
             _get_signing_key()
         targets = _collect_sweep_targets(mongo_client)
-        master = mongo_client["master"]["showcache"]
+        master = mongo_client[runtime_config.DB_MASTER]["showcache"]
         ops = []
         updated = 0
         errors = []
@@ -236,7 +236,7 @@ def handler(event, context):
             "signing_disabled": not _signing_enabled(),
             "ttl_seconds": _ttl_seconds(),
         }
-        mongo_client["chai_q_lab"]["playback_resign_runs"].insert_one(dict(run_doc))
+        mongo_client[runtime_config.DB_LAB]["playback_resign_runs"].insert_one(dict(run_doc))
         run_doc["started_at"] = run_doc["started_at"].isoformat()
         run_doc["finished_at"] = run_doc["finished_at"].isoformat()
         return run_doc

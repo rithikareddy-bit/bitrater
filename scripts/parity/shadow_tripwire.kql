@@ -1,0 +1,9 @@
+// Gate: must return 0 rows for the whole shadow period (AZURE-MIGRATION-PLAN.md P2).
+// Any write to a prod DB from a connection tagged appName=bitrater-azure-shadow.
+// Requires Cosmos DB for MongoDB vCore diagnostic logs -> Log Analytics (Phase B3).
+VCoreMongoRequests
+| where TimeGenerated > ago(7d)
+| where AppName == "bitrater-azure-shadow"
+| where DatabaseName in ("master", "chai_q_lab", "gld2sqs")
+| where OperationName in~ ("insert", "update", "delete", "findAndModify", "bulkWrite", "replace")
+| project TimeGenerated, DatabaseName, CollectionName, OperationName

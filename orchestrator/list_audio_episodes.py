@@ -11,6 +11,7 @@ Returns { slug, count, episodes: [ {episode_id, audio_url}, ... ] }
 import os
 
 import pymongo
+import runtime_config
 
 
 def handler(event, context):
@@ -18,7 +19,7 @@ def handler(event, context):
     force = bool(event.get("force", False))
 
     client = pymongo.MongoClient(os.environ["MONGO_URI"])
-    show = client["master"]["podcast_showcache"].find_one(
+    show = client[runtime_config.DB_MASTER]["podcast_showcache"].find_one(
         {"slug": slug}, {"episodes": 1}
     )
     if not show:
@@ -37,7 +38,7 @@ def handler(event, context):
         # batch proceed — downstream copy/transcoder will re-stamp these rows anyway.
         # Worst case is we re-encode an already-SUCCEEDED episode, not data loss.
         try:
-            cur = client["chai_q_lab"]["audio_episodes"].find(
+            cur = client[runtime_config.DB_LAB]["audio_episodes"].find(
                 {
                     "episode_id": {"$in": ids},
                     "gcp_job_status": {"$in": ["SUCCEEDED", "COPYING", "RUNNING"]},
@@ -54,7 +55,7 @@ def handler(event, context):
         # fails (transient Mongo), fail loudly — silently proceeding would leave the
         # stale fields the user is explicitly asking us to clear.
         try:
-            client["chai_q_lab"]["audio_episodes"].update_many(
+            client[runtime_config.DB_LAB]["audio_episodes"].update_many(
                 {"episode_id": {"$in": ids}},
                 {"$unset": {
                     "gcp_job_status": "",

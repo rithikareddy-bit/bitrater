@@ -23,10 +23,19 @@ function appendStoredUrl(epId, entry) {
 export default function TestJasH264Button({ episodeId, variant = 'compact' }) {
   const [state, setState] = useState({ status: 'idle', error: null });
   const [urls, setUrls] = useState([]);
+  const [enabled, setEnabled] = useState(false);
 
   useEffect(() => {
     setUrls(loadStoredUrls(episodeId));
+    let cancelled = false;
+    fetch('/api/test-jas-h264')
+      .then((r) => r.ok ? r.json() : { enabled: false })
+      .then((body) => { if (!cancelled) setEnabled(body.enabled === true); })
+      .catch(() => { if (!cancelled) setEnabled(false); });
+    return () => { cancelled = true; };
   }, [episodeId]);
+
+  if (!enabled) return null;
 
   async function trigger(e) {
     e?.stopPropagation?.();

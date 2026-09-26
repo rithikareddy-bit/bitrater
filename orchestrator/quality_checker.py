@@ -24,11 +24,14 @@ RELATIVE URIs, so extracted URIs must be resolved against the master's base.
 
 import os
 import re
+import shutil
+import tempfile
 import json
 import subprocess
 import urllib.request
 import pymongo
 from datetime import datetime, timezone
+import runtime_config
 
 FFMPEG  = os.environ.get("FFMPEG_PATH",  "/opt/bin/ffmpeg")
 FFPROBE = os.environ.get("FFPROBE_PATH", "/opt/bin/ffprobe")
@@ -178,8 +181,9 @@ def _run_all_checks(path, tag):
     Single FFmpeg pass: blockdetect + blurdetect + freezedetect + blackdetect.
     Returns (block_frames, blur_frames, freeze_events, black_events).
     """
-    block_meta = f"/tmp/block_{tag}.txt"
-    blur_meta  = f"/tmp/blur_{tag}.txt"
+    work = os.path.dirname(path)  # per-call dir (see handler)
+    block_meta = os.path.join(work, f"block_{tag}.txt")
+    blur_meta  = os.path.join(work, f"blur_{tag}.txt")
 
     vf = (
         f"split=2[a][b];"
@@ -270,7 +274,7 @@ def _get_h264_master_url(mongo_uri, episode_id):
     """
     client = pymongo.MongoClient(mongo_uri)
     try:
-        doc = client["chai_q_lab"].video_episodes.find_one(
+        doc = client[runtime_config.DB_LAB].video_episodes.find_one(
             {"episode_id": episode_id},
             {"h264_master_m3u8_url": 1},
         )
@@ -283,7 +287,7 @@ def _save_quality_check(mongo_uri, episode_id, quality_check):
     """Write the quality_check doc to chai_q_lab.video_episodes."""
     client = pymongo.MongoClient(mongo_uri)
     try:
-        client["chai_q_lab"].video_episodes.update_one(
+        client[runtime_config.DB_LAB].video_episodes.update_one(
             {"episode_id": episode_id},
             {"$set": {"quality_check": quality_check}},
         )
@@ -296,6 +300,9 @@ def handler(event, context):
     mongo_uri  = os.environ["MONGO_URI"]
 
     print(f"[QC] Starting quality check for {episode_id}")
+    # Own dir per call: on Azure several activities share one process/filesystem.
+    workdir = tempfile.mkdtemp(prefix="qc-")
+    stream_path = os.path.join(workdir, "h264_1080p.mp4")
 
     try:
         master_url = _get_h264_master_url(mongo_uri, episode_id)
@@ -311,8 +318,8 @@ def handler(event, context):
 
         streams = {}
         print(f"[QC] Downloading 1080p H264...")
-        _download_stream(h264_url, "/tmp/h264_1080p.mp4")
-        streams["h264_1080p"] = _build_stream_result("/tmp/h264_1080p.mp4", "h264")
+        _download_stream(h264_url, stream_path)
+        streams["h264_1080p"] = _build_stream_result(stream_path, "h264")
         print(f"[QC] H264 done — {streams['h264_1080p']['overall']}")
 
         all_issues = streams["h264_1080p"]["issues"]
@@ -343,3 +350,5 @@ def handler(event, context):
         except Exception as write_err:
             print(f"[QC] Failed to write ERROR result to Mongo: {write_err}")
         raise
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)

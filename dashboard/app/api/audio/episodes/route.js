@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 // GET /api/audio/episodes            -> list podcasts (slug, title, episode_count)
 // GET /api/audio/episodes?slug=foo   -> that podcast's episodes + conversion status
@@ -7,8 +8,8 @@ export async function GET(request) {
   try {
     const slug = request.nextUrl.searchParams.get('slug');
     const client = await clientPromise();
-    const master = client.db('master');
-    const lab = client.db('chai_q_lab');
+    const master = client.db(DB_MASTER);
+    const lab = client.db(DB_LAB);
 
     if (!slug) {
       const shows = await master

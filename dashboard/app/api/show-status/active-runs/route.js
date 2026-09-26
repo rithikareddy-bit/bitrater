@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
-import { BatchClient, ListJobsCommand, DescribeJobsCommand } from '@aws-sdk/client-batch';
+import { listActiveJobs, describeJobs as describeWorkerJobs } from '@/lib/jobs';
+import { CLOUD_PROVIDER, DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -14,44 +15,30 @@ const GCP_ACTIVE = new Set(['STARTING', 'RUNNING']);
 const AWS_WORKER_CAPACITY = 128;
 const GCP_WORKER_CAPACITY = 45;
 
-const REGION = process.env.AWS_REGION || 'us-east-1';
-const BATCH_QUEUE = process.env.BATCH_JOB_QUEUE || 'chai-q-queue';
-const batch = new BatchClient({ region: REGION });
+// AWS queue: as before (defaults to chai-q-queue on AWS). On Azure only listed if
+// BATCH_JOB_QUEUE is set explicitly; the Azure Batch lab job is always included.
+const BATCH_QUEUE = process.env.BATCH_JOB_QUEUE || (CLOUD_PROVIDER === 'aws' ? 'chai-q-queue' : undefined);
 
 // Batch statuses that occupy a compute slot (an actually-running worker).
 const BATCH_ACTIVE_STATUSES = ['RUNNING', 'STARTING'];
 
 async function listJobIds(status) {
-  const ids = [];
-  let nextToken;
-  do {
-    const resp = await batch.send(new ListJobsCommand({
-      jobQueue: BATCH_QUEUE, jobStatus: status, nextToken, maxResults: 100,
-    }));
-    for (const j of resp.jobSummaryList || []) ids.push(j.jobId);
-    nextToken = resp.nextToken;
-  } while (nextToken);
-  return ids;
+  const jobs = await listActiveJobs('lab', { jobQueue: BATCH_QUEUE, statuses: [status], throwOnError: true });
+  return jobs.map((j) => j.jobId);
 }
 
 // Describe jobs (chunks of 100) and pull EPISODE_ID + CODEC from each job's env.
 async function describeJobs(jobIds) {
-  const out = [];
-  for (let i = 0; i < jobIds.length; i += 100) {
-    const resp = await batch.send(new DescribeJobsCommand({ jobs: jobIds.slice(i, i + 100) }));
-    for (const j of resp.jobs || []) {
-      const env = {};
-      for (const e of j.container?.environment || []) env[e.name] = e.value;
-      out.push({ status: j.status, episodeId: env.EPISODE_ID || null, codec: env.CODEC || null });
-    }
-  }
-  return out;
+  const jobs = await describeWorkerJobs(jobIds);
+  return jobs.map((j) => ({
+    status: j.status, episodeId: j.environment.EPISODE_ID || null, codec: j.environment.CODEC || null,
+  }));
 }
 
 async function resolveEpisodesToShows(client, episodeIds) {
   const map = new Map();
   if (!episodeIds.length) return map;
-  const masterDb = client.db('master');
+  const masterDb = client.db(DB_MASTER);
   const lookup = await masterDb.collection('showcache')
     .find({ 'episodes.id': { $in: episodeIds } }, { projection: { _id: 1, slug: 1, title: 1, 'episodes.id': 1 } })
     .toArray();
@@ -69,7 +56,7 @@ async function resolveEpisodesToShows(client, episodeIds) {
 export async function GET() {
   try {
     const client = await clientPromise();
-    const db = client.db('chai_q_lab');
+    const db = client.db(DB_LAB);
 
     // 1. Active pipeline_runs — show metadata + GCP counts + which episodes are
     //    part of a run (vs a standalone rerun).

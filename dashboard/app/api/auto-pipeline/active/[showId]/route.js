@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -16,7 +17,7 @@ export async function GET(request, { params }) {
   const kind = kindParam === 'trailer' ? 'trailer' : 'episode';
   try {
     const client = await clientPromise();
-    const col = client.db('chai_q_lab').collection('pipeline_runs');
+    const col = client.db(DB_LAB).collection('pipeline_runs');
 
     // Match docs that either explicitly have the requested kind, or
     // (for legacy episode runs written before kind was introduced) have no kind field.

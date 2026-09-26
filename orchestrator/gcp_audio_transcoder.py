@@ -27,6 +27,8 @@ from google.protobuf import duration_pb2
 # the HLS-spec 'und' for empty/unknown instead of 'xx' (which the shared helper uses
 # as its sentinel for "no input given").
 from lang_codes import normalize_lang_code as _shared_normalize_lang_code
+import runtime_config
+import secret_store
 
 
 def _normalize_lang_code(source_language: str) -> str:
@@ -36,9 +38,7 @@ def _normalize_lang_code(source_language: str) -> str:
 
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
-    sm = boto3.client("secretsmanager")
-    secret = sm.get_secret_value(SecretId=secret_arn)
-    info = json.loads(secret["SecretString"])
+    info = secret_store.get_json(secret_arn)
     return service_account.Credentials.from_service_account_info(info)
 
 
@@ -115,7 +115,7 @@ def _stamp_failed(episode_id, message):
     leave it stuck at the prior status (COPYING/RUNNING). Swallows its own errors
     so the caller's re-raise still surfaces the real failure to Step Functions."""
     try:
-        pymongo.MongoClient(os.environ["MONGO_URI"])["chai_q_lab"].audio_episodes.update_one(
+        pymongo.MongoClient(os.environ["MONGO_URI"])[runtime_config.DB_LAB].audio_episodes.update_one(
             {"episode_id": episode_id},
             {"$set": {"gcp_job_status": "FAILED", "gcp_error": message}},
             upsert=True,
@@ -140,7 +140,7 @@ def handler(event, context):
 
         gcp_project = os.environ["GCP_PROJECT"]
         gcp_location = os.environ.get("GCP_LOCATION", "asia-south1")
-        gcs_output_bucket = os.environ["GCS_OUTPUT_BUCKET"]
+        gcs_output_bucket = os.environ.get("AUDIO_GCS_BUCKET") or os.environ["GCS_OUTPUT_BUCKET"]  # AUDIO_GCS_BUCKET: Azure runs audio + video in one app (shared GCS_* names)
         segment_seconds = int(os.environ.get("AUDIO_SEGMENT_SECONDS", "2"))
         lufs = float(os.environ.get("AUDIO_LOUDNESS_LUFS", "-16"))
 
@@ -151,7 +151,7 @@ def handler(event, context):
         # Falls back to 'und' if the show/language isn't found — HLS spec-valid default.
         mongo_uri = os.environ["MONGO_URI"]
         mclient = pymongo.MongoClient(mongo_uri)
-        show_doc = mclient["master"]["podcast_showcache"].find_one(
+        show_doc = mclient[runtime_config.DB_MASTER]["podcast_showcache"].find_one(
             {"episodes.id": episode_id},
             {"language": 1},
         )
@@ -181,7 +181,7 @@ def handler(event, context):
 
     print(f"[OK] Submitted audio Transcoder job: {job_name} (ladder={ladder})")
 
-    mclient["chai_q_lab"].audio_episodes.update_one(
+    mclient[runtime_config.DB_LAB].audio_episodes.update_one(
         {"episode_id": episode_id},
         {"$set": {
             "gcp_job_status": "RUNNING",

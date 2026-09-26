@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, unquote
 from google.cloud import storage as gcs
 from google.oauth2 import service_account
+import secret_store
 
 # Each part is buffered in memory (S3 streams aren't seekable, and a seekable
 # buffer is required for a safely-retryable GCS upload). Peak memory ~=
@@ -46,9 +47,7 @@ PARTS_SUBDIR = ".copyparts"        # temp parts live here, cleaned up after
 def _get_gcp_credentials():
     """Load GCP credentials from AWS Secrets Manager."""
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
-    sm = boto3.client("secretsmanager")
-    secret = sm.get_secret_value(SecretId=secret_arn)
-    info = json.loads(secret["SecretString"])
+    info = secret_store.get_json(secret_arn)
     return service_account.Credentials.from_service_account_info(info)
 
 

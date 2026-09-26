@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import { runEpisodeGrid } from '@/lib/parallelResolLab';
+import { DB_LAB } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +19,7 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const db = client.db('chai_q_lab');
+    const db = client.db(DB_LAB);
     const existing = await db.collection('video_episodes').findOne(
       { episode_id: episodeId },
       { projection: { [`lab_status_${codec}`]: 1 } },

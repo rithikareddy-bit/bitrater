@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server';
-import { SFNClient, StopExecutionCommand } from '@aws-sdk/client-sfn';
-import { BatchClient, ListJobsCommand, TerminateJobCommand } from '@aws-sdk/client-batch';
+import { stopWorkflow } from '@/lib/workflows';
+import { listActiveJobs, terminateJob } from '@/lib/jobs';
 import clientPromise from '@/lib/mongodb';
-
-const region = process.env.AWS_REGION || 'us-east-1';
-const sfn = new SFNClient({ region });
-const batch = new BatchClient({ region });
+import { DB_LAB } from '@/lib/config';
 
 const BATCH_STATUSES = ['SUBMITTED', 'PENDING', 'RUNNABLE', 'STARTING', 'RUNNING'];
 
@@ -16,32 +13,18 @@ async function terminateOrphanedBatchJobs(episodeId) {
     `ChaiQSearch-${episodeId.slice(0, 24)}-`,
     `ParallelResol-${episodeId.slice(0, 20)}-`,
   ];
-  const queue = process.env.BATCH_JOB_QUEUE;
-  if (!queue) return 0;
+  // AWS queue (if configured) plus the Azure Batch lab job (if configured).
+  const jobs = await listActiveJobs('lab', { jobQueue: process.env.BATCH_JOB_QUEUE, statuses: BATCH_STATUSES });
 
   let terminated = 0;
-  for (const status of BATCH_STATUSES) {
-    try {
-      const resp = await batch.send(
-        new ListJobsCommand({ jobQueue: queue, jobStatus: status }),
-      );
-      for (const job of resp.jobSummaryList || []) {
-        if (job.jobName && prefixes.some(p => job.jobName.startsWith(p))) {
-          try {
-            await batch.send(
-              new TerminateJobCommand({
-                jobId: job.jobId,
-                reason: 'Stopped by user from dashboard',
-              }),
-            );
-            terminated++;
-          } catch {
-            // job may have already finished
-          }
-        }
+  for (const job of jobs) {
+    if (job.jobName && prefixes.some(p => job.jobName.startsWith(p))) {
+      try {
+        await terminateJob(job.jobId, 'Stopped by user from dashboard');
+        terminated++;
+      } catch {
+        // job may have already finished
       }
-    } catch {
-      // list may fail for a status, continue with others
     }
   }
   return terminated;
@@ -60,7 +43,7 @@ export async function POST(request) {
 
     const arnKey = `lab_execution_arn_${codec}`;
     const client = await clientPromise();
-    const db = client.db('chai_q_lab');
+    const db = client.db(DB_LAB);
 
     const episode = await db.collection('video_episodes').findOne(
       { episode_id: episodeId },
@@ -74,12 +57,7 @@ export async function POST(request) {
     const execArn = episode?.[arnKey];
 
     if (execArn) {
-      await sfn.send(
-        new StopExecutionCommand({
-          executionArn: execArn,
-          cause: 'Stopped by user from dashboard',
-        }),
-      );
+      await stopWorkflow(execArn, 'Stopped by user from dashboard');
     }
 
     const terminated = await terminateOrphanedBatchJobs(episodeId);

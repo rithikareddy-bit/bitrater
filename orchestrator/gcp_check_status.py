@@ -10,13 +10,13 @@ import pymongo
 from datetime import datetime, timezone
 from google.cloud.video import transcoder_v1
 from google.oauth2 import service_account
+import runtime_config
+import secret_store
 
 
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
-    sm = boto3.client("secretsmanager")
-    secret = sm.get_secret_value(SecretId=secret_arn)
-    info = json.loads(secret["SecretString"])
+    info = secret_store.get_json(secret_arn)
     return service_account.Credentials.from_service_account_info(info)
 
 
@@ -55,7 +55,7 @@ def handler(event, context):
 
     if state == "FAILED":
         mongo_uri = os.environ["MONGO_URI"]
-        db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
+        db = pymongo.MongoClient(mongo_uri)[runtime_config.DB_LAB]
         codec = event.get("codec", "h265")
         pfx = _field_prefix(event.get("golden_recipes"))
         status_key = f"{pfx}gcp_job_status_{codec}"

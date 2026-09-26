@@ -6,6 +6,7 @@ import {
   prepareTrailer,
 } from '@/lib/trailerPrep';
 import { orchestrate } from '@/lib/pipelineOrchestrator';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 const SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const LOCK_TTL_MS = 10 * 60 * 1000;   // Must exceed longest realistic scan
@@ -286,8 +287,8 @@ export async function scanTrailersOnce({ force = false } = {}) {
   const startedAt = Date.now();
 
   const client = await clientPromise();
-  const masterDb = client.db('master');
-  const labDb = client.db('chai_q_lab');
+  const masterDb = client.db(DB_MASTER);
+  const labDb = client.db(DB_LAB);
 
   // Operator toggle — must be explicitly enabled via the Trailer Overview UI.
   // `force: true` bypasses this check (used for a manual one-shot scan).

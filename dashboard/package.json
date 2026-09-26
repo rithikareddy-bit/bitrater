@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-batch": "^3.614.0",
@@ -15,6 +16,9 @@
     "@aws-sdk/client-secrets-manager": "^3.1051.0",
     "@aws-sdk/client-sfn": "^3.614.0",
     "@aws-sdk/s3-request-presigner": "^3.1027.0",
+    "@azure/identity": "^4.13.3",
+    "@azure/keyvault-secrets": "^4.10.0",
+    "@azure/storage-blob": "^12.34.0",
     "@google-cloud/video-transcoder": "^4.4.2",
     "chart.js": "^4.4.3",
     "mongodb": "^6.8.0",
@@ -24,8 +28,10 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "aws-sdk-client-mock": "^4.1.0",
     "eslint": "^8",
-    "eslint-config-next": "14.2.35"
+    "eslint-config-next": "14.2.35",
+    "vitest": "^2.1.9"
   },
   "overrides": {
     "minimatch": "^9.0.8",

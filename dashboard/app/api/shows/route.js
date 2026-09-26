@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import { resolveShowPosterUrl } from '@/lib/posterUrl';
+import { DB_MASTER } from '@/lib/config';
 
 const DEFAULT_LIMIT = 24;
 const MAX_LIMIT = 500;
@@ -37,7 +38,7 @@ export async function GET(request) {
     const wantLang = langParam != null ? langParam.toLowerCase() : null;
 
     const client = await clientPromise();
-    const db = client.db('master');
+    const db = client.db(DB_MASTER);
 
     // Build language match — Kannada has both "kan" (legacy) and "kn"; treat as one bucket.
     let langMatch = null;

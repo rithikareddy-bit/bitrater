@@ -48,7 +48,8 @@ from gcp_finalize_hls import (
     _get_subtitle_vtt_urls,
     _upload_subtitles_to_gcs,
 )
-CDN_BUCKET = "chai-shots-manifests"
+import runtime_config
+CDN_BUCKET = runtime_config.CDN_BUCKET
 RESIGN_LAMBDA_ARN = os.environ.get("RESIGN_PLAYBACK_URLS_LAMBDA_ARN")
 MEDIA_CDN_PROJECT = os.environ.get("MEDIA_CDN_PROJECT", "media-cdn-poc-466009")
 MEDIA_CDN_SERVICE = os.environ.get("MEDIA_CDN_SERVICE", "chai-shorts-media-cdn")
@@ -161,6 +162,14 @@ def _invoke_resign(episode_id: str, canonical_url: str) -> dict:
     subtitle children unsigned and players would 403 on every .vtt fetch
     while subtitles_injected was marked > 0 in Mongo.
     """
+    payload = {"episode_id": episode_id, "canonical_url": canonical_url}
+    if os.environ.get("RESIGN_INVOKE_MODE", "lambda") == "inprocess":
+        # Azure (after the resigner cutover, G4): same handler, called in-process.
+        import resign_playback_urls
+
+        result = resign_playback_urls.handler(payload, None)
+        print(f"[RESIGN] {episode_id}: {json.dumps(result)}")
+        return result
     if not RESIGN_LAMBDA_ARN:
         raise RuntimeError(
             "RESIGN_PLAYBACK_URLS_LAMBDA_ARN env var not set; refusing to "
@@ -169,7 +178,6 @@ def _invoke_resign(episode_id: str, canonical_url: str) -> dict:
     global _lambda_client
     if _lambda_client is None:
         _lambda_client = boto3.client("lambda")
-    payload = {"episode_id": episode_id, "canonical_url": canonical_url}
     resp = _lambda_client.invoke(
         FunctionName=RESIGN_LAMBDA_ARN,
         InvocationType="RequestResponse",
@@ -259,7 +267,7 @@ def handler(event, context):
     """
     mongo_client = pymongo.MongoClient(os.environ["MONGO_URI"])
     try:
-        db = mongo_client["chai_q_lab"]
+        db = mongo_client[runtime_config.DB_LAB]
 
         episode_ids = event.get("episode_ids")
         if episode_ids:

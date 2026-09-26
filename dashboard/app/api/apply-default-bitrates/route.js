@@ -4,6 +4,7 @@ import clientPromise from '@/lib/mongodb';
 import { findEpisodeInShowcache, findTrailerInShowcase } from '@/lib/showcacheLookup';
 import { probeTrailerFps } from '@/lib/trailerPrep';
 import { isAudioVideoRecipe } from '@/lib/avLadder';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 const TRAILER_ID_RE = /^trailer_([a-f0-9]{24})_(.+)$/;
 
@@ -41,8 +42,8 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const masterDb = client.db('master');
-    const labDb = client.db('chai_q_lab');
+    const masterDb = client.db(DB_MASTER);
+    const labDb = client.db(DB_LAB);
 
     const trailerMatch = TRAILER_ID_RE.exec(episodeId);
     let s3Url;

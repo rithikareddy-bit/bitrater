@@ -33,6 +33,7 @@ import tempfile
 from urllib.parse import urljoin
 
 import requests
+DB_LAB = os.environ.get("DB_LAB", "chai_q_lab")  # Azure shadow isolation (AZURE-MIGRATION-PLAN.md P2)
 
 
 # ── codec label from the ACTUAL rendition stream (not assumed from kbps) ─────────────────────
@@ -234,7 +235,7 @@ def _resolve_mongo_uri(args):
 
 def write_results(mongo_uri, episode_id, summary, per_rung):
     import pymongo
-    db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
+    db = pymongo.MongoClient(mongo_uri)[DB_LAB]
     db.audio_episodes.update_one(
         {"episode_id": episode_id}, {"$set": {"visqol": summary}}, upsert=True
     )
@@ -247,7 +248,7 @@ def stamp_failed(mongo_uri, episode_id, message):
     errors so the real failure still surfaces to the caller / Batch."""
     try:
         import pymongo
-        pymongo.MongoClient(mongo_uri)["chai_q_lab"].audio_episodes.update_one(
+        pymongo.MongoClient(mongo_uri)[DB_LAB].audio_episodes.update_one(
             {"episode_id": episode_id},
             {"$set": {"visqol.status": "FAILED", "visqol.error": message,
                       "visqol.computed_at": _now_iso()}},

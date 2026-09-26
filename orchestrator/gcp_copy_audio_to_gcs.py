@@ -20,13 +20,13 @@ import pymongo
 import requests
 from google.cloud import storage as gcs
 from google.oauth2 import service_account
+import runtime_config
+import secret_store
 
 
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
-    sm = boto3.client("secretsmanager")
-    secret = sm.get_secret_value(SecretId=secret_arn)
-    info = json.loads(secret["SecretString"])
+    info = secret_store.get_json(secret_arn)
     return service_account.Credentials.from_service_account_info(info)
 
 
@@ -34,7 +34,7 @@ def _set_status(episode_id, fields):
     """Best-effort status stamp on chai_q_lab.audio_episodes so the dashboard shows
     progress (and failures) through the copy/normalize phases, not just from transcode on."""
     try:
-        pymongo.MongoClient(os.environ["MONGO_URI"])["chai_q_lab"].audio_episodes.update_one(
+        pymongo.MongoClient(os.environ["MONGO_URI"])[runtime_config.DB_LAB].audio_episodes.update_one(
             {"episode_id": episode_id}, {"$set": fields}, upsert=True
         )
     except Exception as e:  # status is non-critical; never fail the step over it
@@ -73,8 +73,8 @@ def handler(event, context):
 
 
 def _copy(episode_id, audio_url):
-    gcs_input_bucket = os.environ["GCS_INPUT_BUCKET"]
-    gcs_output_bucket = os.environ.get("GCS_OUTPUT_BUCKET", gcs_input_bucket)
+    gcs_input_bucket = os.environ.get("AUDIO_GCS_BUCKET") or os.environ["GCS_INPUT_BUCKET"]  # AUDIO_GCS_BUCKET: Azure runs audio + video in one app (shared GCS_* names)
+    gcs_output_bucket = os.environ.get("AUDIO_GCS_BUCKET") or os.environ.get("GCS_OUTPUT_BUCKET", gcs_input_bucket)
 
     _set_status(episode_id, {
         "gcp_job_status": "COPYING",

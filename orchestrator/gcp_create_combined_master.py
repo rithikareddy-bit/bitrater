@@ -20,10 +20,12 @@ import pymongo
 from datetime import datetime, timezone
 from google.cloud import storage as gcs
 from google.oauth2 import service_account
+import runtime_config
+import secret_store
 
 
 CDN_BASE = os.environ["CDN_BASE"]
-CDN_BUCKET = "chai-shots-manifests"
+CDN_BUCKET = runtime_config.CDN_BUCKET
 
 # HLS playlists are UTF-8; subtitle #EXT-X-MEDIA NAME may include non-ASCII.
 CONTENT_TYPE_M3U8 = "application/x-mpegURL; charset=utf-8"
@@ -38,9 +40,7 @@ PODCAST_VIDEO_FILENAME = "podcastvideo.m3u8"
 
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
-    sm = boto3.client("secretsmanager")
-    secret = sm.get_secret_value(SecretId=secret_arn)
-    info = json.loads(secret["SecretString"])
+    info = secret_store.get_json(secret_arn)
     return service_account.Credentials.from_service_account_info(info)
 
 
@@ -122,7 +122,7 @@ def _get_episode_meta(mongo_client, episode_id):
     For trailer ids (`trailer_<showObjectId>_<_key>`) return the _key as the
     number-slot so filename builders can produce stable trailer-specific names.
     """
-    master_db = mongo_client["master"]
+    master_db = mongo_client[runtime_config.DB_MASTER]
 
     trailer_match = _TRAILER_ID_RE.match(episode_id)
     if trailer_match:
@@ -172,7 +172,7 @@ def handler(event, context):
     h265_field = f"{pfx}h265_master_m3u8_url"
 
     mongo_client = pymongo.MongoClient(mongo_uri)
-    episode = mongo_client["chai_q_lab"].video_episodes.find_one(
+    episode = mongo_client[runtime_config.DB_LAB].video_episodes.find_one(
         {"episode_id": episode_id},
         {h264_field: 1, h265_field: 1},
     )
@@ -318,7 +318,7 @@ def handler(event, context):
         updates["subtitles_injected"] = 0
 
     try:
-        mongo_client["chai_q_lab"].video_episodes.update_one(
+        mongo_client[runtime_config.DB_LAB].video_episodes.update_one(
             {"episode_id": episode_id},
             {"$set": updates},
         )

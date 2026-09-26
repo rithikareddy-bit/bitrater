@@ -14,6 +14,8 @@ set -euo pipefail
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/scripts/guard_no_aws_deploy.sh"
 if [[ -f "${SCRIPT_DIR}/.env.deploy" ]]; then
   set -a
   # shellcheck source=/dev/null

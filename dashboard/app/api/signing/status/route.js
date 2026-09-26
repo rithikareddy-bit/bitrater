@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -26,8 +27,8 @@ export async function GET(request) {
     const showFilter = searchParams.get('show') || null;
 
     const client = await clientPromise();
-    const masterDb = client.db('master');
-    const labDb = client.db('chai_q_lab');
+    const masterDb = client.db(DB_MASTER);
+    const labDb = client.db(DB_LAB);
 
     const query = showFilter ? { slug: showFilter } : {};
     const shows = await masterDb.collection('showcache')

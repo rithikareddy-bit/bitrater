@@ -20,13 +20,34 @@ const OUTPUT_BUCKET = 'chai-q-test-public';
 
 let _cachedClient = null;
 
+export function testJasEnabled(env = process.env) {
+  const configured = env.TEST_JAS_H264_ENABLED;
+  if (configured !== undefined) return configured.toLowerCase() === 'true';
+  return (env.CLOUD_PROVIDER || 'aws') === 'aws';
+}
+
+async function readSecret(ref) {
+  if (ref.startsWith('kv:')) {
+    const vaultUrl = process.env.KEY_VAULT_URL;
+    if (!vaultUrl) throw new Error('KEY_VAULT_URL not set');
+    const [{ SecretClient }, { DefaultAzureCredential }] = await Promise.all([
+      import('@azure/keyvault-secrets'),
+      import('@azure/identity'),
+    ]);
+    const secret = await new SecretClient(vaultUrl, new DefaultAzureCredential()).getSecret(ref.slice(3));
+    if (!secret.value) throw new Error(`Key Vault secret ${ref.slice(3)} is empty`);
+    return secret.value;
+  }
+  const sm = new SecretsManagerClient({ region: process.env.AWS_REGION || 'us-east-1' });
+  const res = await sm.send(new GetSecretValueCommand({ SecretId: ref }));
+  return res.SecretString;
+}
+
 async function getTranscoderClient() {
   if (_cachedClient) return _cachedClient;
   const secretArn = process.env.GCP_CREDENTIALS_SECRET_ARN;
   if (!secretArn) throw new Error('GCP_CREDENTIALS_SECRET_ARN not set');
-  const sm = new SecretsManagerClient({ region: process.env.AWS_REGION || 'us-east-1' });
-  const res = await sm.send(new GetSecretValueCommand({ SecretId: secretArn }));
-  const credentials = JSON.parse(res.SecretString);
+  const credentials = JSON.parse(await readSecret(secretArn));
   _cachedClient = new TranscoderServiceClient({ credentials, projectId: GCP_PROJECT });
   return _cachedClient;
 }
@@ -105,6 +126,9 @@ function buildH264JobConfig(inputUri, outputUri) {
 
 export async function POST(request) {
   try {
+    if (!testJasEnabled()) {
+      return NextResponse.json({ error: 'test-jas H264 is disabled on this deployment' }, { status: 404 });
+    }
     const body = await request.json().catch(() => ({}));
     const { episodeId } = body || {};
     if (!episodeId || typeof episodeId !== 'string') {
@@ -137,4 +161,8 @@ export async function POST(request) {
     console.error('[POST /api/test-jas-h264]', err);
     return NextResponse.json({ error: err?.message || 'Failed' }, { status: 500 });
   }
+}
+
+export async function GET() {
+  return NextResponse.json({ enabled: testJasEnabled() });
 }

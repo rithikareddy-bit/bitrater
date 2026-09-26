@@ -1,18 +1,17 @@
 import { NextResponse } from 'next/server';
 import { ObjectId } from 'mongodb';
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { invokeFunction, needsLambdaArn } from '@/lib/invoke';
 import clientPromise from '@/lib/mongodb';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-const lambda = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 const RESYNC_LAMBDA_ARN = process.env.RESYNC_SUBTITLES_LAMBDA_ARN;
 
 async function listMissingForShow(showId) {
   const client = await clientPromise();
-  const masterDb = client.db('master');
+  const masterDb = client.db(DB_MASTER);
 
   const show = await masterDb.collection('showcache').findOne(
     { _id: new ObjectId(showId) },
@@ -28,7 +27,7 @@ async function listMissingForShow(showId) {
 
 async function listAllCombinedEpisodes() {
   const client = await clientPromise();
-  const shows = await client.db('master').collection('showcache').find(
+  const shows = await client.db(DB_MASTER).collection('showcache').find(
     {},
     { projection: { 'episodes.id': 1, 'episodes.signed_playback_url': 1 } },
   ).toArray();
@@ -45,11 +44,11 @@ async function listAllCombinedEpisodes() {
 }
 
 async function invokeOneSync(episodeId) {
-  const cmd = new InvokeCommand({
+  const cmd = {
     FunctionName: RESYNC_LAMBDA_ARN,
     Payload: Buffer.from(JSON.stringify({ episode_id: episodeId })),
-  });
-  const result = await lambda.send(cmd);
+  };
+  const result = await invokeFunction('resync-subtitles', cmd);
   let body = {};
   try {
     body = JSON.parse(Buffer.from(result.Payload).toString() || '{}');
@@ -66,12 +65,12 @@ async function invokeOneAsync(episodeId) {
   // truth). UI polls GET ?showId for remaining count.
   // Never throws — returns { status: 'queued' } or { status: 'invoke-error', error }.
   try {
-    const cmd = new InvokeCommand({
+    const cmd = {
       FunctionName: RESYNC_LAMBDA_ARN,
       InvocationType: 'Event',
       Payload: Buffer.from(JSON.stringify({ episode_id: episodeId })),
-    });
-    await lambda.send(cmd);
+    };
+    await invokeFunction('resync-subtitles', cmd);
     return { episode_id: episodeId, status: 'queued' };
   } catch (err) {
     console.error(`[invokeOneAsync] ${episodeId}:`, err.message);
@@ -85,12 +84,12 @@ async function invokeOneAsync(episodeId) {
 // Never throws.
 async function invokeBatchAsync(episodeIds) {
   try {
-    const cmd = new InvokeCommand({
+    const cmd = {
       FunctionName: RESYNC_LAMBDA_ARN,
       InvocationType: 'Event',
       Payload: Buffer.from(JSON.stringify({ episode_ids: episodeIds })),
-    });
-    await lambda.send(cmd);
+    };
+    await invokeFunction('resync-subtitles', cmd);
     return { count: episodeIds.length, status: 'queued' };
   } catch (err) {
     console.error(`[invokeBatchAsync] shard of ${episodeIds.length}:`, err.message);
@@ -105,7 +104,7 @@ async function invokeBatchAsync(episodeIds) {
  *                       combined master URL but no subtitles_injected.
  */
 export async function POST(request) {
-  if (!RESYNC_LAMBDA_ARN) {
+  if (!RESYNC_LAMBDA_ARN && needsLambdaArn('resync-subtitles')) {
     return NextResponse.json(
       { error: 'RESYNC_SUBTITLES_LAMBDA_ARN not configured' },
       { status: 500 },
@@ -203,7 +202,7 @@ export async function GET(request) {
   try {
     if (episodeId) {
       const client = await clientPromise();
-      const doc = await client.db('chai_q_lab').collection('video_episodes').findOne(
+      const doc = await client.db(DB_LAB).collection('video_episodes').findOne(
         { episode_id: episodeId },
         { projection: { combined_master_m3u8_url: 1, subtitles_injected: 1 } },
       );

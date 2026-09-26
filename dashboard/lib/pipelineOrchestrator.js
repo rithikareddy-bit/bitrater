@@ -1,6 +1,7 @@
 import { ObjectId } from 'mongodb';
 import clientPromise from '@/lib/mongodb';
 import { runParallelResolLab } from '@/lib/parallelResolLab';
+import { DB_LAB } from '@/lib/config';
 
 const POLL_MS = 10_000;
 const MAX_RETRIES = 2;
@@ -75,7 +76,7 @@ export async function orchestrate(runIdStr) {
   const instanceId = generateInstanceId();
 
   const client = await clientPromise();
-  const db = client.db('chai_q_lab');
+  const db = client.db(DB_LAB);
   const col = db.collection('pipeline_runs');
 
   // ── ACQUIRE LOCK ─────────────────────────────────────────────────────────────

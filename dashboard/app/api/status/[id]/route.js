@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 import { LEGACY_TOTAL_JOBS_H264, LEGACY_TOTAL_JOBS_H265 } from '@/lib/constants';
+import { DB_LAB } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -12,7 +13,7 @@ export async function GET(request, { params }) {
 
   try {
     const client = await clientPromise();
-    const db = client.db('chai_q_lab');
+    const db = client.db(DB_LAB);
 
     const episode = await db.collection('video_episodes').findOne(
       { episode_id: id },

@@ -45,3 +45,5 @@ __pycache__/
 
 # Backfill log files
 webp_backfill_*.log
+# Local Python venv (tests)
+.venv/

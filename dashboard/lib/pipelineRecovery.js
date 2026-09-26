@@ -1,5 +1,6 @@
 import clientPromise from '@/lib/mongodb';
 import { orchestrate } from '@/lib/pipelineOrchestrator';
+import { DB_LAB } from '@/lib/config';
 
 /**
  * Called on server startup via instrumentation.ts.
@@ -10,7 +11,7 @@ import { orchestrate } from '@/lib/pipelineOrchestrator';
 export async function recoverOrphanedPipelines() {
   try {
     const client = await clientPromise();
-    const col = client.db('chai_q_lab').collection('pipeline_runs');
+    const col = client.db(DB_LAB).collection('pipeline_runs');
 
     const orphans = await col.find({ status: 'RUNNING' }).toArray();
     if (orphans.length === 0) return;

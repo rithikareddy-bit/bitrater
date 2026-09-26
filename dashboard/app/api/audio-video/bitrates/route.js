@@ -3,6 +3,7 @@ import clientPromise from '@/lib/mongodb';
 import { findEpisodeInShowcache } from '@/lib/showcacheLookup';
 import { probeTrailerFps } from '@/lib/trailerPrep';
 import { AV_RESOLUTIONS, isAudioVideoRecipe } from '@/lib/avLadder';
+import { DB_LAB, DB_MASTER } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,13 +36,13 @@ export async function GET(request) {
 
     const client = await clientPromise();
     const showWithEp = await findEpisodeInShowcache(
-      client.db('master'),
+      client.db(DB_MASTER),
       episodeId,
       { 'episodes.$': 1, slug: 1 },
     );
     const episode = showWithEp?.episodes?.[0] ?? null;
 
-    const doc = await client.db('chai_q_lab').collection('video_episodes').findOne(
+    const doc = await client.db(DB_LAB).collection('video_episodes').findOne(
       { episode_id: episodeId },
       {
         projection: {
@@ -117,9 +118,9 @@ export async function POST(request) {
     }
 
     const client = await clientPromise();
-    const labDb = client.db('chai_q_lab');
+    const labDb = client.db(DB_LAB);
 
-    const showWithEp = await findEpisodeInShowcache(client.db('master'), episodeId);
+    const showWithEp = await findEpisodeInShowcache(client.db(DB_MASTER), episodeId);
     const s3Url = showWithEp?.episodes?.[0]?.s3_url;
     if (!s3Url) {
       return NextResponse.json({ error: 'No s3_url found for this episode' }, { status: 400 });

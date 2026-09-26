@@ -14,6 +14,8 @@ from google.cloud.video import transcoder_v1
 from google.cloud.video.transcoder_v1 import types
 from google.oauth2 import service_account
 from google.protobuf import duration_pb2
+import runtime_config
+import secret_store
 
 
 PORTRAIT_DIMS = {
@@ -52,9 +54,7 @@ def _is_audio_video_ladder(golden_recipes):
 
 def _get_gcp_credentials():
     secret_arn = os.environ["GCP_CREDENTIALS_SECRET_ARN"]
-    sm = boto3.client("secretsmanager")
-    secret = sm.get_secret_value(SecretId=secret_arn)
-    info = json.loads(secret["SecretString"])
+    info = secret_store.get_json(secret_arn)
     return service_account.Credentials.from_service_account_info(info)
 
 
@@ -282,7 +282,7 @@ def handler(event, context):
 
     print(f"[OK] Submitted GCP Transcoder job: {job_name} (codec={codec})")
 
-    db = pymongo.MongoClient(mongo_uri)["chai_q_lab"]
+    db = pymongo.MongoClient(mongo_uri)[runtime_config.DB_LAB]
     codec_key = f"gcp_job_status_{codec}"
     job_name_key = f"gcp_job_name_{codec}"
     db.video_episodes.update_one(
