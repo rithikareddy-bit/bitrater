@@ -10,9 +10,6 @@ import {
   formatKbps,
 } from '@/lib/avLadder';
 
-/** `/api/shows` MAX_LIMIT is 500 (>> current ~165 shows). */
-const ALL_SHOWS_LIMIT = 500;
-
 const PANEL = {
   background: '#161616',
   border: '1px solid #2a2a2a',
@@ -62,13 +59,13 @@ export default function AudioVideoPage() {
   const [selectedEpisodeId, setSelectedEpisodeId] = useState(null);
 
   useEffect(() => {
-    fetch(`/api/shows?limit=${ALL_SHOWS_LIMIT}&skip=0`)
+    fetch('/api/audio-video/podcast-shows')
       .then((r) => r.json())
       .then((d) => {
         if (d.error) throw new Error(d.error);
         setShows(d.shows || []);
       })
-      .catch(() => setShowsError('Failed to load shows'));
+      .catch(() => setShowsError('Failed to load podcast shows'));
   }, []);
 
   const loadEpisodes = useCallback(async (showId) => {
@@ -76,7 +73,7 @@ export default function AudioVideoPage() {
     setLiveLoading(true);
     setLiveError(null);
     try {
-      const r = await fetch(`/api/shows/${showId}/episodes-live`);
+      const r = await fetch(`/api/shows/${showId}/episodes-live?source=podcast`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setLive(d);
@@ -110,8 +107,8 @@ export default function AudioVideoPage() {
         </span>
       </div>
       <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 18px', lineHeight: 1.5 }}>
-        Sources come from <code style={{ color: '#94a3b8' }}>master.showcache.episodes[].s3_url</code>, same as
-        the catalog. Enter the bitrates, save the ladder, then run GCP per codec — thumbnail VTT,
+        Podcasts only — shows and sources come from{' '}
+        <code style={{ color: '#94a3b8' }}>master.podcast_showcache.episodes[].s3_url</code>. Enter the bitrates, save the ladder, then run GCP per codec — thumbnail VTT,
         subtitles, combined master and catalog sync are the existing steps, unchanged.
       </p>
 
@@ -121,12 +118,12 @@ export default function AudioVideoPage() {
 
       {/* Show picker */}
       <div style={{ ...PANEL, marginBottom: 16 }}>
-        <div style={PANEL_TITLE}>Show</div>
+        <div style={PANEL_TITLE}>Podcast show</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search shows…"
+            placeholder="Search podcasts…"
             style={{
               flex: '0 0 240px', background: '#0d0d0d', border: '1px solid #333',
               borderRadius: 6, padding: '8px 10px', color: '#e8e8e8', fontSize: 13,
@@ -140,10 +137,10 @@ export default function AudioVideoPage() {
               borderRadius: 6, padding: '8px 10px', color: '#e8e8e8', fontSize: 13,
             }}
           >
-            <option value="">— select a show ({filteredShows.length}) —</option>
+            <option value="">— select a podcast ({filteredShows.length}) —</option>
             {filteredShows.map((s) => (
               <option key={s._id} value={s._id}>
-                {s.title} {s.language ? `· ${String(s.language).toUpperCase()}` : ''} · {s.episodeCount} ep
+                {s.title} {s.language ? `· ${String(s.language).toUpperCase()}` : ''} · {s.episodeCount} ep · {s.withS3Url} with s3_url{s.active === false ? ' · inactive' : ''}
               </option>
             ))}
           </select>
@@ -206,7 +203,7 @@ export default function AudioVideoPage() {
                           type="button"
                           disabled={!ep.s3_url}
                           onClick={() => setSelectedEpisodeId(open ? null : ep.episodeId)}
-                          title={ep.s3_url ? '' : 'This episode has no source in showcache'}
+                          title={ep.s3_url ? '' : 'This episode has no s3_url in podcast_showcache'}
                           style={{
                             background: open ? '#1e293b' : '#111',
                             border: `1px solid ${ep.s3_url ? '#334155' : '#262626'}`,

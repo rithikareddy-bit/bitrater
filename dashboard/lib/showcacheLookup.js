@@ -2,6 +2,7 @@ import { getDevClientPromise } from '@/lib/mongodb';
 
 const DB = process.env.MONGO_DATABASE || 'master';
 const SHOWCACHE = process.env.MONGO_SHOWCACHE_COLLECTION || 'showcache';
+const PODCAST_SHOWCACHE = 'podcast_showcache';
 
 // Try the showcache lookup against prod; if no s3_url is found, retry against
 // the dev cluster (SUBTITLE_MONGO_URI). Returns the showcache doc shape
@@ -24,14 +25,26 @@ async function withFallback(masterDb, runQuery, hasS3Url) {
   }
 }
 
+// Podcast episodes live in podcast_showcache with their own UUIDs (no overlap
+// with showcache ids), and the Audio-Video page runs them through the same
+// GCP/VTT routes — so a showcache miss also checks podcast_showcache.
 export function findEpisodeInShowcache(masterDb, episodeId, projection = { 'episodes.$': 1 }) {
+  const hasS3Url = (doc) => !!doc?.episodes?.[0]?.s3_url;
   return withFallback(
     masterDb,
-    (db) => db.collection(SHOWCACHE).findOne(
-      { 'episodes.id': episodeId },
-      { projection },
-    ),
-    (doc) => !!doc?.episodes?.[0]?.s3_url,
+    async (db) => {
+      const show = await db.collection(SHOWCACHE).findOne(
+        { 'episodes.id': episodeId },
+        { projection },
+      );
+      if (hasS3Url(show)) return show;
+      const podcast = await db.collection(PODCAST_SHOWCACHE).findOne(
+        { 'episodes.id': episodeId },
+        { projection },
+      );
+      return hasS3Url(podcast) ? podcast : show || podcast;
+    },
+    hasS3Url,
   );
 }
 

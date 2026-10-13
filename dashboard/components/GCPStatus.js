@@ -363,6 +363,10 @@ export default function GCPStatus({
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Failed to load podcast episodes');
       setPodcastEpisodes(d.episodes || []);
+      // Audio-Video sources come from podcast_showcache, so the run's own
+      // episode is usually the sync target — pre-pick it (operator can change).
+      const self = (d.episodes || []).find((e) => e.id === episodeId);
+      if (self) setPickedEpisode((prev) => prev || self);
     } catch (err) {
       setPvSyncError(err.message);
     } finally {

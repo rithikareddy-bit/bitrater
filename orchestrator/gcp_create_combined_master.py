@@ -136,14 +136,17 @@ def _get_episode_meta(mongo_client, episode_id):
             return "unknown", trailer_key
         return show.get("slug", "unknown"), trailer_key
 
-    show = master_db["showcache"].find_one(
-        {"episodes.id": episode_id},
-        {"episodes.$": 1, "slug": 1},
-    )
-    if not show or not show.get("episodes"):
-        return "unknown", 0
-    ep = show["episodes"][0]
-    return show.get("slug", "unknown"), ep.get("episode_number", 0)
+    # podcast_showcache: Audio-Video runs podcast episodes, whose UUIDs live
+    # only there.
+    for coll in ("showcache", "podcast_showcache"):
+        show = master_db[coll].find_one(
+            {"episodes.id": episode_id},
+            {"episodes.$": 1, "slug": 1},
+        )
+        if show and show.get("episodes"):
+            ep = show["episodes"][0]
+            return show.get("slug", "unknown"), ep.get("episode_number", 0)
+    return "unknown", 0
 
 
 def _download_manifest_from_url(bucket, cdn_base, url):

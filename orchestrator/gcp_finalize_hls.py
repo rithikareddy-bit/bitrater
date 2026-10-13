@@ -253,6 +253,19 @@ def _get_gcp_credentials():
 _TRAILER_ID_RE = re.compile(r"^trailer_([a-f0-9]{24})_(.+)$")
 
 
+def _find_episode_show(master_db, episode_id):
+    """showcache first, then podcast_showcache — Audio-Video runs podcast
+    episodes, whose UUIDs live only in podcast_showcache."""
+    for coll in ("showcache", "podcast_showcache"):
+        show = master_db[coll].find_one(
+            {"episodes.id": episode_id},
+            {"episodes.$": 1, "slug": 1},
+        )
+        if show and show.get("episodes"):
+            return show
+    return None
+
+
 def _get_episode_meta(db, episode_id):
     """Fetch item metadata from showcache. Supports episodes and trailers.
 
@@ -280,12 +293,9 @@ def _get_episode_meta(db, episode_id):
         episode_output_key = f"{show_slug}/trailer_{trailer_key}"
         return episode_slug, episode_output_key, show_slug, episode_number, duration
 
-    show = master_db["showcache"].find_one(
-        {"episodes.id": episode_id},
-        {"episodes.$": 1, "slug": 1},
-    )
+    show = _find_episode_show(master_db, episode_id)
     if not show or not show.get("episodes"):
-        raise ValueError(f"Episode {episode_id} not found in showcache")
+        raise ValueError(f"Episode {episode_id} not found in showcache or podcast_showcache")
     ep = show["episodes"][0]
     episode_slug = ep.get("slug", episode_id)
     show_slug = show.get("slug", "unknown")

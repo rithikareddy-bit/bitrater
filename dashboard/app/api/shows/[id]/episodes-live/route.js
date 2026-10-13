@@ -29,8 +29,9 @@ function pickEpisodeNumber(ep, index) {
 /**
  * GET /api/shows/[id]/episodes-live
  * Bulk lab + golden + QC + GCP snapshot for all episodes in a show (single round-trip).
+ * ?source=podcast → the show is in master.podcast_showcache instead of showcache.
  */
-export async function GET(_request, { params }) {
+export async function GET(request, { params }) {
   try {
     const rawId = params.id;
     if (!rawId || !ObjectId.isValid(rawId)) {
@@ -41,7 +42,11 @@ export async function GET(_request, { params }) {
     const masterDb = client.db(DB_MASTER);
     const labDb = client.db(DB_LAB);
 
-    const show = await masterDb.collection('showcache').findOne({ _id: new ObjectId(rawId) });
+    // ?source=podcast reads master.podcast_showcache (Audio-Video page); anything
+    // else keeps the showcache default.
+    const collection =
+      request?.nextUrl?.searchParams.get('source') === 'podcast' ? 'podcast_showcache' : 'showcache';
+    const show = await masterDb.collection(collection).findOne({ _id: new ObjectId(rawId) });
     if (!show) {
       return NextResponse.json({ error: 'Show not found' }, { status: 404 });
     }
