@@ -283,8 +283,13 @@ def handler(event, context):
     print(f"[OK] Submitted GCP Transcoder job: {job_name} (codec={codec})")
 
     db = pymongo.MongoClient(mongo_uri)[runtime_config.DB_LAB]
-    codec_key = f"gcp_job_status_{codec}"
-    job_name_key = f"gcp_job_name_{codec}"
+    # Audio-Video runs (golden_recipes.av_run) own the `av_`-prefixed fields,
+    # same rule as gcp_check_status._field_prefix — writing the classic keys
+    # would leave them stuck at RUNNING (check_status only updates av_*) and
+    # clobber a classic run's status on the same episode.
+    pfx = "av_" if (golden_recipes or {}).get("av_run") is True else ""
+    codec_key = f"{pfx}gcp_job_status_{codec}"
+    job_name_key = f"{pfx}gcp_job_name_{codec}"
     db.video_episodes.update_one(
         {"episode_id": episode_id},
         {"$set": {

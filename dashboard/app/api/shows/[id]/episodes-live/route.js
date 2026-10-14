@@ -44,8 +44,11 @@ export async function GET(request, { params }) {
 
     // ?source=podcast reads master.podcast_showcache (Audio-Video page); anything
     // else keeps the showcache default.
-    const collection =
-      request?.nextUrl?.searchParams.get('source') === 'podcast' ? 'podcast_showcache' : 'showcache';
+    const isPodcast = request?.nextUrl?.searchParams.get('source') === 'podcast';
+    const collection = isPodcast ? 'podcast_showcache' : 'showcache';
+    // Podcast episodes run through Audio-Video, whose GCP status lives in the
+    // `av_` fields and whose output is podcastvideo.m3u8, not the combined master.
+    const gcpPfx = isPodcast ? 'av_' : '';
     const show = await masterDb.collection(collection).findOne({ _id: new ObjectId(rawId) });
     if (!show) {
       return NextResponse.json({ error: 'Show not found' }, { status: 404 });
@@ -74,11 +77,12 @@ export async function GET(request, { params }) {
                   lab_status_h264: 1,
                   lab_status_h265: 1,
                   quality_check: 1,
-                  gcp_job_status_h264: 1,
-                  gcp_job_status_h265: 1,
+                  [`${gcpPfx}gcp_job_status_h264`]: 1,
+                  [`${gcpPfx}gcp_job_status_h265`]: 1,
                   h264_master_m3u8_url: 1,
                   h265_master_m3u8_url: 1,
                   combined_master_m3u8_url: 1,
+                  podcastvideo_m3u8_url: 1,
                 },
               },
             )
@@ -108,11 +112,11 @@ export async function GET(request, { params }) {
         golden_h264: h264Golden,
         golden_h265: h265Golden,
         qc: qcLabel(doc?.quality_check),
-        gcp_h264: gcpShort(doc?.gcp_job_status_h264),
-        gcp_h265: gcpShort(doc?.gcp_job_status_h265),
+        gcp_h264: gcpShort(doc?.[`${gcpPfx}gcp_job_status_h264`]),
+        gcp_h265: gcpShort(doc?.[`${gcpPfx}gcp_job_status_h265`]),
         has_h264_url: Boolean(doc?.h264_master_m3u8_url),
         has_h265_url: Boolean(doc?.h265_master_m3u8_url),
-        combined_url: doc?.combined_master_m3u8_url ?? null,
+        combined_url: (isPodcast ? doc?.podcastvideo_m3u8_url : doc?.combined_master_m3u8_url) ?? null,
       };
     });
 

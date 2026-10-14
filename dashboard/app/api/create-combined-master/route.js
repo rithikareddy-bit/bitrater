@@ -21,28 +21,33 @@ export async function POST(request) {
 
     const client = await clientPromise();
     const db = client.db(DB_LAB);
+    // `variant: 'podcastvideo'` writes the same manifest under podcastvideo.m3u8,
+    // which the CDN serves without a token (enforcement matches *_combined.m3u8).
+    // Omitted → the classic tokenised combined master, unchanged.
+    const isPodcastVideo = variant === 'podcastvideo';
+    // podcastvideo is built from the Audio-Video run's `av_` masters (the
+    // Lambda reads the same fields), so check those, not the classic ones.
+    const pfx = isPodcastVideo ? 'av_' : '';
+    const h264Field = `${pfx}h264_master_m3u8_url`;
+    const h265Field = `${pfx}h265_master_m3u8_url`;
+
     const episode = await db.collection('video_episodes').findOne(
       { episode_id: episodeId },
-      { projection: { h264_master_m3u8_url: 1, h265_master_m3u8_url: 1 } },
+      { projection: { [h264Field]: 1, [h265Field]: 1 } },
     );
 
-    if (!episode?.h264_master_m3u8_url) {
+    if (!episode?.[h264Field]) {
       return NextResponse.json(
         { error: 'H.264 master URL not ready — run GCP H.264 first' },
         { status: 400 },
       );
     }
-    if (!episode?.h265_master_m3u8_url) {
+    if (!episode?.[h265Field]) {
       return NextResponse.json(
         { error: 'H.265 master URL not ready — run GCP H.265 first' },
         { status: 400 },
       );
     }
-
-    // `variant: 'podcastvideo'` writes the same manifest under podcastvideo.m3u8,
-    // which the CDN serves without a token (enforcement matches *_combined.m3u8).
-    // Omitted → the classic tokenised combined master, unchanged.
-    const isPodcastVideo = variant === 'podcastvideo';
     const payload = JSON.stringify({
       episode_id: episodeId,
       ...(isPodcastVideo ? { variant: 'podcastvideo' } : {}),

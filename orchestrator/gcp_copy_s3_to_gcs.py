@@ -234,17 +234,29 @@ def handler(event, context):
     creds = _get_gcp_credentials()
     gcs_client = gcs.Client(credentials=creds, project=os.environ["GCP_PROJECT"])
 
+    # H.264 and H.265 runs of one episode execute in parallel, so everything
+    # this step touches is scoped to the run's codec: clearing the whole
+    # episode would delete the other codec's in-flight transcoder output, and
+    # a shared parts dir / source object lets one run delete or replace the
+    # other's (404 on compose). Transcoder output names always contain the
+    # codec (finalize filters on it too). No codec → legacy shared names.
+    codec = event.get("codec")
+    run_tag = f"_{codec}" if codec else ""
+
     # Clear stale output objects from a prior run (unrelated output bucket).
     gcs_output_bucket = os.environ.get("GCS_OUTPUT_BUCKET")
     if gcs_output_bucket:
         out_bucket = gcs_client.bucket(gcs_output_bucket)
-        old_blobs = list(out_bucket.list_blobs(prefix=f"{episode_id}/"))
+        old_blobs = [
+            b for b in out_bucket.list_blobs(prefix=f"{episode_id}/")
+            if not codec or codec in b.name
+        ]
         if old_blobs:
             out_bucket.delete_blobs(old_blobs)
             print(f"[CLEAR] Deleted {len(old_blobs)} stale objects from gs://{gcs_output_bucket}/{episode_id}/")
 
     bucket = gcs_client.bucket(gcs_input_bucket)
-    final_name = f"{episode_id}/source.mp4"
+    final_name = f"{episode_id}/source{run_tag}.mp4"
     final_blob = bucket.blob(final_name)
 
     total_size = source.content_length()
@@ -255,7 +267,7 @@ def handler(event, context):
         final_blob.upload_from_file(source.open_stream(), content_type="video/mp4")
         print(f"[OK] Copied {total_size} bytes (single-stream) → gs://{gcs_input_bucket}/{final_name}")
     else:
-        parts_prefix = f"{episode_id}/{PARTS_SUBDIR}"
+        parts_prefix = f"{episode_id}/{PARTS_SUBDIR}" + (f"/{codec}" if codec else "")
         # Remove leftover parts from any previous failed run.
         _delete_quietly(list(bucket.list_blobs(prefix=f"{parts_prefix}/")))
 

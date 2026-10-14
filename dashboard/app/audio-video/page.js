@@ -159,7 +159,7 @@ export default function AudioVideoPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr>
-                {['#', 'Title', 'Source', 'H.264', 'H.265', 'Combined', ''].map((h) => (
+                {['#', 'Title', 'Source', 'H.264', 'H.265', 'Podcastvideo', ''].map((h) => (
                   <th key={h} style={{
                     textAlign: 'left', color: '#666', fontWeight: 600, fontSize: 11,
                     padding: '6px 10px', borderBottom: '1px solid #2a2a2a',
@@ -197,7 +197,7 @@ export default function AudioVideoPage() {
                         <GcpPill label={ep.gcp_h264} />
                         <GcpPill label={ep.gcp_h265} />
                         <span style={{ fontSize: 11, color: ep.combined_url ? '#22d3ee' : '#555' }}>
-                          {ep.combined_url ? 'combined ✓' : '—'}
+                          {ep.combined_url ? 'podcastvideo ✓' : '—'}
                         </span>
                         <button
                           type="button"
