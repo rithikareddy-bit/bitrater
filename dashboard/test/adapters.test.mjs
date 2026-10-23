@@ -112,10 +112,10 @@ describe('workflows — Azure Durable', () => {
     expect(await wf.describeWorkflow('azdf:x:b')).toEqual({ status: 'FAILED', cause: 'GCP Transcoder job failed' });
   });
 
-  it('404 maps to ABORTED; failed carries cause', async () => {
+  it('404 throws (like ExecutionDoesNotExist); failed carries cause', async () => {
     const wf = await load('@/lib/workflows', env);
     fetchReturning({ status: 404 }, { status: 200, body: { runtimeStatus: 'Failed', output: 'GCP Transcoder job failed' } });
-    expect(await wf.describeWorkflow('azdf:x:gone')).toEqual({ status: 'ABORTED', cause: 'instance not found' });
+    await expect(wf.describeWorkflow('azdf:x:gone')).rejects.toThrow('Durable instance not found: gone');
     expect(await wf.describeWorkflow('azdf:x:f')).toEqual({ status: 'FAILED', cause: 'GCP Transcoder job failed' });
   });
 
@@ -180,7 +180,7 @@ describe('jobs — Azure Batch', () => {
     const body = JSON.parse(calls[0].init.body);
     expect(calls[0].url).toContain('/jobs/chai-q-lab-shadow/tasks?api-version=');
     expect(body.containerSettings.imageName).toBe(env.AZURE_BATCH_LAB_IMAGE);
-    expect(body.constraints).toEqual({ maxWallClockTime: 'PT20H', maxTaskRetryCount: 0 });
+    expect(body.constraints).toEqual({ maxWallClockTime: 'PT20H', maxTaskRetryCount: 0, retentionTime: 'PT1H' });
     const e = Object.fromEntries(body.environmentSettings.map((x) => [x.name, x.value]));
     expect(e).toMatchObject({ BITRATE: '900', DB_LAB: 'chai_q_lab_shadow', SHADOW_MODE: 'true' });
     expect(calls[0].init.headers.authorization).toBe('Bearer tok');
@@ -237,6 +237,23 @@ describe('invoke', () => {
     await inv.invokeFunction('quality-checker', { InvocationType: 'Event', Payload: Buffer.from('{}') });
     expect(calls[2].url).toContain('mode=async');
     expect(lambdaMock.calls()).toHaveLength(0);
+  });
+
+  it('Azure: invocation failures throw (like the Lambda SDK), async included', async () => {
+    const inv = await load('@/lib/invoke', { CLOUD_PROVIDER: 'azure', FUNCTIONS_BASE_URL: 'https://fa.example', FUNCTIONS_INVOKE_KEY: 'stale' });
+    fetchReturning(
+      { status: 401 },                                        // rotated key, empty body
+      { status: 403, body: 'Forbidden' },
+      { status: 404, body: { errorMessage: 'unknown function' } },
+      { status: 503 },
+      { status: 500, body: 'host error' },                    // not a Lambda-style handler error
+    );
+    const event = { InvocationType: 'Event', Payload: Buffer.from('{}') };
+    await expect(inv.invokeFunction('quality-checker', event)).rejects.toThrow('HTTP 401');
+    await expect(inv.invokeFunction('resync-subtitles', event)).rejects.toThrow('HTTP 403');
+    await expect(inv.invokeFunction('create-combined-master', { Payload: Buffer.from('{}') })).rejects.toThrow('HTTP 404');
+    await expect(inv.invokeFunction('create-combined-master', { Payload: Buffer.from('{}') })).rejects.toThrow('HTTP 503');
+    await expect(inv.invokeFunction('create-combined-master', { Payload: Buffer.from('{}') })).rejects.toThrow('HTTP 500');
   });
 
   it('per-function override keeps the resigner on AWS after the backend cutover', async () => {

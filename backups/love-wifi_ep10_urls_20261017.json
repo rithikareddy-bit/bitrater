@@ -1,0 +1,70 @@
+{
+  "saved_at": "2026-10-17T09:35:22.089469+00:00",
+  "show": {
+    "id": "68c90d660a1102fc9a0e3945",
+    "slug": "love-wifi",
+    "title": "Internet Love"
+  },
+  "episode": {
+    "id": "5770fcb0-670e-459c-a627-1edaa99d3de2",
+    "episode_number": 10,
+    "title": "Love Wifi EP-10",
+    "s3_url": "https://s3.ap-south-2.amazonaws.com/sanity-dev-store/uploads/episodes/love-wifi/ep-010/1783588837166-Love_Wifi_ep_10.mp4"
+  },
+  "chai_q_lab.video_episodes": {
+    "h264_master_m3u8_url": "https://cdn.chaishots.in/5770fcb0-670e-459c-a627-1edaa99d3de2/09072026_105637/love-wifi_ep_10_09072026_105637_h264.m3u8",
+    "h265_master_m3u8_url": "https://cdn.chaishots.in/5770fcb0-670e-459c-a627-1edaa99d3de2/09072026_185219/love-wifi_ep_10_09072026_185219_h265.m3u8",
+    "combined_master_m3u8_url": "https://cdn.chaishots.in/5770fcb0-670e-459c-a627-1edaa99d3de2/09072026_185326/love-wifi_ep_10_09072026_185326_combined.m3u8",
+    "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/007d3f2e-7402-49c6-a416-cac6cfc8ca37",
+    "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/a3c1a03a-07d7-40f4-b2eb-ea5df97b3680",
+    "golden_recipes": {
+      "resolutions": {
+        "480p": {
+          "h264": {
+            "bitrate_kbps": 200,
+            "vmaf_attained": 51.708827,
+            "params": "aq-strength=1:vbv-init=0.9"
+          },
+          "h265": {
+            "bitrate_kbps": 100,
+            "vmaf_attained": 50.82204,
+            "params": "keyint=60:aq-strength=1:bframes=4:vbv-init=0.9"
+          }
+        },
+        "720p": {
+          "h264": {
+            "bitrate_kbps": 900,
+            "vmaf_attained": 78.256014,
+            "params": "aq-strength=1:vbv-init=0.9"
+          },
+          "h265": {
+            "bitrate_kbps": 500,
+            "vmaf_attained": 77.319193,
+            "params": "keyint=60:aq-strength=1:bframes=4:vbv-init=0.9"
+          }
+        },
+        "1080p": {
+          "h264": {
+            "bitrate_kbps": 2700,
+            "vmaf_attained": 88.262528,
+            "params": "aq-strength=1:vbv-init=0.9"
+          },
+          "h265": {
+            "bitrate_kbps": 1500,
+            "vmaf_attained": 88.269996,
+            "params": "keyint=60:aq-strength=1:bframes=4:vbv-init=0.9"
+          }
+        }
+      }
+    },
+    "source_fps": 30.0
+  },
+  "master.showcache.episode": {
+    "signed_playback_url": "https://cdn.chaishots.in/5770fcb0-670e-459c-a627-1edaa99d3de2/09072026_185326/love-wifi_ep_10_09072026_185326_combined.m3u8?edge-cache-token=FullPath~Expires=1792263435~Signature=4ZhkkvpkquZrgdYogmQe-vhH53CdoTbq7mWL6z7X8Xn88MZErR_3fg-si-Gsr-FaP4VkoyhVe8EHp0GkJAYiBw",
+    "signed_playback_url_low": "https://stream.mux.com/BPnoTw6gkNPK56ZXxoYQoameqx00tXFujwiH1g001iojo.m3u8?token=eyJhbGciOiJSUzI1NiIsImtpZCI6InVIcDdMbmNJcktJSFpxYWh2SzVFNkdqckFzYmYwMEtlRWhPZFlhUU5wc2prIiwidHlwIjoiSldUIn0.eyJzdWIiOiJCUG5vVHc2Z2tOUEs1NlpYeG9ZUW9hbWVxeDAwdFhGdWp3aUgxZzAwMWlvam8iLCJleHAiOjE3NjEzOTgzMjgsImF1ZCI6InYiLCJtaW5fcmVzb2x1dGlvbiI6IjI3MHAifQ.q4x_xsuI8RPTu5OC8Lnzgq5RoTLkojUTt2tMIJP3VKbBG3FHeEE1YPSpbxJHgFjCHf_tElvol4SVFM0t9FQKjLGrlzNQsnoQv-bI7-JwsTVjlOyI3nE4BnkR8E3SuMvhvtr02gpAF7eiDfBt0UJ5ht4l4Y6xLlG9NbPPDiBjDDLVeMlsaJGywUQSqXCxvhTNOfGmOxflCt1PTzRYF39LlypMYBCH4q1t0PJ6iu7NQvM4_4bHfM0qbPQ6lVGux2M-F6ALrS0GqMeDiv4AcLSZg_CUu5oXUS9l0jkmrlt3jm4aIq994C4FLmk5TvDoR4h34VzRfeWyHZ9LKeYg57FK7w",
+    "signed_playback_url_medium": "https://stream.mux.com/BPnoTw6gkNPK56ZXxoYQoameqx00tXFujwiH1g001iojo.m3u8?token=eyJhbGciOiJSUzI1NiIsImtpZCI6InVIcDdMbmNJcktJSFpxYWh2SzVFNkdqckFzYmYwMEtlRWhPZFlhUU5wc2prIiwidHlwIjoiSldUIn0.eyJzdWIiOiJCUG5vVHc2Z2tOUEs1NlpYeG9ZUW9hbWVxeDAwdFhGdWp3aUgxZzAwMWlvam8iLCJleHAiOjE3NjEzOTgzMjgsImF1ZCI6InYiLCJtaW5fcmVzb2x1dGlvbiI6IjQ4MHAifQ.k_S1OZXcrWNzcb4Apn6QYI_IbsNWmrVNoZ_qq3D4Zq9uptlL_yN1QNpyf9Ju_tqizr191cNFyEQYFQwIMlCiDoWylSnxb5JGxnl4cPbDsHN1ysIAziOzYvKDNzGarnQHijVO27sqgoaEDuXFjR2KGwnggu6K9FtD-fw48L9XRbDOGGFcZUTxFLUjpwyZYdrSgS351fqfPtC94gs84vFUWVZD5jdMyUEhy9io3s5VOjSWbKnVbTqOUQ8TOIxddEiP8QYOFtlB-c1jlz4y91X6Pn-hRNII5YG5zY5WiuoSvjFoXpoas2_qkDv5N_W5IAYSWenX5vWGlOtG3g_gt9NK8A",
+    "signed_playback_expires_at": "2026-10-17 18:57:15.119000",
+    "playback_id": "kTL4qZtHl8WUWIYbFCHikPd5UueXRwS1Vs7KXjO4rJg",
+    "mux_video_id": "b7b9925a-b2c0-4080-a582-f39c4f92b752"
+  }
+}

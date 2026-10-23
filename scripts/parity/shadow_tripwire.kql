@@ -1,9 +1,13 @@
 // Gate: must return 0 rows for the whole shadow period (AZURE-MIGRATION-PLAN.md P2).
 // Any write to a prod DB from a connection tagged appName=bitrater-azure-shadow.
-// Requires Cosmos DB for MongoDB vCore diagnostic logs -> Log Analytics (Phase B3).
+// Cosmos vCore request logs already flow to workspace log-scrolls-prod (rg-scrolls-prod,
+// diagnostic setting documentdb-requests-to-log-analytics), so Phase B3 needs no change.
+// The table has no AppName column: the driver appName is the first element of the
+// UserAgent JSON array, e.g. ["bitrater-azure-shadow","PyMongo","4.6.1",...] (verified 2026-10-06).
+// OperationName is capitalised (Insert, Update, FindAndModify), hence in~.
 VCoreMongoRequests
 | where TimeGenerated > ago(7d)
-| where AppName == "bitrater-azure-shadow"
+| where UserAgent has "bitrater-azure-shadow"
 | where DatabaseName in ("master", "chai_q_lab", "gld2sqs")
 | where OperationName in~ ("insert", "update", "delete", "findAndModify", "bulkWrite", "replace")
 | project TimeGenerated, DatabaseName, CollectionName, OperationName

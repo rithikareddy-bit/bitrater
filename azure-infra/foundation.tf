@@ -67,7 +67,13 @@ resource "azurerm_container_app_environment" "main" {
   resource_group_name        = azurerm_resource_group.main.name
   location                   = var.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
-  tags                       = local.tags
+  # Azure adds the built-in Consumption profile on create; declare it so plans stay clean
+  # (seen after A2 on 2026-09-27: otherwise every plan tries to remove it).
+  workload_profile {
+    name                  = "Consumption"
+    workload_profile_type = "Consumption"
+  }
+  tags = local.tags
 }
 
 # --- Azure Batch (research lab + ViSQOL) ---------------------------------------
@@ -100,12 +106,21 @@ resource "azurerm_batch_account" "main" {
   tags                 = local.tags
 }
 
+locals {
+  batch_pool = { for k, s in local.enabled_stamps : k => {
+    vm_size       = coalesce(try(var.batch_pool_overrides[k].vm_size, null), var.batch_vm_size)
+    image_version = coalesce(try(var.batch_pool_overrides[k].image_version, null), var.batch_image_version)
+    # Never ask for more nodes than the granted quota allows (4 vCPU per node).
+    max_nodes = max(0, min(lookup(var.batch_max_spot_nodes, k, 1), floor(lookup(var.batch_spot_core_quota, k, 6) / 4)))
+  } }
+}
+
 resource "azurerm_batch_pool" "spot" {
   for_each            = local.enabled_stamps
   name                = "chai-q-spot-${each.key}"
   resource_group_name = azurerm_resource_group.main.name
   account_name        = azurerm_batch_account.main[each.key].name
-  vm_size             = var.batch_vm_size
+  vm_size             = local.batch_pool[each.key].vm_size
   node_agent_sku_id   = var.batch_image.node_agent_sku_id
   max_tasks_per_node  = 1
 
@@ -118,7 +133,7 @@ resource "azurerm_batch_pool" "spot" {
     publisher = var.batch_image.publisher
     offer     = var.batch_image.offer
     sku       = var.batch_image.sku
-    version   = var.batch_image_version
+    version   = local.batch_pool[each.key].image_version
   }
 
   container_configuration {
@@ -134,13 +149,20 @@ resource "azurerm_batch_pool" "spot" {
     formula             = <<-EOT
       $samples = $PendingTasks.GetSamplePercent(TimeInterval_Minute * 5);
       $tasks = $samples < 70 ? max(0, $PendingTasks.GetSample(1)) : max($PendingTasks.GetSample(1), avg($PendingTasks.GetSample(TimeInterval_Minute * 5)));
-      $TargetLowPriorityNodes = min(${var.batch_max_spot_nodes}, $tasks);
+      $TargetLowPriorityNodes = min(${local.batch_pool[each.key].max_nodes}, $tasks);
       $TargetDedicatedNodes = 0;
       $NodeDeallocationOption = taskcompletion;
     EOT
   }
 
   depends_on = [azurerm_role_assignment.batch_acr_pull]
+
+  lifecycle {
+    precondition {
+      condition     = each.value.shadow || each.value.cloud_provider != "azure" || local.batch_pool[each.key].max_nodes >= 128 || var.accept_reduced_lab_capacity
+      error_message = "Prod lab capacity is ${local.batch_pool[each.key].max_nodes} nodes (< 128 = AWS 512 vCPU). Get the Spot quota granted and set batch_spot_core_quota.${each.key}, or set accept_reduced_lab_capacity = true."
+    }
+  }
 }
 
 # --- Shadow upload target (own account; never another team's container) -------

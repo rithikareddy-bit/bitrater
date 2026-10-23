@@ -6,6 +6,8 @@ Read-only. Exit 0 only if every check is zero:
   AWS   Batch jobs SUBMITTED..RUNNING on the lab queue
   Azure Durable instances Running/Pending   (if DURABLE_BASE_URL + DURABLE_TASK_KEY set)
   Azure Batch tasks not completed           (if AZURE_BATCH_ENDPOINT + AZURE_BATCH_JOBS set)
+  Azure Container Apps Job executions Running (resigner, url-health, ...; AZURE_SUBSCRIPTION_ID,
+                                            resource group AZURE_RESOURCE_GROUP or rg-bitrater-prod)
   Mongo chai_q_lab.pipeline_runs status=RUNNING (MONGO_URI)
 
 Usage: MONGO_URI=... python scripts/cutover/freeze_check.py [--skip-aws] [--skip-azure] [--require-azure]
@@ -52,6 +54,8 @@ def missing_azure_config(environ=os.environ):
         missing.append("complete Durable target(s)")
     if not batch or any(not t.get("name") or not t.get("endpoint") or not t.get("jobs") for t in batch):
         missing.append("complete Batch target(s)")
+    if not environ.get("AZURE_SUBSCRIPTION_ID"):
+        missing.append("AZURE_SUBSCRIPTION_ID (scheduled job executions)")
     return missing
 
 
@@ -87,6 +91,25 @@ def azure_counts():
             for job in target["jobs"]:
                 out[f"azure.batch.{target['name']}.{job}"] = sum(
                     1 for _ in client.list_tasks(job, filter="state ne 'completed'"))
+    out.update(job_execution_counts())
+    return out
+
+
+def job_execution_counts(environ=os.environ, client=None):
+    """Running Container Apps Job executions (e.g. a resigner sweep still writing showcache)."""
+    sub = environ.get("AZURE_SUBSCRIPTION_ID")
+    if not sub and client is None:
+        return {}
+    rg = environ.get("AZURE_RESOURCE_GROUP", "rg-bitrater-prod")
+    if client is None:
+        from azure.identity import DefaultAzureCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+        client = ContainerAppsAPIClient(DefaultAzureCredential(), sub)
+    out = {}
+    for job in client.jobs.list_by_resource_group(rg):
+        if job.name.startswith("acaj-bitrater-"):
+            out[f"azure.job.{job.name}.running"] = sum(
+                1 for _ in client.jobs_executions.list(rg, job.name, filter="status eq 'Running'"))
     return out
 
 

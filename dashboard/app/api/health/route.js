@@ -2,7 +2,20 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request) {
   const deep = new URL(request.url).searchParams.get('deep') === '1';
-  if (!deep) return Response.json({ status: 'ok' }); // liveness must not restart on a dependency outage
+  if (!deep) {
+    // Liveness must not restart on a dependency outage, but a misconfigured shadow
+    // stamp must never look healthy (no-op unless SHADOW_MODE=true).
+    const { isolationViolations } = await import('@/lib/config');
+    const problems = isolationViolations();
+    if (problems.length) return Response.json({ status: 'isolation-failed', problems }, { status: 503 });
+    return Response.json({ status: 'ok' });
+  }
+  // On Azure only /api/health bypasses Easy Auth (availability probe); the deep check
+  // reveals config/dependency details, so it still needs a signed-in principal. Easy
+  // Auth sets this header itself and strips any client-supplied copy.
+  if (process.env.EASY_AUTH_ENABLED === 'true' && !request.headers.get('x-ms-client-principal')) {
+    return Response.json({ status: 'unauthorized' }, { status: 401 });
+  }
   try {
     const [{ default: clientPromise }, { DB_MASTER, CLOUD_PROVIDER }] = await Promise.all([
       import('@/lib/mongodb'),

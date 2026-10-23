@@ -63,3 +63,26 @@ describe('test-jas H264 availability', () => {
     expect(testJasEnabled({ CLOUD_PROVIDER: 'aws', TEST_JAS_H264_ENABLED: 'false' })).toBe(false);
   });
 });
+
+describe('isolation runs where the dashboard actually executes', () => {
+  it('Mongo client refuses in a misconfigured shadow stamp', async () => {
+    vi.resetModules();
+    vi.stubEnv('SHADOW_MODE', 'true');
+    vi.stubEnv('DB_LAB', 'chai_q_lab'); // prod name in shadow
+    vi.stubEnv('MONGO_URI', 'mongodb://localhost:1');
+    const { default: getClientPromise } = await import('@/lib/mongodb');
+    expect(() => getClientPromise()).toThrow('Shadow isolation check failed');
+  });
+
+  it('liveness probe reports 503 for a misconfigured shadow stamp, 200 otherwise', async () => {
+    vi.resetModules();
+    vi.stubEnv('SHADOW_MODE', 'true');
+    vi.stubEnv('DB_LAB', 'chai_q_lab');
+    let { GET } = await import('@/app/api/health/route');
+    expect((await GET(new Request('http://x/api/health'))).status).toBe(503);
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    ({ GET } = await import('@/app/api/health/route'));
+    expect((await GET(new Request('http://x/api/health'))).status).toBe(200);
+  });
+});

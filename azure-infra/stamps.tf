@@ -90,11 +90,32 @@ locals {
   )
 }
 
+# Names only (no values enter state): lets the plan fail early, with the list of missing
+# secrets, instead of the apply failing mid-way on a grant to a secret that doesn't exist.
+data "azurerm_key_vault_secrets" "existing" {
+  count        = length(local.app_stamps) > 0 ? 1 : 0
+  key_vault_id = azurerm_key_vault.main.id
+}
+
+locals {
+  missing_secrets = length(local.app_stamps) > 0 ? sort(setsubtract(
+    distinct(concat([for g in values(local.secret_grants) : g.secret], ["entra-client-secret"])),
+    data.azurerm_key_vault_secrets.existing[0].names,
+  )) : []
+}
+
 resource "azurerm_role_assignment" "secret_read" {
   for_each             = local.secret_grants
   scope                = "${azurerm_key_vault.main.id}/secrets/${each.value.secret}"
   role_definition_name = "Key Vault Secrets User"
   principal_id         = each.value.principal
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_secrets) == 0
+      error_message = "Create these Key Vault secrets before apps=true: ${join(", ", local.missing_secrets)}"
+    }
+  }
 }
 
 # --- Function App (Durable orchestrators + activities + /api/invoke) -----------
@@ -149,7 +170,7 @@ resource "azurerm_function_app_flex_consumption" "main" {
 
   runtime_name           = "python"
   runtime_version        = "3.11"
-  instance_memory_in_mb  = 4096 # copy step buffers 16 x 64 MiB parts; host.json caps activities at 3
+  instance_memory_in_mb  = 4096 # host.json caps activities at 3; COPY_MAX_WORKERS keeps 3 copies under this
   maximum_instance_count = 40
 
   # System identity resolves @Microsoft.KeyVault(...) settings (the Flex resource has no
@@ -166,6 +187,10 @@ resource "azurerm_function_app_flex_consumption" "main" {
   depends_on = [azurerm_role_assignment.func_storage] # deployment storage + AzureWebJobsStorage use this identity
 
   app_settings = merge({
+    # Identity-based host storage. An explicit empty AzureWebJobsStorage stops the Flex
+    # resource/platform injecting a connection string with an EMPTY AccountKey, which
+    # overrides the __ settings below (seen 2026-09-27: host startup 403s).
+    AzureWebJobsStorage              = ""
     AzureWebJobsStorage__accountName = azurerm_storage_account.func[each.key].name
     AzureWebJobsStorage__credential  = "managedidentity"
     AzureWebJobsStorage__clientId    = azurerm_user_assigned_identity.stamp["${each.key}-func"].client_id
@@ -200,7 +225,10 @@ resource "azurerm_function_app_flex_consumption" "main" {
     SIGNING_MODE               = "token"
     TOKEN_QUERY_PARAM          = "edge-cache-token"
     SIGNED_URL_TTL_SECONDS     = "36000"
-    RESIGN_INVOKE_MODE         = each.value.resign_invoke # lambda until G4 (bridge key: lambda:InvokeFunction)
+    # Copy step peak ~= 2 x 64 MiB x workers (~640 MiB at 5). 3 concurrent copies on one
+    # 4 GiB instance stay < 2 GiB (AWS default 16 = ~2 GiB, on its own 3008 MB Lambda).
+    COPY_MAX_WORKERS   = "5"
+    RESIGN_INVOKE_MODE = each.value.resign_invoke # lambda until G4 (bridge key: lambda:InvokeFunction)
 
     # AWS creds: S3 reads for sources still on S3 (+ resigner Lambda invoke while resign_invoke=lambda)
     AWS_ACCESS_KEY_ID     = local.kv_ref[each.key].aws_id
@@ -221,6 +249,11 @@ resource "azurerm_function_app_flex_consumption" "main" {
   tags = local.tags
 
   lifecycle {
+    # Do NOT ignore_changes on app_settings["AzureWebJobsStorage"]: when Terraform omits it,
+    # the provider re-injects a connection string with an EMPTY AccountKey and the host stops
+    # (verified 2026-09-27). Consequence: every plan shows `+ "AzureWebJobsStorage" = ""`
+    # (the provider never reads it back). That one-line diff is expected and harmless.
+
     precondition {
       condition     = !each.value.apps || (var.images.lab != null && var.images.visqol != null)
       error_message = "Set immutable lab and visqol image digests before apps=true."
@@ -241,6 +274,9 @@ resource "azurerm_batch_job" "lab" {
   name          = local.names[each.key].lab_job
   batch_pool_id = azurerm_batch_pool.spot[each.key].id
   priority      = each.value.shadow ? -100 : 1000
+  # Read by workers/azure_entry.py: tasks refuse to run with any other DB_LAB, so
+  # isolation doesn't depend on the submitter's env passthrough.
+  common_environment_properties = { STAMP_DB_LAB = local.names[each.key].db_lab }
 }
 
 resource "azurerm_batch_job" "visqol" {
@@ -248,6 +284,9 @@ resource "azurerm_batch_job" "visqol" {
   name          = local.names[each.key].visqol_job
   batch_pool_id = azurerm_batch_pool.spot[each.key].id
   priority      = each.value.shadow ? -100 : 1000
+  # Read by workers/azure_entry.py: tasks refuse to run with any other DB_LAB, so
+  # isolation doesn't depend on the submitter's env passthrough.
+  common_environment_properties = { STAMP_DB_LAB = local.names[each.key].db_lab }
 }
 
 # --- Upload target access -------------------------------------------------------
@@ -274,17 +313,21 @@ resource "azurerm_role_assignment" "dash_upload_prod" {
 # --- Dashboard (0 or 1 replica: in-process orchestrator) -----------------------
 locals {
   dash_env = { for k, s in local.app_stamps : k => merge({
-    APP_BASE_URL                         = "http://localhost:3000" # self-calls bypass the login
-    AZURE_CLIENT_ID                      = azurerm_user_assigned_identity.stamp["${k}-dash"].client_id
-    SHADOW_MODE                          = tostring(s.shadow)
-    CLOUD_PROVIDER                       = s.cloud_provider
-    UPLOAD_PROVIDER                      = s.upload_provider
-    UPLOAD_AZURE_ACCOUNT                 = local.names[k].upload_acct
-    UPLOAD_AZURE_CONTAINER               = local.names[k].upload_cont
-    DB_LAB                               = local.names[k].db_lab
-    DB_MASTER                            = local.names[k].db_master
-    MONGO_DATABASE                       = local.names[k].db_master
-    TRAILER_SCANNER_ENABLED              = s.shadow ? "false" : "true"
+    APP_BASE_URL             = "http://localhost:3000" # self-calls bypass the login
+    EASY_AUTH_ENABLED        = "true"                  # /api/health?deep=1 needs a signed-in user
+    AZURE_CLIENT_ID          = azurerm_user_assigned_identity.stamp["${k}-dash"].client_id
+    SHADOW_MODE              = tostring(s.shadow)
+    CLOUD_PROVIDER           = s.cloud_provider
+    UPLOAD_PROVIDER          = s.upload_provider
+    UPLOAD_AZURE_ACCOUNT     = local.names[k].upload_acct
+    UPLOAD_AZURE_CONTAINER   = local.names[k].upload_cont
+    DB_LAB                   = local.names[k].db_lab
+    DB_MASTER                = local.names[k].db_master
+    MONGO_DATABASE           = local.names[k].db_master
+    STARTUP_RECOVERY_ENABLED = "true" # re-adopt RUNNING pipelines after any replica restart
+    # Off on both: AWS prod never ran it (its instrumentation hook was off), so turning it
+    # on is a separate owner decision, not part of the migration.
+    TRAILER_SCANNER_ENABLED              = "false"
     VTT_ENABLED                          = s.shadow ? "false" : "true"
     UPLOAD_DEV_SYNC_ENABLED              = s.shadow ? "false" : "true"
     DURABLE_BASE_URL                     = "https://${azurerm_function_app_flex_consumption.main[k].default_hostname}"
@@ -296,6 +339,8 @@ locals {
     AZURE_BATCH_VISQOL_JOB               = local.names[k].visqol_job
     AZURE_BATCH_VISQOL_IMAGE             = "${local.acr}/${coalesce(var.images.visqol, "not-published")}"
     AZURE_CLIENT_ID_BATCH                = azurerm_user_assigned_identity.batch[k].client_id
+    LAB_COMPUTE_PROVIDER                 = s.cloud_provider
+    LAB_WORKER_CAPACITY                  = tostring(s.cloud_provider == "azure" ? local.batch_pool[k].max_nodes : 128)
     KEY_VAULT_URL                        = azurerm_key_vault.main.vault_uri
     MONGO_URI_KV_SECRET                  = local.names[k].kv_mongo
     AWS_S3_KEY_KV_SECRET                 = "${local.names[k].kv_aws}-json"
@@ -327,6 +372,7 @@ resource "azurerm_container_app" "dashboard" {
   name                         = "ca-bitrater-dash-${each.key}"
   resource_group_name          = azurerm_resource_group.main.name
   container_app_environment_id = azurerm_container_app_environment.main.id
+  workload_profile_name        = "Consumption" # matches the env profile (foundation.tf); unset drifts every plan
   # Single mode still overlaps old/new revision briefly on deploy; the Mongo
   # locked_by/pr_lock/scanner locks cover it, but only deploy outside runs (P6).
   revision_mode = "Single"
@@ -407,6 +453,10 @@ resource "azurerm_container_app" "dashboard" {
       error_message = "A dashboard cannot be exposed until entra_client_id is configured."
     }
     precondition {
+      condition     = length(var.dashboard_allowed_principals.groups) + length(var.dashboard_allowed_principals.identities) > 0
+      error_message = "Set dashboard_allowed_principals (operator group or user object ids); otherwise every tenant user and guest could use the dashboard."
+    }
+    precondition {
       condition     = var.images.dashboard != null
       error_message = "Set an immutable dashboard image digest before creating the dashboard."
     }
@@ -421,14 +471,30 @@ resource "azapi_resource" "dashboard_auth" {
   parent_id = azurerm_container_app.dashboard[each.key].id
   body = {
     properties = {
-      platform         = { enabled = true }
-      globalValidation = { unauthenticatedClientAction = "RedirectToLoginPage", redirectToProvider = "azureactivedirectory" }
+      platform = { enabled = true }
+      globalValidation = {
+        unauthenticatedClientAction = "RedirectToLoginPage"
+        redirectToProvider          = "azureactivedirectory"
+        # Only the shallow liveness check is public (availability test, monitoring.tf);
+        # the route itself refuses ?deep=1 without a signed-in principal.
+        excludedPaths = ["/api/health"]
+      }
       identityProviders = {
         azureActiveDirectory = {
           registration = {
             clientId                = var.entra_client_id
             clientSecretSettingName = "entra-client-secret" # Container App secret name (verify on first deploy)
             openIdIssuer            = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/v2.0"
+          }
+          # Only these operators/groups may use the dashboard; any other tenant user or
+          # guest who signs in gets 403 (the dashboard can resign, upload and cancel prod work).
+          validation = {
+            defaultAuthorizationPolicy = {
+              allowedPrincipals = {
+                groups     = var.dashboard_allowed_principals.groups
+                identities = var.dashboard_allowed_principals.identities
+              }
+            }
           }
         }
       }
@@ -452,6 +518,7 @@ resource "azurerm_container_app_job" "scheduled" {
   resource_group_name          = azurerm_resource_group.main.name
   location                     = var.location
   container_app_environment_id = azurerm_container_app_environment.main.id
+  workload_profile_name        = "Consumption"
   replica_timeout_in_seconds   = 3600 # the Lambda's 900 s ceiling was already hit by the full sweep
   replica_retry_limit          = 0
 

@@ -146,9 +146,10 @@ def test_freeze_check_require_azure_fails_closed(monkeypatch):
     spec = u.spec_from_file_location("freeze_check_required", ROOT.parent / "cutover" / "freeze_check.py")
     fc = u.module_from_spec(spec); spec.loader.exec_module(fc)
     for name in ("DURABLE_BASE_URL", "DURABLE_TASK_KEY", "AZURE_BATCH_ENDPOINT", "AZURE_BATCH_JOBS",
-                 "AZURE_DURABLE_TARGETS", "AZURE_BATCH_TARGETS"):
+                 "AZURE_DURABLE_TARGETS", "AZURE_BATCH_TARGETS", "AZURE_SUBSCRIPTION_ID"):
         monkeypatch.delenv(name, raising=False)
-    assert fc.missing_azure_config() == ["complete Durable target(s)", "complete Batch target(s)"]
+    assert fc.missing_azure_config() == ["complete Durable target(s)", "complete Batch target(s)",
+                                         "AZURE_SUBSCRIPTION_ID (scheduled job executions)"]
     assert fc.main(["--require-azure", "--skip-azure"]) == 2
 
 
@@ -158,7 +159,32 @@ def test_freeze_check_accepts_multiple_explicit_azure_targets(monkeypatch):
     fc = u.module_from_spec(spec); spec.loader.exec_module(fc)
     monkeypatch.setenv("AZURE_DURABLE_TARGETS", '[{"name":"shadow","base":"https://s","key":"k"},{"name":"prod","base":"https://p","key":"k"}]')
     monkeypatch.setenv("AZURE_BATCH_TARGETS", '[{"name":"shadow","endpoint":"https://s.batch","jobs":["lab-s"]},{"name":"prod","endpoint":"https://p.batch","jobs":["lab-p"]}]')
+    monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "sub")
     assert fc.missing_azure_config() == []
     durable, batch = fc.azure_targets()
     assert [t["name"] for t in durable] == ["shadow", "prod"]
     assert [t["name"] for t in batch] == ["shadow", "prod"]
+
+
+def test_freeze_check_counts_running_scheduled_job_executions():
+    import importlib.util as u
+    from types import SimpleNamespace as NS
+    spec = u.spec_from_file_location("freeze_check_jobs", ROOT.parent / "cutover" / "freeze_check.py")
+    fc = u.module_from_spec(spec); spec.loader.exec_module(fc)
+    seen = []
+    client = NS(
+        jobs=NS(list_by_resource_group=lambda rg: [NS(name="acaj-bitrater-prod-resigner"), NS(name="other-team-job")]),
+        jobs_executions=NS(list=lambda rg, name, filter: seen.append((rg, name, filter)) or [object()]),
+    )
+    assert fc.job_execution_counts({}, client) == {"azure.job.acaj-bitrater-prod-resigner.running": 1}
+    assert seen == [("rg-bitrater-prod", "acaj-bitrater-prod-resigner", "status eq 'Running'")]
+
+
+def test_resign_gate_requires_same_errors_as_prod_not_zero():
+    t0 = datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
+    errs = [{"episode_id": None, "error": "expected string or bytes-like object, got 'NoneType'"}] * 55
+    prod = [{"started_at": t0, "updated_count": 3924, "skipped_count": 0, "errors": errs}]
+    same = {"started_at": t0 + timedelta(minutes=30), "target_count": 3979, "canary": {"ok": True}, "errors": errs}
+    assert resign_dryrun_compare.evaluate([same], prod) == [(same["started_at"], [])]
+    worse = dict(same, errors=errs + [{"episode_id": "e1", "error": "boom"}])
+    assert resign_dryrun_compare.evaluate([worse], prod)[0][1]

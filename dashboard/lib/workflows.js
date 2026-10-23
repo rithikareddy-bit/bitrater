@@ -91,7 +91,10 @@ export async function describeWorkflow(executionArn) {
   }
   const { instanceId } = parseDurableId(executionArn);
   const res = await fetch(durableUrl(`/instances/${encodeURIComponent(instanceId)}`), { signal: AbortSignal.timeout(30_000) });
-  if (res.status === 404) return { status: 'ABORTED', cause: 'instance not found' };
+  // Unknown instance: throw like DescribeExecution's ExecutionDoesNotExist. Mapping it
+  // to ABORTED would let callers write FAILED / start duplicates when the task hub or
+  // base URL is misconfigured (every in-flight id would 404 at once).
+  if (res.status === 404) throw new Error(`Durable instance not found: ${instanceId}`);
   // Durable status API: 200 completed, 202 running/pending, 400 failed/terminated,
   // 500 failed (returnInternalServerErrorOnFailure). All carry the status JSON.
   if (![200, 202, 400, 500].includes(res.status)) throw new Error(`Durable status failed: HTTP ${res.status}`);

@@ -11,7 +11,7 @@ the tokens it would write actually play:
 3. DRY_RUN (default true): build every write but never flush; log a run doc to
    DB_LAB.playback_resign_runs (must be a *_shadow DB) for comparison with prod.
 
-Log markers for alerts: RESIGN_CONFIG_INVALID, RESIGN_CANARY_FAIL, RESIGN_DRY_RUN_OK, RESIGN_OK.
+Log markers for alerts: RESIGN_CONFIG_INVALID, RESIGN_CANARY_FAIL, RESIGN_DRY_RUN_OK, RESIGN_OK, RESIGN_PARTIAL.
 """
 import hashlib
 import json
@@ -49,8 +49,10 @@ def canary_targets(targets: list, day: str) -> list:
     if not targets:
         return []
     picks = []
-    first_ep = next((t for t in targets if not t["episode_id"].startswith("trailer_")), None)
-    first_trailer = next((t for t in targets if t["episode_id"].startswith("trailer_")), None)
+    # Prod showcache has episodes with id: null (resign_playback_urls uses ep["id"] as-is).
+    is_trailer = lambda t: str(t.get("episode_id") or "").startswith("trailer_")
+    first_ep = next((t for t in targets if not is_trailer(t)), None)
+    first_trailer = next((t for t in targets if is_trailer(t)), None)
     for t in (first_ep, first_trailer):
         if t and t not in picks:
             picks.append(t)
@@ -139,5 +141,8 @@ def run(env=None, mongo_client=None, http_get=None, now=None, log=print) -> int:
         return 0
 
     result = rp.handler({}, None)
-    log("RESIGN_OK " + json.dumps(result, default=str))
-    return 0 if not result.get("errors") else 1
+    # RESIGN_OK only for a clean sweep: resign_stale keys off it, so a run with
+    # per-episode errors must not reset that alert (RESIGN_PARTIAL alerts on its own).
+    marker = "RESIGN_PARTIAL" if result.get("errors") else "RESIGN_OK"
+    log(marker + " " + json.dumps(result, default=str))
+    return 0 if marker == "RESIGN_OK" else 1

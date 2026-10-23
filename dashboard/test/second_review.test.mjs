@@ -75,3 +75,30 @@ describe('signing/resign full sweep', () => {
     expect(calls[0]).toContain('/api/invoke/resign-playback-urls?mode=async');
   });
 });
+
+describe('active-run capacity follows the selected Batch provider', () => {
+  it('reports Azure by its configured pool ceiling instead of hard-coded AWS 128', async () => {
+    vi.resetModules();
+    vi.stubEnv('CLOUD_PROVIDER', 'azure');
+    vi.stubEnv('LAB_COMPUTE_PROVIDER', 'azure');
+    vi.stubEnv('LAB_WORKER_CAPACITY', '1');
+    const emptyCollection = { find: () => ({ toArray: async () => [] }) };
+    vi.doMock('@/lib/mongodb', () => ({
+      default: async () => ({ db: () => ({ collection: () => emptyCollection }) }),
+    }));
+    vi.doMock('@/lib/jobs', () => ({
+      listActiveJobs: async (_kind, { statuses }) => statuses.includes('RUNNING')
+        ? [{ jobId: 'azb:chai-q-lab-shadow/t1' }]
+        : [],
+      describeJobs: async () => [{
+        status: 'RUNNING', environment: { EPISODE_ID: 'e1', CODEC: 'libx264' },
+      }],
+    }));
+    const { GET } = await import('@/app/api/show-status/active-runs/route');
+    const body = await (await GET()).json();
+    expect(body.workers.compute).toEqual({ provider: 'azure', used: 1, total: 1, left: 0 });
+    expect(body.reruns[0]).toMatchObject({ compute_h264: 1, compute_running: 1 });
+    vi.doUnmock('@/lib/mongodb');
+    vi.doUnmock('@/lib/jobs');
+  });
+});

@@ -672,6 +672,7 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
   const shows = data?.shows || [];
   const reruns = data?.reruns || [];
   const workers = data?.workers;
+  const computeLabel = workers?.compute?.provider === 'azure' ? 'Azure' : 'AWS';
   const cellTh = {
     textAlign: 'left',
     padding: '8px 12px',
@@ -745,9 +746,9 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
                 <tr style={{ background: '#111' }}>
                   <th style={cellTh}>Show</th>
                   <th style={cellTh}>Kind</th>
-                  <th style={cellTh}>AWS H264</th>
-                  <th style={cellTh}>AWS H265</th>
-                  <th style={cellTh}>AWS total</th>
+                  <th style={cellTh}>{computeLabel} H264</th>
+                  <th style={cellTh}>{computeLabel} H265</th>
+                  <th style={cellTh}>{computeLabel} total</th>
                   <th style={cellTh}>GCP H264</th>
                   <th style={cellTh}>GCP H265</th>
                   <th style={cellTh}>GCP total</th>
@@ -768,10 +769,10 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
                       <div style={{ color: '#555', fontSize: 11, marginTop: 2 }}>{s.show_slug || s.show_id}</div>
                     </td>
                     <td style={cellTd}>{s.kind}</td>
-                    <td style={{ ...cellTd, color: s.aws_h264 ? '#fbbf24' : '#555' }}>{s.aws_h264 || 0}</td>
-                    <td style={{ ...cellTd, color: s.aws_h265 ? '#fbbf24' : '#555' }}>{s.aws_h265 || 0}</td>
-                    <td style={{ ...cellTd, color: s.aws_running ? '#fbbf24' : '#cbd5e1', fontWeight: 700 }}>
-                      {s.aws_running}
+                    <td style={{ ...cellTd, color: s.compute_h264 ? '#fbbf24' : '#555' }}>{s.compute_h264 || 0}</td>
+                    <td style={{ ...cellTd, color: s.compute_h265 ? '#fbbf24' : '#555' }}>{s.compute_h265 || 0}</td>
+                    <td style={{ ...cellTd, color: s.compute_running ? '#fbbf24' : '#cbd5e1', fontWeight: 700 }}>
+                      {s.compute_running}
                     </td>
                     <td style={{ ...cellTd, color: s.gcp_h264 ? '#4da6ff' : '#555' }}>{s.gcp_h264 || 0}</td>
                     <td style={{ ...cellTd, color: s.gcp_h265 ? '#4da6ff' : '#555' }}>{s.gcp_h265 || 0}</td>
@@ -793,9 +794,9 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
                 <thead>
                   <tr style={{ background: '#111' }}>
                     <th style={cellTh}>Show</th>
-                    <th style={cellTh}>AWS H264</th>
-                    <th style={cellTh}>AWS H265</th>
-                    <th style={cellTh}>AWS total</th>
+                    <th style={cellTh}>{computeLabel} H264</th>
+                    <th style={cellTh}>{computeLabel} H265</th>
+                    <th style={cellTh}>{computeLabel} total</th>
                     <th style={cellTh}>GCP H264</th>
                     <th style={cellTh}>GCP H265</th>
                     <th style={cellTh}>GCP total</th>
@@ -808,9 +809,9 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
                         {s.show_title}
                         <div style={{ color: '#555', fontSize: 11, marginTop: 2 }}>{s.show_slug || s.show_id}</div>
                       </td>
-                      <td style={{ ...cellTd, color: s.aws_h264 ? '#fbbf24' : '#555' }}>{s.aws_h264 || 0}</td>
-                      <td style={{ ...cellTd, color: s.aws_h265 ? '#fbbf24' : '#555' }}>{s.aws_h265 || 0}</td>
-                      <td style={{ ...cellTd, color: s.aws_running ? '#fbbf24' : '#cbd5e1', fontWeight: 700 }}>{s.aws_running}</td>
+                      <td style={{ ...cellTd, color: s.compute_h264 ? '#fbbf24' : '#555' }}>{s.compute_h264 || 0}</td>
+                      <td style={{ ...cellTd, color: s.compute_h265 ? '#fbbf24' : '#555' }}>{s.compute_h265 || 0}</td>
+                      <td style={{ ...cellTd, color: s.compute_running ? '#fbbf24' : '#cbd5e1', fontWeight: 700 }}>{s.compute_running}</td>
                       <td style={{ ...cellTd, color: s.gcp_h264 ? '#4da6ff' : '#555' }}>{s.gcp_h264 || 0}</td>
                       <td style={{ ...cellTd, color: s.gcp_h265 ? '#4da6ff' : '#555' }}>{s.gcp_h265 || 0}</td>
                       <td style={{ ...cellTd, color: s.gcp_running ? '#4da6ff' : '#cbd5e1', fontWeight: 700 }}>{s.gcp_running}</td>
@@ -837,10 +838,10 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
                 </thead>
                 <tbody>
                   <tr>
-                    <td style={cellTd}>AWS (Lab)</td>
-                    <td style={cellTd}>{workers.aws.used}</td>
-                    <td style={cellTd}>{workers.aws.total}</td>
-                    <td style={{ ...cellTd, color: '#22c55e', fontWeight: 600 }}>{workers.aws.left}</td>
+                    <td style={cellTd}>{computeLabel} (Lab)</td>
+                    <td style={cellTd}>{workers.compute.used}</td>
+                    <td style={cellTd}>{workers.compute.total}</td>
+                    <td style={{ ...cellTd, color: '#22c55e', fontWeight: 600 }}>{workers.compute.left}</td>
                   </tr>
                   <tr>
                     <td style={cellTd}>GCP</td>
@@ -853,10 +854,10 @@ function ActiveRunsPanel({ data, loading, error, onClose, onRefresh }) {
               <div style={{ fontSize: 11, color: '#555', marginTop: 8, lineHeight: 1.5 }}>
                 Used counts per-codec worker slots in flight: each episode with{' '}
                 <code>lab_h264_status</code> or <code>lab_h265_status</code> in{' '}
-                <code>STARTING</code>/<code>RUNNING</code> consumes one AWS slot (so an episode
+                <code>STARTING</code>/<code>RUNNING</code> consumes one {computeLabel} slot (so an episode
                 running both codecs = 2 slots). GCP counts the same way, plus{' '}
                 <code>COMBINING</code> as one slot. Capacity is the fixed pool size{' '}
-                (AWS=128, GCP=45).
+                ({computeLabel}={workers.compute.total}, GCP=45).
               </div>
             </div>
           )}

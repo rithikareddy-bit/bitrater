@@ -22,6 +22,7 @@ const API = 'api-version=2024-07-01.20.0';
 // Env copied into every Azure task (e.g. DB_LAB so a shadow lab can never write prod).
 const PASSTHROUGH = ['DB_LAB', 'SHADOW_MODE', 'KEY_VAULT_URL', 'MONGO_URI_KV_SECRET', 'AWS_S3_KEY_KV_SECRET', 'AZURE_CLIENT_ID_BATCH'];
 const WALL_CLOCK = { lab: 'PT20H', visqol: 'PT1H' }; // AWS job defs: 72000 s / 3600 s
+export const TASK_RETENTION = 'PT1H'; // keep in sync with orchestrator/batch_jobs.py TASK_RETENTION_HOURS
 
 let awsClient;
 function aws() {
@@ -88,7 +89,8 @@ export async function submitJob(kind, { jobName, jobQueue, jobDefinition, contai
       },
       environmentSettings: env,
       // No platform retries: callers retry themselves, as on AWS.
-      constraints: { maxWallClockTime: WALL_CLOCK[kind] || 'PT20H', maxTaskRetryCount: 0 },
+      // Short retention: the task dir sits on the node's shared temp disk (default is 7 days).
+      constraints: { maxWallClockTime: WALL_CLOCK[kind] || 'PT20H', maxTaskRetryCount: 0, retentionTime: TASK_RETENTION },
     }),
   });
   if (!res.ok) throw new Error(`Azure Batch addTask failed: HTTP ${res.status} ${await res.text()}`);

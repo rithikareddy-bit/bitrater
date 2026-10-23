@@ -8,6 +8,7 @@ Exit code 0 = success; non-zero marks the job execution Failed (alerts key off i
 import json
 import os
 import sys
+import traceback
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -72,17 +73,28 @@ def main(argv) -> int:
     if len(argv) != 2 or argv[1] not in JOBS:
         print(f"usage: run_job.py {{{'|'.join(JOBS)}}}", file=sys.stderr)
         return 64
+    try:
+        return _run(argv[1])
+    except Exception as exc:  # noqa: BLE001 - every failure must carry the alert marker
+        # <JOB>_ERROR (e.g. URL_HEALTH_ERROR, BATCH_CLEANUP_ERROR) is what the
+        # scheduled_job_failed alert matches in the console log.
+        print(f"{argv[1].upper()}_ERROR {type(exc).__name__}: {exc}", flush=True)
+        traceback.print_exc()
+        return 1
+
+
+def _run(job) -> int:
     import runtime_config
     # Job-specific rules: shadow jobs may READ prod master (F, G1) but write only *_shadow.
-    runtime_config.assert_job_isolation(argv[1])
+    runtime_config.assert_job_isolation(job)
 
-    if argv[1] == "resigner":
+    if job == "resigner":
         import resign_guard
 
         return resign_guard.run()
-    if argv[1] == "batch_cleanup":
+    if job == "batch_cleanup":
         return cleanup_batch()
-    if argv[1] == "workflow_watchdog":
+    if job == "workflow_watchdog":
         return workflow_watchdog()
     import url_health_checker
 

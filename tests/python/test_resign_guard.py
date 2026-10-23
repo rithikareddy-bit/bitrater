@@ -117,6 +117,14 @@ def test_canary_samples_are_deterministic_and_cover_episode_and_trailer():
     assert a[0]["episode_id"] == "e0" and a[1]["episode_id"] == "trailer_x_k" and len(a) <= 3
 
 
+def test_canary_tolerates_null_episode_id():
+    """Prod showcache has episodes with id: null; the first live run crashed on .startswith."""
+    targets = [{"episode_id": None, "canonical": "u0"}, {"episode_id": "e1", "canonical": "u1"},
+               {"episode_id": "trailer_x_k", "canonical": "ut"}]
+    a = resign_guard.canary_targets(targets, "2026-10-06")
+    assert a[0]["canonical"] == "u0" and any(t["episode_id"] == "trailer_x_k" for t in a)
+
+
 def test_range_206_counts_as_playable(world, monkeypatch):
     """_http_status sends Range: bytes=0-0, so a real CDN answers 206 for a valid token."""
     mongo, _ = world
@@ -177,3 +185,14 @@ def test_shadow_job_writing_prod_lab_is_refused(world, monkeypatch):
     logs = []
     assert resign_guard.run(env, mongo, cdn_ok, NOW, logs.append) == 2
     assert "RESIGN_CONFIG_INVALID" in logs[0]
+
+
+def test_partial_failure_is_not_resign_ok(world, monkeypatch):
+    """resign_stale keys off RESIGN_OK: a sweep with per-episode errors must not reset it."""
+    mongo, _ = world
+    _set_lab(monkeypatch, "chai_q_lab")
+    import resign_playback_urls as rp
+    monkeypatch.setattr(rp, "handler", lambda e, c: {"updated_count": 2, "errors": [{"episode_id": "e1", "error": "x"}]})
+    logs = []
+    assert resign_guard.run({**GOOD, "DRY_RUN": "false"}, mongo, cdn_ok, NOW, logs.append) == 1
+    assert logs[-1].startswith("RESIGN_PARTIAL") and not any(l.startswith("RESIGN_OK") for l in logs)

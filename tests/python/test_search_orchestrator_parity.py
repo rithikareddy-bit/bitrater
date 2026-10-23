@@ -6,6 +6,7 @@ batch_jobs, and compares every submission, termination and the final state.
 """
 import copy
 import itertools
+from pathlib import Path
 from types import SimpleNamespace
 
 import mongomock
@@ -186,6 +187,36 @@ def test_passthrough_env_reaches_task(monkeypatch):
                                                {"environment": [{"name": "BITRATE", "value": "900"}]})
     assert captured["DB_LAB"] == "chai_q_lab_shadow" and captured["SHADOW_MODE"] == "true"
     assert captured["BITRATE"] == "900"
+
+
+def test_task_dir_retention_is_short(monkeypatch):
+    """Task dirs hold 11 GB+ sources on the node's shared temp disk (Batch default: 7 days)."""
+    from datetime import timedelta
+    captured = {}
+
+    class C:
+        def create_task(self, job, opts):
+            captured["c"] = opts.constraints
+
+    batch_jobs.AzureBatchJobs(C()).submit_job("ChaiQSearch-x", "chai-q-lab-shadow", "img", {"environment": []})
+    assert captured["c"].retention_time == timedelta(hours=1) and captured["c"].max_task_retry_count == 0
+    js = (Path(__file__).resolve().parents[2] / "dashboard" / "lib" / "jobs.js").read_text()
+    assert f"TASK_RETENTION = 'PT{batch_jobs.TASK_RETENTION_HOURS}H'" in js
+
+
+def test_shadow_refuses_every_aws_batch_call(monkeypatch):
+    class A:
+        def __getattr__(self, name):
+            raise AssertionError(f"AWS Batch {name} called from shadow")
+
+    monkeypatch.setenv("SHADOW_MODE", "true")
+    r = batch_jobs.RoutingBatchClient(aws=A(), azure=SimpleNamespace(describe_jobs=lambda ids: []))
+    for call in (lambda: r.submit_job("j", "chai-q-queue", "chai-q-worker", {}),
+                 lambda: r.describe_jobs(["uuid-from-prod"]),
+                 lambda: r.terminate_job("uuid-from-prod", "x")):
+        with pytest.raises(RuntimeError, match="shadow stamp refuses AWS Batch"):
+            call()
+    assert r.describe_jobs(["azb:q/t"]) == {"jobs": []}
 
 
 @pytest.mark.parametrize("codec", ["h264", "h265"])

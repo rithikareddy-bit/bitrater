@@ -42,14 +42,14 @@ variable "stamps" {
   default = {
     shadow = {
       enabled            = true
-      apps               = false
+      apps               = true
       shadow             = true
       dashboard_replicas = 1
       cloud_provider     = "azure"
       upload_provider    = "azure"
       resign_invoke      = "inprocess"
       aws_key            = "aws-s3-readonly"
-      resigner           = { enabled = false, dry_run = true, db_master = "master" }
+      resigner           = { enabled = true, dry_run = true, db_master = "master" }
       url_health         = { enabled = false, db_master = "master_shadow" }
     }
     prod = {
@@ -203,9 +203,66 @@ variable "batch_image_version" {
 }
 
 variable "batch_max_spot_nodes" {
-  description = "Autoscale ceiling (4 vCPU each). 128 = AWS max_vcpus 512; bounded by the Batch account low-priority core quota."
-  type        = number
-  default     = 16
+  description = <<-EOT
+    Wanted autoscale ceiling per stamp (4 vCPU per node). 128 nodes = AWS max_vcpus 512
+    (parity). The pool never asks for more than the account's granted low-priority quota
+    (batch_spot_core_quota), so requests above the quota don't fail allocation.
+  EOT
+  type        = map(number)
+  default     = { shadow = 1, prod = 128 }
+}
+
+variable "batch_spot_core_quota" {
+  description = <<-EOT
+    Low-priority (Spot) core quota GRANTED to each stamp's Batch account (A3). New accounts
+    get 6. Update after each quota ticket is approved
+    (`az batch account show -n bitraterbatch<stamp> -g rg-bitrater-prod --query lowPriorityCoreQuota`).
+    The effective ceiling is min(batch_max_spot_nodes, floor(quota / 4)).
+  EOT
+  type        = map(number)
+  default     = { shadow = 6, prod = 6 }
+}
+
+variable "accept_reduced_lab_capacity" {
+  description = <<-EOT
+    The prod backend cutover (stamps.prod.cloud_provider = "azure") is refused while the
+    prod pool ceiling is below AWS parity (128 nodes = 512 vCPU). Set true only as an
+    explicit owner decision to run with less lab throughput.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "batch_pool_overrides" {
+  description = <<-EOT
+    Per-stamp vm_size / image_version overrides. Both force pool (and Batch job)
+    replacement, which kills running tasks; overriding per stamp lets shadow try a new
+    image first without touching prod. Change prod's only when freeze_check passes.
+  EOT
+  type = map(object({
+    vm_size       = optional(string)
+    image_version = optional(string)
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for o in values(var.batch_pool_overrides) : o.image_version == null || (trimspace(coalesce(o.image_version, "x")) != "" && lower(coalesce(o.image_version, "x")) != "latest")])
+    error_message = "batch_pool_overrides image_version must be an exact version, never `latest`."
+  }
+}
+
+variable "dashboard_allowed_principals" {
+  description = <<-EOT
+    Entra object ids allowed to use the dashboard (Easy Auth allowedPrincipals); everyone
+    else who signs in gets 403. `identities` = user object ids. `groups` = security-group
+    object ids, which needs groupMembershipClaims = "SecurityGroup" on the app registration
+    so the token carries the groups claim. A dashboard cannot be created while both are empty.
+  EOT
+  type = object({
+    groups     = optional(list(string), [])
+    identities = optional(list(string), [])
+  })
+  default = {}
 }
 
 variable "entra_client_id" {

@@ -14,6 +14,7 @@ import re
 from datetime import timedelta
 
 AZ_QUEUE_PREFIX = "azb-job:"
+TASK_RETENTION_HOURS = 1  # keep in sync with dashboard/lib/jobs.js TASK_RETENTION
 AZ_ID_PREFIX = "azb:"
 
 # Azure task state -> AWS Batch job status (all non-terminal map into
@@ -31,6 +32,13 @@ def client():
 
 def is_azure_id(job_id: str) -> bool:
     return str(job_id).startswith(AZ_ID_PREFIX)
+
+
+def _refuse_aws_in_shadow(what) -> None:
+    """Shadow must never touch AWS Batch (a copied prod id would stop a prod job);
+    mirrors dashboard/lib/cloud/ids.js assertIdAllowed."""
+    if os.environ.get("SHADOW_MODE", "false").lower() == "true":
+        raise RuntimeError(f"shadow stamp refuses AWS Batch call for {what!r}")
 
 
 def azure_task_id(job_name: str) -> str:
@@ -67,6 +75,7 @@ class RoutingBatchClient:
     def submit_job(self, jobName, jobQueue, jobDefinition, containerOverrides):
         if str(jobQueue).startswith(AZ_QUEUE_PREFIX):
             return self._azure().submit_job(jobName, jobQueue[len(AZ_QUEUE_PREFIX):], jobDefinition, containerOverrides)
+        _refuse_aws_in_shadow(jobQueue)
         return self._aws().submit_job(
             jobName=jobName, jobQueue=jobQueue, jobDefinition=jobDefinition, containerOverrides=containerOverrides,
         )
@@ -76,6 +85,7 @@ class RoutingBatchClient:
         aws_ids = [j for j in jobs if not is_azure_id(j)]
         out = []
         if aws_ids:
+            _refuse_aws_in_shadow(aws_ids[0])
             out += self._aws().describe_jobs(jobs=aws_ids).get("jobs", [])
         if az_ids:
             out += self._azure().describe_jobs(az_ids)
@@ -84,6 +94,7 @@ class RoutingBatchClient:
     def terminate_job(self, jobId, reason):
         if is_azure_id(jobId):
             return self._azure().terminate_job(jobId, reason)
+        _refuse_aws_in_shadow(jobId)
         return self._aws().terminate_job(jobId=jobId, reason=reason)
 
 
@@ -129,7 +140,9 @@ class AzureBatchJobs:
             ),
             environment_settings=[m.EnvironmentSetting(name=k, value=v) for k, v in env.items()],
             # No platform retries: search_orchestrator / parallelResolLab retry themselves, as on AWS.
-            constraints=m.BatchTaskConstraints(max_wall_clock_time=timedelta(hours=hours), max_task_retry_count=0),
+            # Short retention: the task dir sits on the node's shared temp disk (default is 7 days).
+            constraints=m.BatchTaskConstraints(max_wall_clock_time=timedelta(hours=hours), max_task_retry_count=0,
+                                               retention_time=timedelta(hours=TASK_RETENTION_HOURS)),
         ))
         return {"jobId": f"{AZ_ID_PREFIX}{batch_job_id}/{task_id}", "jobName": job_name}
 

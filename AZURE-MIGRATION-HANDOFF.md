@@ -1,8 +1,8 @@
 # bitrater: AWS → Azure migration handoff
 
-**Last updated:** 2026-09-27.
-**Phase complete:** design, code and verification. Nothing is deployed.
-**Next phase:** A (Azure foundations). Every step needs the owner's approval.
+**Last updated:** 2026-10-09.
+**Current phase:** Azure shadow is deployed; production AWS is still authoritative and unchanged.
+**Next phase:** E parity, then staged production cutover. AWS retirement is a separate final phase.
 
 This file is self-contained. A new person or chat should be able to continue from it without the chat history.
 - `AZURE-MIGRATION-PLAN.md` is the **contract**: the §0 zero-risk rules, the phases, and the gates. It also holds the running progress log (§10).
@@ -14,17 +14,22 @@ This file is self-contained. A new person or chat should be able to continue fro
 
 - **Goal.** Move bitrater's **AWS compute** to Azure. Covered: App Runner dashboard, Step Functions, Lambdas, AWS Batch, EventBridge, ECR and Secrets Manager.
 - **Two hard requirements:**
-  1. **Zero risk to prod.**
-  2. **AWS is kept forever as a revert path.**
+  1. **Zero risk to prod: deploy and prove Azure alongside AWS first.**
+  2. **Delete nothing in AWS during deployment, parity, cutover, or soak.** Retirement is a later, explicitly approved phase.
 - **Not moving:** GCP (Transcoder, GCS, Media CDN `cdn.chaishots.in`, Cloud Run vtt-worker). MongoDB, which is already on Azure (Cosmos `prodcluster`).
-- **S3 data is not migrated** (owner decision). Code reads `s3_url` from S3 or Azure Blob, whichever the record says.
-- **Status:**
-  - All code for both clouds is written and tested: 114 Python tests, 55 dashboard tests, and the dashboard builds.
-  - Terraform is written and plans cleanly for every phase.
-  - Three first-pass audits and two second-pass reviews ran; all findings are fixed.
-  - **Nothing has been deployed or changed in any cloud.**
-  - **Nothing is committed** (owner's instruction).
-- **Next:** Phase A, which creates the Azure foundation. See §11.
+- **S3 data is not part of the current compute migration.** Code reads `s3_url` from S3 or Azure Blob. S3 retirement therefore needs a later data/URL migration; it cannot be deleted with AWS compute.
+- **Status 2026-10-09:**
+  - Stage 1 shadow is LIVE: authenticated dashboard, jobs, alerts, seed done, tripwire 0.
+  - Azure dry runs match AWS prod, including the same 55 pre-existing data errors. Record all 12 cycles before closing Gate F.
+  - **Phase E parity runs have not started.**
+  - Local verification: 131 Python tests, 64 dashboard tests, dashboard production build, Terraform fmt/validate.
+  - No AWS resource is changed by an Azure shadow deployment. At cutover, AWS is paused/disabled only; it remains recoverable throughout soak.
+  - Pre-existing prod issues found:
+    - 55 showcache episodes without `id` have expired playback tokens;
+    - the AWS Batch lab has been stuck since 2026-10-02 (EC2 launch quota).
+  - Details: `AZURE-MIGRATION-PLAN.md` §10, 2026-10-09 entry.
+- **Important remaining gates:** Phase E parity; production Batch quota; repair AWS Batch so rollback is real; audit the legacy S3 trigger; drill revert twice; configure/accept the production dashboard hostname; complete the 30-day soak.
+- **Retirement boundary:** compute can be retired after soak and approval. S3 buckets/credentials cannot be retired while Mongo records still contain S3 URLs; that requires a separate data migration and verification.
 
 ---
 
@@ -34,12 +39,12 @@ This file is self-contained. A new person or chat should be able to continue fro
    - Reading prod is fine.
    - Any write needs **explicit per-step approval from the owner**. That covers prod Mongo, prod GCS, Media CDN, AWS resources, DNS, the Cosmos firewall and secrets.
    - Cost-incurring Azure applies and quota requests need approval too.
-2. **Do not git commit or push.** The owner wants all changes left uncommitted in the working tree. The owner commits when they choose. Earlier commits were deliberately undone.
+2. **The owner controls commits and pushes.** Do not commit automatically. Before production cutover, however, every required config/runbook must be reviewed and tracked; `scripts/cutover/release_readiness.sh` enforces that none exists only on one workstation.
 3. **Never redeploy AWS from this branch.**
    - `deploy.sh`, `dashboard/deploy.sh` and `aws-infra` Terraform refuse to run on `azure-migration*`.
    - AWS keeps running commit `6d0508f`, which is the revert target.
    - AWS hotfixes go through `sync-bitrater-to-org` (the branch prod deploys from) and are then ported here.
-4. **Never delete anything in AWS.** At cutover: disable EventBridge rules, pause App Runner, leave the Lambdas and SFN idle, keep Batch at min 0. Keep the Terraform state.
+4. **Never delete anything in AWS during migration/cutover/soak.** At cutover: disable EventBridge rules, pause App Runner, leave Lambdas/SFN idle, keep Batch at min 0, and preserve Terraform state. Retirement happens only in Phase I with separate approval.
 5. **Cutovers happen only in a verified freeze window.** Run `scripts/cutover/freeze_check.py`; everything must be 0 in flight.
 6. **Secrets:**
    - Never print them or write them to disk.
@@ -76,7 +81,7 @@ This file is self-contained. A new person or chat should be able to continue fro
 - **Resource group:** new `rg-bitrater-prod` with its own ACR and Key Vault, in Central India.
 - **Batch capacity:** quota is per Batch account. Keep shadow small; request about 512 Spot vCPU for the production account.
 - **Uploads:** the dashboard upload page moves to Azure Blob (flag `UPLOAD_PROVIDER`), at the prod bridge or later. It needs the storage owner's approval for the role.
-- **AWS:** never decommissioned. It stays dormant and revert-ready.
+- **AWS:** unchanged while Azure is deployed and tested; dormant and revert-ready during the 30-day soak; optionally retired only in Phase I.
 - **Commits:** none. Changes stay uncommitted.
 - **Test seed set:** see §10.
 
@@ -117,7 +122,7 @@ So each cutover or rollback is a one-line edit plus `terraform apply` plus `publ
 | CDN | `SKIP_CDN_INVALIDATION=1` |
 | VTT, dev-sync, trailer scanner | off |
 | Uploads | `bitratershadowup/uploads-shadow` |
-| Identities | per-stamp, reading only shadow secrets |
+| Identities | per-stamp; they read shadow Mongo/GCP/S3 secrets, and also the shared signing key and subtitle URI. Isolation is enforced by the code checks + tripwire, not by credentials |
 | Mongo | `appName=bitrater-azure-shadow` (tripwire) |
 | Startup check | every entrypoint refuses to start if any name points at prod |
 
@@ -150,7 +155,7 @@ So each cutover or rollback is a one-line edit plus `terraform apply` plus `publ
 | `bitrater_wf/orchestrators.py` | The 4 ports; `continue_as_new` every 100 polls; audio batch sliding window of 30 with tolerated failures |
 | `bitrater_wf/handlers.py` | Module allowlist, Lambda-style error payloads, isolation check |
 | `function_app.py` | Registration, `/api/invoke/{fn}` (sync off the event loop, async = Event invoke with Lambda-style retries), ffmpeg setup (safe, atomic) |
-| `host.json` | Hub `%DURABLE_TASK_HUB%`, 5 s queue polling, max 3 concurrent activities (the copy step buffers about 1 GiB) |
+| `host.json` | Hub `%DURABLE_TASK_HUB%`, 5 s queue polling, max 3 concurrent activities. The copy step holds ~2 × 64 MiB per worker, so Azure sets `COPY_MAX_WORKERS=5` (~640 MiB per copy, 3 copies < 2 GiB on the 4 GiB instance); AWS keeps the default 16 |
 | `scripts/build_functions.sh` | Copies `orchestrator/*.py`, the ffmpeg binaries from the Lambda layer, and pinned requirements into the package (gitignored outputs) |
 
 ### Jobs and workers
@@ -198,7 +203,7 @@ So each cutover or rollback is a one-line edit plus `terraform apply` plus `publ
 
 ## 7. How it was verified
 
-- **Tests:** `scripts/test_all.sh` gives 114 Python and 55 dashboard tests passing. `cd dashboard && npm run build` exits 0; its two "Dynamic server usage" log lines also appear on the original code. `next lint` was never configured in this repo, so it isn't used.
+- **Tests:** `scripts/test_all.sh` gives 131 Python and 64 dashboard tests passing. `cd dashboard && npm run build` exits 0; its two "Dynamic server usage" log lines also appear on the original code. `next lint` was never configured in this repo, so it isn't used.
 - **Key parity tests:**
   - `search_orchestrator` makes **identical decisions** on AWS vs Azure Batch backends (normal, failing, slow, and lost-job timeout scenarios).
   - The Durable ports match the SFN JSON constants (contract test).
@@ -279,7 +284,7 @@ So each cutover or rollback is a one-line edit plus `terraform apply` plus `publ
 
 Before each step, re-read the gate and rollback in `AZURE-MIGRATION-PLAN.md` §6. After each step, record it in §10 there.
 
-### Phase A: foundations (no prod impact)
+### Phase A: foundations (completed; retained for reference)
 
 - **A1 ★ state storage**
   - Run: `cd azure-infra/bootstrap && terraform init && terraform apply`.
@@ -309,7 +314,7 @@ Before each step, re-read the gate and rollback in `AZURE-MIGRATION-PLAN.md` §6
   2. Create an AWS IAM user `chai-q-azure-s3-readonly` with `s3:GetObject` and `s3:ListBucket` on the source buckets (at least `sanity-dev-store`, ap-south-2). Confirm the bucket list from the `s3_url` values first.
   3. Create an access key and pass it via env: `AWS_KEY_ID=… AWS_KEY_SECRET=… copy_secrets_sm_to_kv.sh --aws-key aws-s3-readonly --apply`.
   4. Create the Entra app registration and client secret, then pipe it to Key Vault with `ENTRA_CLIENT_SECRET=… copy_secrets_sm_to_kv.sh --entra-client-secret --apply`; set `entra_client_id`. Never put the secret in Terraform variables.
-- **A6 smoke (read-only on prod).** The `azure-infra/smoke/` scripts in the plan are **not written yet**; either write them or run these by hand:
+- **A6 smoke (read-only on prod).** Done by hand on 2026-09-27 (see §1); the planned `azure-infra/smoke/` scripts were replaced by these manual checks:
   - each identity can read only its own secrets (after `apps=true`);
   - resize the Batch pool 0→1→0 and run one task that prints `env | grep AZ_BATCH; df -h` and reads one Key Vault secret via IMDS;
   - the Container Apps env is healthy.
@@ -376,8 +381,9 @@ Before each step, re-read the gate and rollback in `AZURE-MIGRATION-PLAN.md` §6
      - `lambda:InvokeFunction` on the 4 functions
      - S3 Get on the sources and multipart Put on `sanity-dev-store`
   2. `--aws-key aws-bridge --apply`.
-  3. Freeze with `freeze_check.py --require-azure` and explicit shadow+prod Durable/Batch targets, then set prod `aws_key = "aws-bridge"`, `dashboard_replicas = 1`, `cloud_provider = "aws"`, apply, `--keys-only`.
-  4. Pause App Runner, smoke-test, unfreeze.
+  3. Freeze with `freeze_check.py --require-azure` (explicit shadow+prod Durable/Batch targets + `AZURE_SUBSCRIPTION_ID`).
+  4. **Pause App Runner first** (only one dashboard may drive pipelines on prod Mongo), then set prod `aws_key = "aws-bridge"`, `dashboard_replicas = 1`, `cloud_provider = "aws"`, apply, `FREEZE_OK=1 publish_functions.sh prod --keys-only`.
+  5. Smoke-test, unfreeze.
   - Rollback: `dashboard_replicas = 0` + resume App Runner.
 - **G3 ★ backends:** freeze, set prod `cloud_provider = "azure"` (the resigner stays on the AWS Lambda), test show end-to-end, unfreeze. **Revert drill** before and after (runbook below).
 - **G4 ★ resigner:**
@@ -389,12 +395,18 @@ Before each step, re-read the gate and rollback in `AZURE-MIGRATION-PLAN.md` §6
 
 ### Revert to AWS (target under 15 min; drill it twice at G3)
 
-1. Freeze; `freeze_check.py --require-azure` checks every configured shadow/prod Durable and Batch target and shows 0 in flight.
-2. Disable the Azure crons and set the prod dashboard to `dashboard_replicas = 0`.
-3. Resume App Runner.
-4. Re-enable both EventBridge rules.
-5. Smoke-test a test show.
-6. Unfreeze.
+Use `scripts/cutover/revert_to_aws.sh` (dry run by default, `--apply` to act). It needs no Terraform, so a failing precondition or a missing working tree can't block it.
+
+1. Freeze; `freeze_check.py --require-azure` shows 0 in flight across Durable, Batch **and running Container Apps job executions** (unless Azure itself is the incident).
+2. `revert_to_aws.sh --apply`:
+   - preflight: refuses if AWS Batch can't launch instances (the last ASG scaling activity failed). `--skip-preflight` reverts the dashboard and crons anyway;
+   - Azure prod scheduled jobs → Manual trigger, running executions stopped;
+   - Azure prod dashboard → ingress disabled + revision deactivated;
+   - App Runner resumed (waits for RUNNING);
+   - both EventBridge rules enabled.
+3. Smoke-test a test show (start a GCP transcode).
+4. Reconcile Terraform as the script prints (`dashboard_replicas = 0`, resigner/url_health `enabled = false`), then plan and apply.
+5. Unfreeze.
 
 Data is compatible both ways: same Mongo fields, same GCS paths.
 
@@ -406,6 +418,12 @@ Data is compatible both ways: same Mongo fields, same GCS paths.
   - Public-read shadow manifests bucket (B1).
   - Storage team's OK for the prod upload role (`prod_upload.grant_role_to_prod_dashboard`).
   - Entra app registration/client secret and `alert_email` are prerequisites for `apps=true` (Terraform now refuses to proceed without them).
+  - `dashboard_allowed_principals` (operator user and/or group object ids) is required before any dashboard is created; everyone else who signs in gets 403. Groups need `groupMembershipClaims = "SecurityGroup"` on the app registration.
+  - Prod lab capacity: `batch_max_spot_nodes.prod = 128` (AWS parity), capped by `batch_spot_core_quota.prod` (default 6 = 1 node). Record the granted quota there after the A3 ticket. G3 (`cloud_provider = "azure"` on prod) is refused below 128 nodes unless `accept_reduced_lab_capacity = true`.
+- **Blocking on AWS (2026-10-06):** account 107647021172 can't launch EC2 ("maximum Fleet Requests" quota, no fleets active; on-demand quota 1 vCPU). 30 orphaned `ChaiQSearch-*` jobs have been RUNNABLE since 2026-10-02.
+  - `freeze_check.py` can't pass while those jobs exist; terminating them is a prod write that needs approval.
+  - The revert path is broken for lab runs until AWS lifts the restriction; `revert_to_aws.sh` preflight detects this.
+  - Billing/support is on the org management account 309797289055. Don't start G2 until it's fixed.
 - **Live checks (A6/D):**
   - Batch Spot allocation in BatchService mode for each stamp account (low-priority VMs were retired in 2025; confirm `$TargetLowPriorityNodes` gets Spot).
   - Container-capable image.
@@ -420,9 +438,7 @@ Data is compatible both ways: same Mongo fields, same GCS paths.
   - The durabletask system key appears after publish.
   - A throw in Next `instrumentation.ts` stops the server (code now calls `process.exit(1)`).
   - Azure CLI default subscription is `ff1dad43…`.
-- **Not done on purpose:**
-  - `next.config.js` image hosts allow only `**.amazonaws.com`; add the blob host if images are served from Blob.
-  - `azure-infra/smoke/` scripts are not written (A6).
+- **Completed follow-up:** `next.config.js` allows both S3 and Azure Blob image hosts.
 
 ---
 
@@ -430,10 +446,11 @@ Data is compatible both ways: same Mongo fields, same GCS paths.
 
 ```bash
 cd /Users/cstech-05/Desktop/bitrater
-git status --short            # everything is uncommitted by design; do NOT commit
+git status --short            # review all local work; owner decides when to commit
 git diff 6d0508f --stat       # tracked changes vs the AWS prod commit
 scripts/test_all.sh           # must print ALL TESTS PASSED
 (cd dashboard && npm run build)
+scripts/cutover/release_readiness.sh # must pass before production cutover
 (cd azure-infra && terraform init -backend=false && terraform validate)
 # AWS-only diagnostic (not sufficient for a cutover gate): MONGO_URI is never printed
 MONGO_URI="$(python3 -c "import re;print(re.search(r'^\s*mongo_uri\s*=\s*\"(.*)\"',open('aws-infra/terraform.tfvars').read(),re.M).group(1))")" \

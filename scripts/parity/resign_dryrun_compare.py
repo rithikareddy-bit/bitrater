@@ -4,13 +4,18 @@
 prod run doc  (chai_q_lab.playback_resign_runs):         updated_count + skipped_count + len(errors)
 azure dry run (chai_q_lab_shadow.playback_resign_runs):  target_count, would_update, errors, canary
 
-Pass per dry run: canary ok, 0 errors, and target_count equals the prod total of the
+Pass per dry run: canary ok, the SAME errors as the nearest prod run, and target_count equals the prod total of the
 nearest run within 2 h, allowing for combined URLs added/removed in between
 (--tolerance, default 0).
 
 Usage: MONGO_URI=... python resign_dryrun_compare.py [--last 12] [--tolerance 0]
 """
 import sys
+
+
+def _error_signature(errors):
+    from collections import Counter
+    return Counter(((e or {}).get("episode_id"), ((e or {}).get("error") or "")[:120]) for e in (errors or []))
 
 
 def evaluate(dry_runs, prod_runs, tolerance=0):
@@ -20,8 +25,11 @@ def evaluate(dry_runs, prod_runs, tolerance=0):
         problems = []
         if not d.get("canary", {}).get("ok"):
             problems.append("canary failed")
-        if d.get("errors"):
-            problems.append(f"{len(d['errors'])} errors")
+        # Parity, not perfection: the dry run must fail on exactly the same items as the
+        # nearest prod (AWS) run. (2026-10-09: both fail on the same 55 showcache entries
+        # that have a combined URL but no episode id: a pre-existing prod data issue.)
+        if nearest is not None and _error_signature(d.get("errors")) != _error_signature(nearest.get("errors")):
+            problems.append(f"errors differ from prod: azure {len(d.get('errors') or [])} vs prod {len(nearest.get('errors') or [])}")
         if nearest is None or abs((nearest["started_at"] - d["started_at"]).total_seconds()) > 7200:
             problems.append("no prod run within 2 h")
         else:

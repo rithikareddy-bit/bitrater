@@ -8,9 +8,14 @@ vars worker.py already reads, then execs worker.py unchanged.
   MONGO_URI_KV_SECRET    Key Vault secret name holding the Mongo URI
   AWS_S3_KEY_KV_SECRET   optional: secret holding {"access_key_id","secret_access_key"}
                          (read-only S3 key, for sources whose s3_url is still on S3)
+  STAMP_DB_LAB           set on the Batch JOB by Terraform (not by the submitter): the
+                         only lab DB this stamp's tasks may write (isolation check)
 """
 import json
 import os
+import shutil
+import signal
+import subprocess
 import sys
 import urllib.parse
 import urllib.request
@@ -43,10 +48,16 @@ def load_secrets(environ=os.environ, token_fn=_token, secret_fn=_secret) -> None
     if environ.get("MONGO_URI_KV_SECRET"):
         environ["MONGO_URI"] = secret_fn(vault, environ["MONGO_URI_KV_SECRET"], token)
     if environ.get("AWS_S3_KEY_KV_SECRET"):
-        key = json.loads(secret_fn(vault, environ["AWS_S3_KEY_KV_SECRET"], token))
-        environ["AWS_ACCESS_KEY_ID"] = key["access_key_id"]
-        environ["AWS_SECRET_ACCESS_KEY"] = key["secret_access_key"]
-        environ.setdefault("AWS_DEFAULT_REGION", "ap-south-2")
+        # Best effort: only sources still on S3 need it. Azure-Blob sources and ViSQOL
+        # (public HTTPS inputs) must not fail because the S3 key is absent.
+        try:
+            key = json.loads(secret_fn(vault, environ["AWS_S3_KEY_KV_SECRET"], token))
+            environ["AWS_ACCESS_KEY_ID"] = key["access_key_id"]
+            environ["AWS_SECRET_ACCESS_KEY"] = key["secret_access_key"]
+            environ.setdefault("AWS_DEFAULT_REGION", "ap-south-2")
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: AWS S3 key {environ['AWS_S3_KEY_KV_SECRET']!r} unavailable ({type(exc).__name__}); "
+                  "S3 sources will fail, HTTP/Blob sources are unaffected", file=sys.stderr)
 
 
 def prepare_workdir(environ=os.environ, image_dir="/var/task") -> str:
@@ -69,7 +80,58 @@ def prepare_workdir(environ=os.environ, image_dir="/var/task") -> str:
     return workdir
 
 
+def check_isolation(environ=os.environ) -> None:
+    """Refuse to run if the task's DB_LAB differs from the one its Batch job allows.
+
+    STAMP_DB_LAB comes from the job's common environment (Terraform), so a shadow task
+    can't reach prod chai_q_lab even if the submitter's env passthrough drops DB_LAB
+    (worker.py falls back to chai_q_lab). Raises SystemExit before any secret is read.
+    """
+    allowed = environ.get("STAMP_DB_LAB")
+    if not allowed:
+        return  # not on an Azure Batch job (local run)
+    db_lab = environ.setdefault("DB_LAB", allowed)
+    if db_lab != allowed:
+        raise SystemExit(f"ISOLATION_FAILED: DB_LAB={db_lab!r} but this Batch job only allows {allowed!r}")
+
+
+def cleanup_workdir(workdir: str, environ=os.environ) -> None:
+    """Delete the task's files (source.mp4 / variant.mp4, 11 GB+) as soon as the worker exits.
+
+    On AWS they died with the container layer; here they sit on the node's shared temp
+    disk, and back-to-back tasks on one node would fill it. Only inside a Batch task dir.
+    """
+    if not environ.get("AZ_BATCH_TASK_WORKING_DIR") or workdir != environ["AZ_BATCH_TASK_WORKING_DIR"]:
+        return
+    for name in os.listdir(workdir):
+        path = os.path.join(workdir, name)
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.remove(path)
+        except OSError as exc:
+            print(f"WARNING: cleanup of {path} failed: {exc}", file=sys.stderr)
+
+
+def run_worker(argv, workdir: str, environ=os.environ, popen=subprocess.Popen) -> int:
+    """Run worker.py as a child (not exec) so its files can be removed afterwards.
+
+    Exit code is passed through unchanged; SIGTERM/SIGINT (Batch terminate) are forwarded.
+    """
+    child = popen([sys.executable, "/var/task/worker.py", *argv], env=dict(environ))
+    forward = lambda sig, _frame: child.send_signal(sig)  # noqa: E731
+    previous = {s: signal.signal(s, forward) for s in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        code = child.wait()
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+        cleanup_workdir(workdir, environ)
+    return code if code >= 0 else 128 - code  # killed by signal N -> 128+N, like a shell
+
+
 if __name__ == "__main__":
+    check_isolation()
     load_secrets()
-    prepare_workdir()
-    os.execvp(sys.executable, [sys.executable, "/var/task/worker.py", *sys.argv[1:]])
+    sys.exit(run_worker(sys.argv[1:], prepare_workdir()))

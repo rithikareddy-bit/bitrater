@@ -35,12 +35,26 @@ export async function invokeFunction(fn, params) {
     body: params.Payload ? Buffer.from(params.Payload).toString() : '{}',
   });
   const text = await res.text();
-  if (res.status >= 500 && !text) throw new Error(`Azure invoke ${fn} failed: HTTP ${res.status}`);
-  // /api/invoke returns 200 with the handler's result, or 500 with a Lambda-style
-  // error body {errorMessage, errorType, stackTrace}.
+  // Like the Lambda SDK: a failed *invocation* (bad key 401/403, unknown function 404,
+  // throttling, host down, or any failed async start) throws. Only a handler error
+  // (sync: 500 with a Lambda-style {errorMessage, ...} body) comes back as FunctionError.
+  if (!res.ok && (mode === 'async' || !isHandlerError(res.status, text))) {
+    throw new Error(`Azure invoke ${fn} (${mode}) failed: HTTP ${res.status}${text ? ` ${text.slice(0, 300)}` : ''}`);
+  }
+  // /api/invoke returns 200 with the handler's result, 202 for async, or 500 with a
+  // Lambda-style error body {errorMessage, errorType, stackTrace}.
   return {
     StatusCode: res.status,
     Payload: Buffer.from(text || '{}'),
     ...(res.ok ? {} : { FunctionError: 'Unhandled' }),
   };
+}
+
+function isHandlerError(status, text) {
+  if (status !== 500 || !text) return false;
+  try {
+    return typeof JSON.parse(text)?.errorMessage === 'string';
+  } catch {
+    return false;
+  }
 }

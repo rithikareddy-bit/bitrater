@@ -608,6 +608,232 @@ function PipelineControls({
   );
 }
 
+// ── Apply default bitrates (show-wide) ───────────────────────────────────────
+// Fans out to the per-episode /api/apply-default-bitrates route so every
+// server-side guard (running lab → 409, Audio-Video ladder → 409, missing
+// s3_url → 400) still applies. By default, episodes that already have golden
+// bitrates on both codecs are skipped; the modal's "overwrite" checkbox opts
+// them in. Episodes with a running lab, and Audio-Video ladder episodes (the
+// route would 409 them — they're edited on the Audio-Video page), are always
+// skipped.
+
+const APPLY_DEFAULTS_CONCURRENCY = 4;
+
+function hasGoldenBitrates(golden) {
+  return Boolean(golden) && Object.values(golden).some((v) => v?.bitrate_kbps);
+}
+
+function ApplyDefaultsAllButton({ episodes, pipelineRunning, onDone }) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [overwrite, setOverwrite] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(null); // { done, total }
+  const [summary, setSummary] = useState(null);   // { applied, skipped, failed: [{ ep, error }] }
+
+  const rows = (episodes || []).filter((r) => r.episodeId);
+  const notRunning = rows.filter((r) =>
+    r.lab_h264 !== 'RUNNING' && r.lab_h265 !== 'RUNNING'
+    && !r.golden_h264?.['144p'] && !r.golden_h265?.['144p']);
+  const runningCount = rows.filter((r) => r.lab_h264 === 'RUNNING' || r.lab_h265 === 'RUNNING').length;
+  const avCount = rows.length - notRunning.length - runningCount;
+  const missing = notRunning.filter(
+    (r) => !(hasGoldenBitrates(r.golden_h264) && hasGoldenBitrates(r.golden_h265)));
+  const existingCount = notRunning.length - missing.length;
+  const targets = overwrite ? notRunning : missing;
+  const skippedCount = rows.length - targets.length;
+  const buttonDisabled = busy || pipelineRunning || notRunning.length === 0;
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    const onKey = (e) => { if (e.key === 'Escape') setModalOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [modalOpen]);
+
+  const run = async () => {
+    const list = targets;
+    setModalOpen(false);
+    setBusy(true);
+    setSummary(null);
+    setProgress({ done: 0, total: list.length });
+    let applied = 0;
+    const failed = [];
+    let next = 0;
+    const worker = async () => {
+      while (next < list.length) {
+        const row = list[next++];
+        try {
+          const res = await fetch('/api/apply-default-bitrates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ episodeId: row.episodeId }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          applied += 1;
+        } catch (err) {
+          failed.push({ ep: row.episodeNumber ?? row.episodeId, error: err.message });
+        }
+        setProgress((p) => ({ ...p, done: p.done + 1 }));
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(APPLY_DEFAULTS_CONCURRENCY, list.length) }, worker),
+    );
+    setSummary({ applied, skipped: rows.length - list.length, failed });
+    setBusy(false);
+    setProgress(null);
+    setOverwrite(false);
+    if (onDone) onDone();
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button
+        type="button"
+        onClick={() => { setOverwrite(false); setModalOpen(true); }}
+        disabled={buttonDisabled}
+        title={
+          pipelineRunning ? 'Pipeline is running for this show'
+          : notRunning.length === 0 ? 'No eligible episodes (labs running or Audio-Video ladder)'
+          : 'Probe FPS and write the default H.264/H.265 ladder for every episode'
+        }
+        style={{
+          padding: '8px 16px',
+          borderRadius: 6,
+          border: `1px solid ${buttonDisabled ? '#1a3a36' : '#0f766e'}`,
+          background: buttonDisabled ? '#0f1f1d' : '#0f766e',
+          color: buttonDisabled ? '#3a6a64' : '#fff',
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: buttonDisabled ? 'not-allowed' : 'pointer',
+        }}
+      >
+        {busy && progress
+          ? `Applying… (${progress.done}/${progress.total})`
+          : '⚡ Apply default bitrates for all'}
+      </button>
+      {summary && (
+        <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+          <span style={{ color: '#22c55e' }}>{summary.applied} applied</span>
+          <span style={{ color: '#64748b' }}> · {summary.skipped} skipped</span>
+          {summary.failed.length > 0 && (
+            <span style={{ color: '#ef4444' }}> · {summary.failed.length} failed</span>
+          )}
+          {summary.failed.map((f, i) => (
+            <div key={i} style={{ color: '#ef4444', fontSize: 11 }}>
+              Ep {f.ep}: {f.error}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {modalOpen && (
+        <div
+          onClick={() => setModalOpen(false)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#161616', border: '1px solid #2a2a2a', borderRadius: 10,
+              padding: '20px 22px', width: 460, maxWidth: '92vw', color: '#e8e8e8',
+            }}
+          >
+            <h3 style={{ margin: '0 0 10px', fontSize: 16 }}>Apply default bitrates</h3>
+            <p style={{ margin: '0 0 10px', fontSize: 12, color: '#aaa', lineHeight: 1.5 }}>
+              Each episode&apos;s source FPS is probed and the default ladder is written as golden
+              recipes (H.264 / H.265 kbps):
+            </p>
+            <table style={{ fontSize: 12, borderCollapse: 'collapse', marginBottom: 12, width: '100%' }}>
+              <thead>
+                <tr style={{ color: '#888' }}>
+                  <th style={{ textAlign: 'left', padding: '2px 6px' }}></th>
+                  <th style={{ textAlign: 'left', padding: '2px 6px' }}>&lt;60 fps</th>
+                  <th style={{ textAlign: 'left', padding: '2px 6px' }}>≥60 fps</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td style={{ padding: '2px 6px' }}>1080p</td><td style={{ padding: '2px 6px' }}>5000 / 4000</td><td style={{ padding: '2px 6px' }}>7500 / 6000</td></tr>
+                <tr><td style={{ padding: '2px 6px' }}>720p</td><td style={{ padding: '2px 6px' }}>3000 / 2000</td><td style={{ padding: '2px 6px' }}>4500 / 3000</td></tr>
+                <tr><td style={{ padding: '2px 6px' }}>480p</td><td style={{ padding: '2px 6px' }}>1200 / 800</td><td style={{ padding: '2px 6px' }}>1800 / 1200</td></tr>
+              </tbody>
+            </table>
+
+            <label
+              style={{
+                display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13,
+                padding: '10px 12px', borderRadius: 8, marginBottom: 12,
+                background: overwrite ? '#2a0f0f' : '#111',
+                border: `1px solid ${overwrite ? '#7f1d1d' : '#2a2a2a'}`,
+                cursor: existingCount > 0 ? 'pointer' : 'not-allowed',
+                opacity: existingCount > 0 ? 1 : 0.5,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={overwrite}
+                disabled={existingCount === 0}
+                onChange={(e) => setOverwrite(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                Overwrite existing bitrates
+                <span style={{ display: 'block', fontSize: 11, color: overwrite ? '#fca5a5' : '#888', marginTop: 2 }}>
+                  {existingCount > 0
+                    ? `${existingCount} episode(s) already have bitrates (Lab or earlier defaults). `
+                      + (overwrite ? 'They WILL be replaced with the defaults.' : 'Unchecked: they are skipped.')
+                    : 'No episodes have bitrates yet.'}
+                </span>
+              </span>
+            </label>
+
+            <p style={{ margin: '0 0 14px', fontSize: 12, color: '#aaa' }}>
+              Will apply to <strong style={{ color: '#e8e8e8' }}>{targets.length}</strong> episode(s)
+              {' '}· {skippedCount} skipped
+              {runningCount > 0 && ` · ${runningCount} with a running lab`}
+              {avCount > 0 && ` · ${avCount} on the Audio-Video ladder`}
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setModalOpen(false)}
+                style={{
+                  padding: '8px 14px', borderRadius: 6, border: '1px solid #333',
+                  background: '#1e1e1e', color: '#ccc', fontSize: 13, cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={run}
+                disabled={targets.length === 0}
+                style={{
+                  padding: '8px 14px', borderRadius: 6, fontSize: 13, fontWeight: 600,
+                  border: `1px solid ${targets.length === 0 ? '#333' : overwrite ? '#b91c1c' : '#0f766e'}`,
+                  background: targets.length === 0 ? '#1e1e1e' : overwrite ? '#b91c1c' : '#0f766e',
+                  color: targets.length === 0 ? '#555' : '#fff',
+                  cursor: targets.length === 0 ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {overwrite ? `Overwrite & apply (${targets.length})` : `Apply (${targets.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ShowOverviewPage() {
   const [shows, setShows] = useState([]);
   const [showsLoading, setShowsLoading] = useState(true);
@@ -1014,6 +1240,14 @@ export default function ShowOverviewPage() {
                     if (sr.ok) setPipelineRun(await sr.json());
                   } catch { /* non-fatal */ }
                 }}
+              />
+            )}
+            {selectedId && live?.showId === selectedId && (
+              <ApplyDefaultsAllButton
+                key={selectedId}
+                episodes={live.episodes}
+                pipelineRunning={pipelineRun?.status === 'RUNNING'}
+                onDone={() => loadLive(selectedId, true)}
               />
             )}
             {selectedId && (

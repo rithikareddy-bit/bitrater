@@ -24,7 +24,7 @@ LAB_COLLECTIONS_BY_EPISODE = ["video_episodes", "video_vmaf_research"]
 # GCP job names): the dashboard routes describe/stop by id, so a copied prod id
 # would make shadow call PROD Step Functions/Batch.
 OUTPUT_KEYS = ("signed_playback_url", "signed_playback_expires_at", "gcpUrl", "public_master_url", "video_url",
-               "batch_job_id", "job_id")
+               "batch_job_id", "job_id", "gcs_master_url", "cdn_ts", "output_uri", "gcs_input_uri")
 OUTPUT_SUFFIXES = ("_m3u8_url",)
 OUTPUT_SUBSTRINGS = ("execution_arn", "gcp_job_name")
 

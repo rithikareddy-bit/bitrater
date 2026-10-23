@@ -6,13 +6,14 @@ import { CLOUD_PROVIDER, DB_LAB, DB_MASTER } from '@/lib/config';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// GCP transcode runs on GCP (not AWS Batch), so GCP worker counts stay
-// Mongo-derived. AWS worker counts come from Batch directly (below) because one
+// GCP transcode runs on GCP, so GCP worker counts stay Mongo-derived. Lab worker
+// counts come from the configured Batch backend directly (AWS or Azure) because one
 // episode can fan out to many workers: Run Lab = 1, Resol = 3, Bitrate Resol
 // = ~25. Counting 1 per active episode-codec (the old approach) under-reported.
 const GCP_ACTIVE = new Set(['STARTING', 'RUNNING']);
 
-const AWS_WORKER_CAPACITY = 128;
+const LAB_WORKER_CAPACITY = Math.max(0, Number.parseInt(process.env.LAB_WORKER_CAPACITY || '128', 10) || 0);
+const LAB_COMPUTE_PROVIDER = (process.env.LAB_COMPUTE_PROVIDER || CLOUD_PROVIDER || 'aws').toLowerCase();
 const GCP_WORKER_CAPACITY = 45;
 
 // AWS queue: as before (defaults to chai-q-queue on AWS). On Azure only listed if
@@ -76,10 +77,10 @@ export async function GET() {
       for (const ep of run.episodes || []) if (ep.episode_id) epIdsInRuns.add(String(ep.episode_id));
     }
 
-    // 2. Real AWS Batch jobs = accurate worker count (captures Resol/Bitrate fan-out).
+    // 2. Real Batch jobs = accurate worker count (captures Resol/Bitrate fan-out).
     const activeIds = (await Promise.all(BATCH_ACTIVE_STATUSES.map(listJobIds))).flat();
     const activeJobs = activeIds.length ? await describeJobs(activeIds) : [];
-    const awsUsed = activeJobs.length; // every active Batch job consumes the shared 128-slot pool
+    const computeUsed = activeJobs.length;
     const videoJobs = activeJobs.filter(
       (j) => (j.codec === 'libx264' || j.codec === 'libx265') && j.episodeId,
     );
@@ -90,7 +91,7 @@ export async function GET() {
     const reruns = new Map(); // show_id -> row (standalone rerun activity)
     const blankRow = (meta) => ({
       show_id: meta.show_id, show_slug: meta.show_slug, show_title: meta.show_title, kind: 'episode',
-      aws_h264: 0, aws_h265: 0, aws_running: 0,
+      compute_h264: 0, compute_h265: 0, compute_running: 0,
       gcp_h264: 0, gcp_h265: 0, gcp_running: 0,
     });
 
@@ -107,14 +108,14 @@ export async function GET() {
       }
     }
 
-    // 4. AWS counts (Batch) — attribute each running video job to its show/codec.
+    // 4. Batch counts — attribute each running video job to its show/codec.
     for (const j of videoJobs) {
       const meta = epToShow.get(j.episodeId) || { show_id: '_unknown', show_slug: null, show_title: 'Unknown show' };
       const map = epIdsInRuns.has(j.episodeId) ? shows : reruns;
       let row = map.get(meta.show_id);
       if (!row) { row = blankRow(meta); map.set(meta.show_id, row); }
-      row.aws_running += 1;
-      if (j.codec === 'libx264') row.aws_h264 += 1; else row.aws_h265 += 1;
+      row.compute_running += 1;
+      if (j.codec === 'libx264') row.compute_h264 += 1; else row.compute_h265 += 1;
     }
 
     // 5. GCP reruns — episodes running GCP outside any pipeline_run wrapper.
@@ -139,11 +140,16 @@ export async function GET() {
 
     // Only surface rows that are actually consuming a worker right now.
     const sortRows = (m) => [...m.values()]
-      .filter((r) => r.aws_running + r.gcp_running > 0)
-      .sort((a, b) => (b.aws_running + b.gcp_running) - (a.aws_running + a.gcp_running));
+      .filter((r) => r.compute_running + r.gcp_running > 0)
+      .sort((a, b) => (b.compute_running + b.gcp_running) - (a.compute_running + a.gcp_running));
 
     const workers = {
-      aws: { used: awsUsed, total: AWS_WORKER_CAPACITY, left: Math.max(0, AWS_WORKER_CAPACITY - awsUsed) },
+      compute: {
+        provider: LAB_COMPUTE_PROVIDER,
+        used: computeUsed,
+        total: LAB_WORKER_CAPACITY,
+        left: Math.max(0, LAB_WORKER_CAPACITY - computeUsed),
+      },
       gcp: { used: gcpUsed, total: GCP_WORKER_CAPACITY, left: Math.max(0, GCP_WORKER_CAPACITY - gcpUsed) },
     };
 

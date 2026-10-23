@@ -35,10 +35,13 @@ from google.oauth2 import service_account
 import secret_store
 
 # Each part is buffered in memory (S3 streams aren't seekable, and a seekable
-# buffer is required for a safely-retryable GCS upload). Peak memory ~=
-# PART_SIZE * MAX_WORKERS, so keep the product well under the Lambda's memory.
+# buffer is required for a safely-retryable GCS upload). upload_from_string copies
+# the bytes once more, so peak memory ~= 2 * PART_SIZE * MAX_WORKERS: keep it well
+# under the instance memory. AWS (own 3008 MB Lambda per copy) uses the default 16
+# (~2 GiB); Azure sets COPY_MAX_WORKERS lower because up to 3 activities share one
+# 4 GiB Flex instance (azure-infra/stamps.tf, azure-functions/host.json).
 PART_SIZE = 64 * 1024 * 1024        # 64 MiB
-MAX_WORKERS = 16                    # 16 * 64MiB = ~1 GiB peak buffer
+MAX_WORKERS = int(os.environ.get("COPY_MAX_WORKERS", "16"))
 GCS_COMPOSE_MAX = 32               # GCS allows <=32 sources per compose call
 PART_RETRIES = 3
 PARTS_SUBDIR = ".copyparts"        # temp parts live here, cleaned up after

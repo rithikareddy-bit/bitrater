@@ -1,0 +1,1440 @@
+{
+  "saved_at": "2026-10-17T11:54:54.636273+00:00",
+  "show": {
+    "id": "6ad1acf74c65fcc09ff9b4de",
+    "slug": "dasara",
+    "title": "Dasara   "
+  },
+  "episodes": [
+    {
+      "episode": {
+        "id": "26bf9651-48dd-4632-9292-5ffe332ba659",
+        "episode_number": 1,
+        "title": "Dasara Episode - 1",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-1/dasara-episode-1-episode-1792127970359.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/26bf9651-48dd-4632-9292-5ffe332ba659/16102026_154023/dasara_ep_1_16102026_154023_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/26bf9651-48dd-4632-9292-5ffe332ba659/16102026_164340/dasara_ep_1_16102026_164340_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/26bf9651-48dd-4632-9292-5ffe332ba659/16102026_171639/dasara_ep_1_16102026_171639_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/f6707f95-8008-4b04-9fb1-3f3399a0ad7e",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/55c56796-5e1b-4a2e-9943-47997dbe0620",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 2000,
+                "vmaf_attained": 88.097214,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 75.8981,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 56.19018,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/26bf9651-48dd-4632-9292-5ffe332ba659/16102026_171639/dasara_ep_1_16102026_171639_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=-ogywjEUvjpvK0er9uLWlI_nsBxq3-pab_LlzRPCZ8ECf2IxOEUdraYNZKg21UXLEw1e8L4xV1QfziIPS4rtDw",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "073d95aa-266b-4b66-8300-c3b6087f8944",
+        "episode_number": 2,
+        "title": "Dasara Episode - 2",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-2/dasara-episode-2-episode-1792128262613.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/073d95aa-266b-4b66-8300-c3b6087f8944/16102026_154020/dasara_ep_2_16102026_154020_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/073d95aa-266b-4b66-8300-c3b6087f8944/16102026_161656/dasara_ep_2_16102026_161656_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/073d95aa-266b-4b66-8300-c3b6087f8944/16102026_171646/dasara_ep_2_16102026_171646_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/f497b167-5242-4961-9376-406639de845d",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/d9bdb1c5-199a-4dc6-9111-d5469e92db71",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 2700,
+                "vmaf_attained": 88.293664,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 900,
+                "vmaf_attained": 75.333687,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 50.159012,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/073d95aa-266b-4b66-8300-c3b6087f8944/16102026_171646/dasara_ep_2_16102026_171646_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=5Av8mRFXcXEEPFFcRgaOg_-FwAgJKtFa19GYNAhlxjLiTAJ0SJm6p3hw_KnzlykSs_1hwQr1C5_knkc0mqDPBw",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "8a04a94a-a9b8-49d1-9066-fd0cb0c522b9",
+        "episode_number": 3,
+        "title": "Dasara Episode - 3",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-3/dasara-episode-3-episode-1792128485255.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/8a04a94a-a9b8-49d1-9066-fd0cb0c522b9/16102026_153916/dasara_ep_3_16102026_153916_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/8a04a94a-a9b8-49d1-9066-fd0cb0c522b9/16102026_161035/dasara_ep_3_16102026_161035_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/8a04a94a-a9b8-49d1-9066-fd0cb0c522b9/16102026_171652/dasara_ep_3_16102026_171652_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/0b2b429e-2c36-4884-8dba-502c13341ede",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/c6676f1b-c4d9-44a4-a56b-0465a2829ac7",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 1800,
+                "vmaf_attained": 91.742528,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 85.690749,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 69.37556,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/8a04a94a-a9b8-49d1-9066-fd0cb0c522b9/16102026_171652/dasara_ep_3_16102026_171652_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=d9yFlhaUfIxPl5XLeUVY12uoFSWjw--klbfDQKdIZzOt-hzOhuCmgLhlSGg5rhN9jdkSuX1Bruar5RWu_JhhCg",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "bd2fa668-6f65-4cd6-aa5f-1e7a90e76e11",
+        "episode_number": 4,
+        "title": "Dasara Episode - 4",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-4/dasara-episode-4-episode-1792136332431.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/bd2fa668-6f65-4cd6-aa5f-1e7a90e76e11/16102026_154341/dasara_ep_4_16102026_154341_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/bd2fa668-6f65-4cd6-aa5f-1e7a90e76e11/16102026_165122/dasara_ep_4_16102026_165122_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/bd2fa668-6f65-4cd6-aa5f-1e7a90e76e11/16102026_171658/dasara_ep_4_16102026_171658_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/2d650e86-80a0-49fc-9d01-62f80be62b6b",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/e85d95dc-9edc-417c-a086-32b9772b2966",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 2300,
+                "vmaf_attained": 88.365449,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 900,
+                "vmaf_attained": 76.963622,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 49.063968,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/bd2fa668-6f65-4cd6-aa5f-1e7a90e76e11/16102026_171658/dasara_ep_4_16102026_171658_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=IBLKBNuaey3aUWHVkw9jHTkf1oKIjX5BAH3kCXYmmT5N66pcux7Lxp0lQiEdRxaU4no2nm2BScon-gzWkCMaCw",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "00c556ae-f77b-46a8-a4ed-f319037e2d7b",
+        "episode_number": 5,
+        "title": "Dasara Episode - 5",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-5/dasara-episode-5-episode-1792140058830.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/00c556ae-f77b-46a8-a4ed-f319037e2d7b/16102026_154232/dasara_ep_5_16102026_154232_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/00c556ae-f77b-46a8-a4ed-f319037e2d7b/16102026_161658/dasara_ep_5_16102026_161658_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/00c556ae-f77b-46a8-a4ed-f319037e2d7b/16102026_171705/dasara_ep_5_16102026_171705_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/e823876b-f218-447f-9ceb-5fff4d105785",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/268b7562-fda7-41cd-a26f-e777173dd7dc",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 2000,
+                "vmaf_attained": 89.365643,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 75.652811,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 51.907679,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/00c556ae-f77b-46a8-a4ed-f319037e2d7b/16102026_171705/dasara_ep_5_16102026_171705_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=Y5lwDdhxRLIKRgqO16u3WqrLkDEELQGUyji7OkLcrHVQm1CDP2zqAb54Ft86QGhIOHZzkzy_schSEzj8pDaoAw",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "be879e08-bbc5-4879-bb07-96c43e95ff83",
+        "episode_number": 6,
+        "title": "Dasara Episode - 6",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-6/dasara-episode-6-episode-1792140716679.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/be879e08-bbc5-4879-bb07-96c43e95ff83/16102026_154333/dasara_ep_6_16102026_154333_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/be879e08-bbc5-4879-bb07-96c43e95ff83/16102026_162936/dasara_ep_6_16102026_162936_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/be879e08-bbc5-4879-bb07-96c43e95ff83/16102026_171713/dasara_ep_6_16102026_171713_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/81f2adcd-fd22-4d3c-a431-f825b5d75f55",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/52bfaea0-4831-483c-a7ef-1a8e8002b412",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 1800,
+                "vmaf_attained": 90.453672,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 82.117753,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 61.942696,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/be879e08-bbc5-4879-bb07-96c43e95ff83/16102026_171713/dasara_ep_6_16102026_171713_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=ps5SEXLhEmneZdJJBL1fUyqeW-X2WsVTzJT8W8u-hkALhjktk-4Q-FDDY7sETOvNbRv1evbZWMln-3BKIHQIDg",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "70b4edd1-5e0f-4c86-919a-17fcd07ff1cc",
+        "episode_number": 7,
+        "title": "Dasara Episode - 7",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-7/dasara-episode-7-episode-1792141149564.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/70b4edd1-5e0f-4c86-919a-17fcd07ff1cc/16102026_154145/dasara_ep_7_16102026_154145_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/70b4edd1-5e0f-4c86-919a-17fcd07ff1cc/16102026_161630/dasara_ep_7_16102026_161630_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/70b4edd1-5e0f-4c86-919a-17fcd07ff1cc/16102026_171719/dasara_ep_7_16102026_171719_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/6c54cc0d-8752-4667-aa77-c2d8cfcbe61a",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/b1082961-c4ba-478d-a975-2544fb82aeb4",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 1800,
+                "vmaf_attained": 89.489637,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 81.949241,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 62.41228,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/70b4edd1-5e0f-4c86-919a-17fcd07ff1cc/16102026_171719/dasara_ep_7_16102026_171719_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=B8EFbXcXRJqui0foaD-zQHn_WcijNnwaDPRtzTnEHlSPDlypSjEe-_ktawU_N_KToi1OVgoV0IN9zfCTm9dgBw",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "97cdc480-c5f7-4a88-a59c-1bbdd6e194ad",
+        "episode_number": 8,
+        "title": "Dasara Episode - 8",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-8/dasara-episode-8-episode-1792141128523.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/97cdc480-c5f7-4a88-a59c-1bbdd6e194ad/16102026_154041/dasara_ep_8_16102026_154041_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/97cdc480-c5f7-4a88-a59c-1bbdd6e194ad/16102026_164716/dasara_ep_8_16102026_164716_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/97cdc480-c5f7-4a88-a59c-1bbdd6e194ad/16102026_171726/dasara_ep_8_16102026_171726_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/07bb3d1c-7c82-45d4-9529-1950da2cd34b",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/30393e69-364b-447f-9a06-f8aa24717a2a",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 1800,
+                "vmaf_attained": 88.683492,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 77.549302,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 54.517258,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/97cdc480-c5f7-4a88-a59c-1bbdd6e194ad/16102026_171726/dasara_ep_8_16102026_171726_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=lr4SdilEJ9VoQOMAPstHqIBZkJSR5u3VZLcG8lfQaouPIgRxQ74b-w97YGI29ZzScNTdZvfItC3trOEr95viAQ",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "3c7dad11-255f-466b-b729-b09f9a82c273",
+        "episode_number": 9,
+        "title": "Dasara Episode - 9",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-9/dasara-episode-9-episode-1792141123032.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/3c7dad11-255f-466b-b729-b09f9a82c273/16102026_154210/dasara_ep_9_16102026_154210_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/3c7dad11-255f-466b-b729-b09f9a82c273/16102026_161740/dasara_ep_9_16102026_161740_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/3c7dad11-255f-466b-b729-b09f9a82c273/16102026_171733/dasara_ep_9_16102026_171733_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/05e15351-057e-4e3f-b891-26341cedfaf7",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/af6260ed-dff0-4553-881b-28d328538910",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 2000,
+                "vmaf_attained": 89.190392,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 75.34486,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 51.010783,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/3c7dad11-255f-466b-b729-b09f9a82c273/16102026_171733/dasara_ep_9_16102026_171733_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=7kygsgcrvmoNCBc1yxLLZeUEEOWOZLDOpwAArwqh7C0LzYDqBl2EDq-r8Sqx2VoVW-YSWWsbiqjIkea1-rWQBQ",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "dfb528a1-1744-42d9-b1a3-5744316ba675",
+        "episode_number": 10,
+        "title": "Dasara Episode - 10",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-10/dasara-episode-10-episode-1792141118358.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/dfb528a1-1744-42d9-b1a3-5744316ba675/16102026_154325/dasara_ep_10_16102026_154325_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/dfb528a1-1744-42d9-b1a3-5744316ba675/16102026_163441/dasara_ep_10_16102026_163441_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/dfb528a1-1744-42d9-b1a3-5744316ba675/16102026_171741/dasara_ep_10_16102026_171741_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/4623c99a-556c-4cc4-b5ec-f600ef7b44d5",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/2c1ebf40-c5b9-4721-b46b-b3608eb7eda9",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 1800,
+                "vmaf_attained": 88.764929,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 79.504743,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 58.347894,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/dfb528a1-1744-42d9-b1a3-5744316ba675/16102026_171741/dasara_ep_10_16102026_171741_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=OKxQ-xO93XKEXkV588mZaid05QcYHcDKbaALwWo4xIrm3r7IJjpe4I9SQQvxLIv1TL-8cNnxLMJe_P3t6WXnCQ",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "d163137d-51e1-4af5-97b0-5a9091b3bfc7",
+        "episode_number": 11,
+        "title": "Dasara Episode - 11",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-11/dasara-episode-11-episode-1792142901379.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/d163137d-51e1-4af5-97b0-5a9091b3bfc7/16102026_154124/dasara_ep_11_16102026_154124_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/d163137d-51e1-4af5-97b0-5a9091b3bfc7/16102026_160430/dasara_ep_11_16102026_160430_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/d163137d-51e1-4af5-97b0-5a9091b3bfc7/16102026_171748/dasara_ep_11_16102026_171748_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/38051d19-bfbd-4933-98ce-4d73b3b92843",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/0c285eeb-9f47-4cdf-b7ca-a080ba8c6094",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 2000,
+                "vmaf_attained": 88.876156,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 77.493296,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 54.575244,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/d163137d-51e1-4af5-97b0-5a9091b3bfc7/16102026_171748/dasara_ep_11_16102026_171748_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=QAXDhmi3C_1mP5wYmtcOhATJHfj45c1-AU3hfg0QNQYVGuNwO2b545360EaL1OinrFq7L4NOmZC-KAc7HPnfDg",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "d29d5e1f-887b-421d-af5a-1025836fdbe9",
+        "episode_number": 12,
+        "title": "Dasara Episode - 12",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-12/dasara-episode-12-episode-1792142946219.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/d29d5e1f-887b-421d-af5a-1025836fdbe9/16102026_154706/dasara_ep_12_16102026_154706_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/d29d5e1f-887b-421d-af5a-1025836fdbe9/16102026_162244/dasara_ep_12_16102026_162244_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/d29d5e1f-887b-421d-af5a-1025836fdbe9/16102026_171755/dasara_ep_12_16102026_171755_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/8ee15595-5d4e-4411-8666-81198e28e36e",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/5814f488-57f6-4ce3-b0c6-c35082b92928",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 1800,
+                "vmaf_attained": 88.466512,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 78.923322,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 56.529036,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/d29d5e1f-887b-421d-af5a-1025836fdbe9/16102026_171755/dasara_ep_12_16102026_171755_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=if-5z6tldrQrsgZPcWsrGtdUdotWpijSEOGr6KMUhg8CnDCAOzNj3eyak1yoVNdWG4DNr84tkvgIpQfoG7nMBA",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "1e0824f8-34b3-4893-9883-7bb8a7137a4a",
+        "episode_number": 13,
+        "title": "Dasara Episode - 13",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-13/dasara-episode-13-episode-1792142992037.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/1e0824f8-34b3-4893-9883-7bb8a7137a4a/16102026_154237/dasara_ep_13_16102026_154237_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/1e0824f8-34b3-4893-9883-7bb8a7137a4a/16102026_161936/dasara_ep_13_16102026_161936_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/1e0824f8-34b3-4893-9883-7bb8a7137a4a/16102026_171803/dasara_ep_13_16102026_171803_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/c9195baa-828a-4c16-8fa8-a09e821d0165",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/e12032ad-0fbd-4794-813f-22f6886d90fe",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 2000,
+                "vmaf_attained": 88.624619,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 75.081031,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 52.475199,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/1e0824f8-34b3-4893-9883-7bb8a7137a4a/16102026_171803/dasara_ep_13_16102026_171803_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=VCUz25lHwOVqmqccLNyiF54yRMrzd-3KiDmnSRmYwp6onDjLn5g3uFB43nKTJJBAlD-_oZkIWe4MHHHB6yZtCA",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "640b7b63-66df-48b0-a9d3-018f42a99b50",
+        "episode_number": 14,
+        "title": "Dasara Episode - 14",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-14/dasara-episode-14-episode-1792143042056.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/640b7b63-66df-48b0-a9d3-018f42a99b50/16102026_154610/dasara_ep_14_16102026_154610_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/640b7b63-66df-48b0-a9d3-018f42a99b50/16102026_164247/dasara_ep_14_16102026_164247_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/640b7b63-66df-48b0-a9d3-018f42a99b50/16102026_171810/dasara_ep_14_16102026_171810_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/98d2d590-59ae-4b8b-aa04-8ac2c651b95a",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/8dde7694-305b-46ce-bb13-140c77a7a9f3",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 1800,
+                "vmaf_attained": 88.556321,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 78.32532,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 56.919695,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/640b7b63-66df-48b0-a9d3-018f42a99b50/16102026_171810/dasara_ep_14_16102026_171810_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=AXrbN1lHTsn4_EZTwItfRDxWG5_QwF2_kNQqeOkzxdvvceJ9AuS69avAb6obSXZevzn--PJXsIu0a3haxXZ8BA",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "c159788f-d204-42b5-88d2-9e63ce6ec5c3",
+        "episode_number": 15,
+        "title": "Dasara Episode - 15",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-15/dasara-episode-15-episode-1792143683161.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/c159788f-d204-42b5-88d2-9e63ce6ec5c3/16102026_154416/dasara_ep_15_16102026_154416_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/c159788f-d204-42b5-88d2-9e63ce6ec5c3/16102026_180420/dasara_ep_15_16102026_180420_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/c159788f-d204-42b5-88d2-9e63ce6ec5c3/16102026_180540/dasara_ep_15_16102026_180540_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/e4a6ee57-7835-4461-8aa4-0fce62211bc3",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/fadfa3c5-81e0-4278-9812-cf9ca9972ffe",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 2000,
+                "vmaf_attained": 88.937224,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 700,
+                "vmaf_attained": 75.832914,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 200,
+                "vmaf_attained": 52.700415,
+                "params": "aq-strength=1:vbv-init=0.9"
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/c159788f-d204-42b5-88d2-9e63ce6ec5c3/16102026_180540/dasara_ep_15_16102026_180540_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=U3fvwa5qbIpO76Tf5HNr8VlQQcQkzH4Vl2ZYI-bl8RmgijBRIvZx8xG8Rc139kfku09HLs3xKQENoEl38Q9cBA",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "bb2d99e1-0ad5-4b63-bb6b-9c43da50977e",
+        "episode_number": 16,
+        "title": "Dasara Episode - 16",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-16/dasara-episode-16-episode-1792143724340.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/bb2d99e1-0ad5-4b63-bb6b-9c43da50977e/16102026_172127/dasara_ep_16_16102026_172127_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/bb2d99e1-0ad5-4b63-bb6b-9c43da50977e/16102026_181240/dasara_ep_16_16102026_181240_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/bb2d99e1-0ad5-4b63-bb6b-9c43da50977e/16102026_181359/dasara_ep_16_16102026_181359_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/3e9ed069-2653-411d-a051-e3f95db2028f",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/75aeee9c-3c18-43f6-b152-4615369f472b",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 5000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 3000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 1200,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24.0
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/bb2d99e1-0ad5-4b63-bb6b-9c43da50977e/16102026_181359/dasara_ep_16_16102026_181359_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=kDFsvOObPGPxjh9fqTo8HPDat1YcTopfqdmWt5QnS875LpB1-X4s8oUXzeVexcTYinl7x7xNWvTOILQT-pTiBQ",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "8ae7fbf5-3c21-4fc7-bc93-cbaacee20e3d",
+        "episode_number": 17,
+        "title": "Dasara Episode - 17",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-17/dasara-episode-17-episode-1792143786188.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/8ae7fbf5-3c21-4fc7-bc93-cbaacee20e3d/16102026_172545/dasara_ep_17_16102026_172545_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/8ae7fbf5-3c21-4fc7-bc93-cbaacee20e3d/16102026_182429/dasara_ep_17_16102026_182429_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/8ae7fbf5-3c21-4fc7-bc93-cbaacee20e3d/16102026_182536/dasara_ep_17_16102026_182536_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/9527a15d-ecf0-44fe-add2-7971a7465faf",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/dbbacbea-0bd1-4ae0-a39d-438bd2af3d19",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 5000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 3000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 1200,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/8ae7fbf5-3c21-4fc7-bc93-cbaacee20e3d/16102026_182536/dasara_ep_17_16102026_182536_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=S54uTxWfLGNtff3zzt1HJt4W-k1pTDoqNDvSDNiQmKzRvlxU21mm2As70_JgRDE3YHU5ZhKlU4Ydp4k6KK2tBg",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "e1f49c03-5669-49b1-9e56-c4f0049723b3",
+        "episode_number": 18,
+        "title": "Dasara Episode -18",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-18/dasara-episode-18-episode-1792143843079.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/e1f49c03-5669-49b1-9e56-c4f0049723b3/16102026_172350/dasara_ep_18_16102026_172350_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/e1f49c03-5669-49b1-9e56-c4f0049723b3/16102026_182136/dasara_ep_18_16102026_182136_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/e1f49c03-5669-49b1-9e56-c4f0049723b3/16102026_182236/dasara_ep_18_16102026_182236_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/6b4787c9-2c88-4d65-b579-a31437ff4345",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/67e4892f-28f4-4e07-ae0c-b6a5dd71fc79",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 5000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 3000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 1200,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/e1f49c03-5669-49b1-9e56-c4f0049723b3/16102026_182236/dasara_ep_18_16102026_182236_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=tkATp50DAOyMCL6aOGXsfj0s8QYXh_UxVwppraZjjMzbCQ3gvPyfSr5RceX7LGlgCUH2OlbhrIyjJPfcn0Y8Bw",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "b7736020-a434-4f2f-9dce-82008e031bfe",
+        "episode_number": 19,
+        "title": "Dasara Episode - 19",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-19/dasara-episode-19-episode-1792144637174.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/b7736020-a434-4f2f-9dce-82008e031bfe/16102026_172457/dasara_ep_19_16102026_172457_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/b7736020-a434-4f2f-9dce-82008e031bfe/16102026_180711/dasara_ep_19_16102026_180711_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/b7736020-a434-4f2f-9dce-82008e031bfe/16102026_180814/dasara_ep_19_16102026_180814_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/9e6b74d1-84f8-459b-a819-46a83c96b629",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/7ceccf9a-68cf-4b96-8b24-05e0eb450042",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 5000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 3000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 1200,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/b7736020-a434-4f2f-9dce-82008e031bfe/16102026_180814/dasara_ep_19_16102026_180814_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=wSUFEkQE5MZyr7W1E2OTTp0_-wra9hbDEBW7n_AkJqSsnjAMhh8BSxcX0oxnE59L1e3sngIbCWdszbV0uLShAQ",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "5045a769-3884-461b-ac98-0fd4f62c8e23",
+        "episode_number": 20,
+        "title": "Dasara Episode - 20",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-20/dasara-episode-20-episode-1792144686157.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/5045a769-3884-461b-ac98-0fd4f62c8e23/16102026_172257/dasara_ep_20_16102026_172257_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/5045a769-3884-461b-ac98-0fd4f62c8e23/16102026_181729/dasara_ep_20_16102026_181729_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/5045a769-3884-461b-ac98-0fd4f62c8e23/16102026_181833/dasara_ep_20_16102026_181833_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/761b80d1-4ceb-48df-8cc5-8c0917d9a58e",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/7f9d190c-8c6d-4fdc-805d-057f3b48982f",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 5000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 3000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 1200,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/5045a769-3884-461b-ac98-0fd4f62c8e23/16102026_181833/dasara_ep_20_16102026_181833_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=5RuJdSBFUsICoMC6bSHv-TaZQZRTk9DTyopvmkjFZWCEqjO_ugo8bjdvS2H1akM6UyH-BryeBhD7N-SemzhoDQ",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "d2720e71-cc92-4a9b-8b9f-1ca8266c0de1",
+        "episode_number": 21,
+        "title": "Dasara Episode - 21",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-21/dasara-episode-21-episode-1792144824520.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/d2720e71-cc92-4a9b-8b9f-1ca8266c0de1/16102026_172446/dasara_ep_21_16102026_172446_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/d2720e71-cc92-4a9b-8b9f-1ca8266c0de1/16102026_180914/dasara_ep_21_16102026_180914_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/d2720e71-cc92-4a9b-8b9f-1ca8266c0de1/16102026_181025/dasara_ep_21_16102026_181025_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/700d1ead-199e-4e41-9e69-da867c235a7b",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/384ba086-ec31-46d4-a461-b791ee2cac51",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 5000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 3000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 1200,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/d2720e71-cc92-4a9b-8b9f-1ca8266c0de1/16102026_181025/dasara_ep_21_16102026_181025_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=xo436Z2c1cQsehHP_bVU8GZ4jZqgQSVb8tFOp0J5T3o3G8Z_8790AjoM2ArPh8oZXOhwGamsuatasvmOID-dDg",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    },
+    {
+      "episode": {
+        "id": "4c70cee5-df5f-4aaf-be45-666905d28b00",
+        "episode_number": 22,
+        "title": "Dasara Episode - 22",
+        "s3_url": "https://chaishotsblobstoredev.blob.core.windows.net/sanity-dev-store/videos/dasara-episode-22/dasara-episode-22-episode-1792144864912.mov"
+      },
+      "chai_q_lab.video_episodes": {
+        "h264_master_m3u8_url": "https://cdn.chaishots.in/4c70cee5-df5f-4aaf-be45-666905d28b00/17102026_082911/dasara_ep_22_17102026_082911_h264.m3u8",
+        "h265_master_m3u8_url": "https://cdn.chaishots.in/4c70cee5-df5f-4aaf-be45-666905d28b00/17102026_084447/dasara_ep_22_17102026_084447_h265.m3u8",
+        "combined_master_m3u8_url": "https://cdn.chaishots.in/4c70cee5-df5f-4aaf-be45-666905d28b00/16102026_182345/dasara_ep_22_16102026_182345_combined.m3u8",
+        "gcp_job_name_h264": "projects/623432890759/locations/asia-south1/jobs/95a9e305-9863-4926-b1fc-1a46bf818e9d",
+        "gcp_job_name_h265": "projects/623432890759/locations/asia-south1/jobs/a987bd59-6d90-48e3-b363-4a05945cf7d5",
+        "golden_recipes": {
+          "resolutions": {
+            "1080p": {
+              "h264": {
+                "bitrate_kbps": 5000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 4000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "720p": {
+              "h264": {
+                "bitrate_kbps": 3000,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 2000,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            },
+            "480p": {
+              "h264": {
+                "bitrate_kbps": 1200,
+                "pass": true,
+                "vmaf_attained": null
+              },
+              "h265": {
+                "bitrate_kbps": 800,
+                "pass": true,
+                "vmaf_attained": null
+              }
+            }
+          },
+          "fps_tier": "low"
+        },
+        "source_fps": 24
+      },
+      "master.showcache.episode": {
+        "signed_playback_url": "https://cdn.chaishots.in/4c70cee5-df5f-4aaf-be45-666905d28b00/16102026_182345/dasara_ep_22_16102026_182345_combined.m3u8?edge-cache-token=FullPath~Expires=1792270635~Signature=cA-6J2cJJMu223znXHAgC44nMjlBsJXA17h8vVKfDhPkSoq69hRuiw5Ou_4oiUj0gw3hGh_rN_kvjdnc4HEYBQ",
+        "signed_playback_url_low": null,
+        "signed_playback_url_medium": null,
+        "signed_playback_expires_at": "2026-10-17 20:57:15.186000",
+        "playback_id": null,
+        "mux_video_id": ""
+      }
+    }
+  ]
+}
