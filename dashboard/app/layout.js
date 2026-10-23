@@ -40,6 +40,8 @@ export default function RootLayout({ children }) {
             <Link href="/" style={{ color: '#888' }}>Catalog</Link>
             <Link href="/show" style={{ color: '#4da6ff' }}>Show overview</Link>
             <Link href="/audio-video" style={{ color: '#4da6ff' }}>Audio-Video</Link>
+            <Link href="/audio" style={{ color: '#4da6ff' }}>Audio</Link>
+            <Link href="/signing" style={{ color: '#4da6ff' }}>Signing</Link>
             <Link href="/show-status" style={{ color: '#4da6ff' }}>Show status</Link>
             <Link href="/trailers" style={{ color: '#4da6ff' }}>Trailer overview</Link>
             <Link href="/url-health" style={{ color: '#4da6ff' }}>URL Health</Link>
